@@ -1,4 +1,4 @@
-![cortex-logo.png](docs/images/logo.png)
+![cortex-desc.png](docs/images/desc.png)
 # CORTEX
 
 <p align="center">CORTEX is an AI Agent framework designed for efficient integration and utilization of large language models (LLMs), built in Go.</p>
@@ -26,6 +26,8 @@
 
 CORTEX is an AI Agent framework designed for efficient integration and utilization of large language models (LLMs). It is built using Go, one of the most popular programming languages for enterprise applications. CORTEX combines the simplicity of a lightweight framework with the robustness and performance of Go, offering seamless integration with various LLMs and providing a comprehensive set of tools for building AI agents with tool-calling capabilities.
 
+CORTEX implements functionality similar to n8n's AI Agent but adopts a lightweight design philosophy. In practical development, many scenarios do not require the complex workflow orchestration capabilities provided by n8n, and there are certain configuration complexities and resource usage issues when fully integrating n8n into one's own project. In contrast, this library is specifically designed to simplify the integration process, maintaining core AI Agent functionality while significantly lowering the barrier to use, making it ideal for project scenarios with strict requirements on resource usage and integration complexity.
+
 ## Feature & Status
 
 - **Intelligent Agent Engine**: Core functionality for creating AI agents with advanced tool calling capabilities.
@@ -41,6 +43,8 @@ CORTEX is an AI Agent framework designed for efficient integration and utilizati
 ## Architecture Overview
 
 Cortex follows a modular architecture with the following key components:
+
+> Note: The agent package is built on top of [LangChain](https://github.com/tmc/langchaingo), leveraging its powerful LLM interaction and tool-calling capabilities to build intelligent agent systems.
 
 ```
 cortex/

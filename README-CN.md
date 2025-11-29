@@ -1,5 +1,5 @@
 # CORTEX
-![cortex-logo.png](docs/images/logo.png)
+![cortex-desc.png](docs/images/desc.png)
 <p align="center">CORTEX 是一个为高效集成和利用大型语言模型 (LLM) 而设计的 AI Agent 框架，使用 Go 语言构建。</p>
 
 <p align="center">
@@ -27,6 +27,8 @@ CORTEX 是一个为高效集成和利用大型语言模型 (LLM) 而设计的 AI
 
 与其他代理框架不同，CORTEX 专为生产环境部署而设计，具有强大的错误处理、灵活的配置和高效的资源利用。以 Go 语言为基础，CORTEX 为下一代 AI 应用提供卓越的性能和安全的代理能力。
 
+CORTEX 实现的功能类似于 n8n 的 AI Agent，但采用了轻量级设计理念。在实际开发中，许多场景并不需要 n8n 提供的复杂流程编排能力，且将 n8n 完整集成到自有项目中存在一定的配置复杂度和资源占用问题。相比之下，本库专为简化集成流程而设计，保持了核心的 AI Agent 功能同时大幅降低了使用门槛，非常适合对资源占用和集成复杂度有严格要求的项目场景。
+
 ## 特性与状态
 
 - **智能代理引擎**：用于创建具有高级工具调用能力的 AI 代理的核心功能。
@@ -42,6 +44,8 @@ CORTEX 是一个为高效集成和利用大型语言模型 (LLM) 而设计的 AI
 ## 架构概述
 
 Cortex 采用模块化架构，包含以下关键组件：
+
+> 注意：agent 包基于 [LangChain](https://github.com/tmc/langchaingo) 实现，利用其强大的 LLM 交互和工具调用能力构建智能代理系统。
 
 ```
 cortex/
