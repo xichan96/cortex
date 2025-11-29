@@ -1,0 +1,161 @@
+package types
+
+import "time"
+
+// Tool defines tool interface
+type Tool interface {
+	// Tool basic information
+	Name() string
+	Description() string
+	Schema() map[string]interface{}
+
+	// Tool execution
+	Execute(input map[string]interface{}) (interface{}, error)
+
+	// Tool metadata
+	Metadata() ToolMetadata
+}
+
+// ToolMetadata tool metadata
+type ToolMetadata struct {
+	SourceNodeName string                 `json:"sourceNodeName"`
+	IsFromToolkit  bool                   `json:"isFromToolkit"`
+	ToolType       string                 `json:"toolType"` // "mcp" or "http"
+	Extra          map[string]interface{} `json:"extra,omitempty"`
+}
+
+// ToolCallRequest tool call request
+type ToolCallRequest struct {
+	Tool       string                 `json:"tool"`
+	ToolInput  map[string]interface{} `json:"toolInput"`
+	ToolCallID string                 `json:"toolCallId"`
+	Type       string                 `json:"type,omitempty"`
+	Log        string                 `json:"log,omitempty"`
+	MessageLog []interface{}          `json:"messageLog,omitempty"`
+}
+
+// ToolAction tool action
+type ToolAction struct {
+	NodeName string                 `json:"nodeName"`
+	Input    map[string]interface{} `json:"input"`
+	Type     string                 `json:"type"`
+	ID       string                 `json:"id"`
+	Metadata ActionMetadata         `json:"metadata"`
+}
+
+// ActionMetadata action metadata
+type ActionMetadata struct {
+	ItemIndex int `json:"itemIndex"`
+}
+
+// EngineRequest engine request
+type EngineRequest struct {
+	Actions  []ToolAction            `json:"actions"`
+	Metadata RequestResponseMetadata `json:"metadata"`
+}
+
+// EngineResponse engine response
+type EngineResponse struct {
+	ActionResponses []ActionResponse        `json:"actionResponses"`
+	Metadata        RequestResponseMetadata `json:"metadata"`
+}
+
+// ActionResponse action response
+type ActionResponse struct {
+	Action *ToolAction `json:"action"`
+	Data   interface{} `json:"data"`
+	Error  string      `json:"error,omitempty"`
+}
+
+// RequestResponseMetadata request response metadata
+type RequestResponseMetadata struct {
+	ItemIndex        int            `json:"itemIndex,omitempty"`
+	PreviousRequests []ToolCallData `json:"previousRequests,omitempty"`
+	IterationCount   int            `json:"iterationCount,omitempty"`
+}
+
+// ToolCallData tool call data
+type ToolCallData struct {
+	Action      ToolActionStep `json:"action"`
+	Observation string         `json:"observation"`
+}
+
+// ToolActionStep tool action step
+type ToolActionStep struct {
+	Tool       string      `json:"tool"`
+	ToolInput  interface{} `json:"toolInput"`
+	Log        interface{} `json:"log"`
+	ToolCallID interface{} `json:"toolCallId"`
+	Type       interface{} `json:"type"`
+}
+
+// AgentConfig agent configuration
+type AgentConfig struct {
+	MaxIterations           int           `json:"maxIterations"`
+	ReturnIntermediateSteps bool          `json:"returnIntermediateSteps"`
+	EnableStreaming         bool          `json:"enableStreaming"`
+	SystemMessage           string        `json:"systemMessage"`
+	BatchSize               int           `json:"batchSize"`
+	DelayBetweenBatches     time.Duration `json:"delayBetweenBatches"`
+	MaxTokensFromMemory     int           `json:"maxTokensFromMemory"`
+	ContinueOnFail          bool          `json:"continueOnFail"`
+	Temperature             float32       `json:"temperature"`           // 温度参数 (0.0-1.0)
+	MaxTokens               int           `json:"maxTokens"`             // 最大token数
+	TopP                    float32       `json:"topP"`                  // Top P采样
+	FrequencyPenalty        float32       `json:"frequencyPenalty"`      // 频率惩罚
+	PresencePenalty         float32       `json:"presencePenalty"`       // 存在惩罚
+	StopSequences           []string      `json:"stopSequences"`         // 停止序列
+	Timeout                 time.Duration `json:"timeout"`               // 超时时间
+	RetryAttempts           int           `json:"retryAttempts"`         // 重试次数
+	RetryDelay              time.Duration `json:"retryDelay"`            // 重试延迟
+	EnableToolRetry         bool          `json:"enableToolRetry"`       // 启用工具重试
+	ToolRetryAttempts       int           `json:"toolRetryAttempts"`     // 工具重试次数
+	ToolRetryDelay          time.Duration `json:"toolRetryDelay"`        // 工具重试延迟
+	EnableContextWindow     bool          `json:"enableContextWindow"`   // 启用上下文窗口
+	ContextWindowSize       int           `json:"contextWindowSize"`     // 上下文窗口大小
+	EnableFunctionCalling   bool          `json:"enableFunctionCalling"` // 启用函数调用
+	ParallelToolCalls       bool          `json:"parallelToolCalls"`     // 并行工具调用
+	ToolCallTimeout         time.Duration `json:"toolCallTimeout"`       // 工具调用超时
+}
+
+// NewAgentConfig creates a new agent configuration with reasonable defaults
+func NewAgentConfig() *AgentConfig {
+	return &AgentConfig{
+		MaxIterations:           10,
+		ReturnIntermediateSteps: false,
+		EnableStreaming:         false,
+		SystemMessage:           "",
+		BatchSize:               10,
+		DelayBetweenBatches:     100 * time.Millisecond,
+		MaxTokensFromMemory:     2000,
+		ContinueOnFail:          false,
+
+		// Default values for new parameters
+		Temperature:           0.7,
+		MaxTokens:             4096,
+		TopP:                  1.0,
+		FrequencyPenalty:      0.0,
+		PresencePenalty:       0.0,
+		StopSequences:         []string{},
+		Timeout:               30 * time.Second,
+		RetryAttempts:         3,
+		RetryDelay:            1 * time.Second,
+		EnableToolRetry:       true,
+		ToolRetryAttempts:     2,
+		ToolRetryDelay:        500 * time.Millisecond,
+		EnableContextWindow:   true,
+		ContextWindowSize:     8000,
+		EnableFunctionCalling: true,
+		ParallelToolCalls:     true,
+		ToolCallTimeout:       10 * time.Second,
+	}
+}
+
+// StreamEvent stream event
+type StreamEvent struct {
+	Type       string      `json:"type"`
+	Content    string      `json:"content,omitempty"`
+	ToolResult interface{} `json:"toolResult,omitempty"`
+	EventName  string      `json:"eventName,omitempty"`
+	Data       interface{} `json:"data,omitempty"`
+}

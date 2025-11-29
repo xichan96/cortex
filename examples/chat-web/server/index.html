@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Intelligent chat assistant based on advanced language models">
+    <title>AI Chat Assistant</title>
+    <!-- External resource references -->
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- Custom styles -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Main chat container -->
+    <div class="chat-container">
+        <!-- Chat header -->
+        <header class="chat-header">
+            <h1 class="text-xl font-bold">AI Chat Assistant</h1>
+            <p class="text-sm opacity-90">Intelligent Conversation Assistant</p>
+        </header>
+        
+        <!-- Message area -->
+        <main class="chat-messages" id="chatMessages">
+            <div class="message ai-message">
+                <div class="message-header">
+                    <i class="fa fa-robot text-indigo-500"></i>
+                    <span>AI Assistant</span>
+                </div>
+                <div class="message-content">
+                    Hello! I'm an AI chat assistant. I'm happy to help you. Please enter your question or command, and I'll do my best to answer it.
+                </div>
+            </div>
+        </main>
+        
+        <!-- Input area -->
+        <footer class="chat-input">
+            <div class="input-container">
+                <textarea 
+                    class="message-input" 
+                    id="messageInput" 
+                    placeholder="Type your message..." 
+                    rows="1"
+                    aria-label="Enter message"
+                ></textarea>
+                <button class="send-button" id="sendButton" title="Send message" aria-label="Send message">
+                    <i class="fa fa-paper-plane"></i>
+                </button>
+            </div>
+        </footer>
+    </div>
+    
+    <!-- Settings button -->
+    <button class="settings-toggle" id="settingsToggle" title="Settings" aria-label="Open settings">
+        <i class="fa fa-cog"></i>
+    </button>
+    
+    <!-- Settings panel -->
+    <aside class="settings-panel" id="settingsPanel">
+        <button class="close-settings" id="closeSettings" aria-label="Close settings">
+            <i class="fa fa-times"></i>
+        </button>
+        
+        <h2 class="text-lg font-bold mb-4">Settings</h2>
+        
+        <div class="setting-item">
+            <label for="apiUrl" class="setting-label">API URL</label>
+            <input 
+                type="text" 
+                class="setting-control" 
+                id="apiUrl" 
+                value="http://localhost:8765" 
+                placeholder="Enter API URL"
+                aria-describedby="apiUrlHelp"
+            >
+            <div class="api-url-display mt-2">
+                Currently using: <span id="currentApiUrl">http://localhost:8765</span>
+            </div>
+        </div>
+        
+        <div class="setting-item">
+            <label for="useStream" class="setting-label flex justify-between items-center">
+                <span>Use Streaming Response</span>
+                <div class="relative inline-block w-11 h-6 mr-2 align-middle select-none">
+                    <input type="checkbox" id="useStream" class="sr-only" checked>
+                    <label for="useStream" class="switch cursor-pointer"></label>
+                </div>
+            </label>
+            <p id="useStreamHelp" class="text-xs text-gray-500 mt-1">When enabled, messages will be displayed in streaming mode</p>
+        </div>
+        
+        <div class="setting-item">
+            <button class="w-full bg-red-500 text-white py-2 px-4 rounded-md hover:bg-red-600 transition-colors" id="clearChat" aria-label="Clear chat history">
+                <i class="fa fa-trash mr-2"></i>Clear Chat History
+            </button>
+        </div>
+    </aside>
+    <!-- Script files -->
+    <script src="script.js"></script>
+</body>
+</html>
