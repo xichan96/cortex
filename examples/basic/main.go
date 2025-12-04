@@ -8,6 +8,7 @@ import (
 
 	"github.com/xichan96/cortex/agent/engine"
 	"github.com/xichan96/cortex/agent/llm"
+	"github.com/xichan96/cortex/agent/providers"
 	"github.com/xichan96/cortex/agent/tools/mcp"
 	"github.com/xichan96/cortex/agent/types"
 )
@@ -54,7 +55,7 @@ func initMCPClient() (*mcp.Client, error) {
 }
 
 func main() {
-	fmt.Println("=== AI Training Service MCP Integration Test ===")
+	fmt.Println("=== AI training service MCP integration test ===")
 
 	// Get LLM provider
 	llmProvider, err := getLLMProvider()
@@ -91,14 +92,18 @@ func main() {
 	// Create agent engine
 	agentEngine := engine.NewAgentEngine(llmProvider, agentConfig)
 
+	// Set memory
+	memory := providers.NewSimpleMemoryProvider()
+	agentEngine.SetMemory(memory)
+
 	// Get MCP tools and add to agent engine
 	mcpTools := mcpClient.GetTools()
 	if len(mcpTools) > 0 {
 		fmt.Printf("Found %d AI training tools, adding to agent engine...\n", len(mcpTools))
 		agentEngine.AddTools(mcpTools)
 
-		// Display available tools
-		fmt.Println("\n--- Available AI Training Tools ---")
+		// Show available tools
+		fmt.Println("\n--- Available AI training tools ---")
 		for _, tool := range mcpTools {
 			fmt.Printf("- %s: %s\n", tool.Name(), tool.Description())
 		}

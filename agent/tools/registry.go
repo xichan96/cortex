@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/xichan96/cortex/agent/errors"
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/pkg/errors"
 )
 
 // Registry tool registry

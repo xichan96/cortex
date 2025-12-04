@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/tmc/langchaingo/llms"
-	"github.com/xichan96/cortex/agent/errors"
-	"github.com/xichan96/cortex/agent/logger"
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/pkg/errors"
+	"github.com/xichan96/cortex/pkg/logger"
 )
 
 // LangChainLLMProvider LangChain LLM provider

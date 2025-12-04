@@ -9,9 +9,9 @@ import (
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/xichan96/cortex/agent/errors"
-	"github.com/xichan96/cortex/agent/logger"
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/pkg/errors"
+	"github.com/xichan96/cortex/pkg/logger"
 )
 
 // Client MCP client - using official SDK

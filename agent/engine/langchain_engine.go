@@ -7,22 +7,22 @@ import (
 	"sync"
 	"time"
 
-	"github.com/xichan96/cortex/agent/errors"
-	"github.com/xichan96/cortex/agent/logger"
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/pkg/errors"
+	"github.com/xichan96/cortex/pkg/logger"
 )
 
 // LangChainAgentEngine LangChain agent engine
 type LangChainAgentEngine struct {
-	_                Agent // Ensure LangChainAgentEngine implements Agent interface
-	llm              types.LLMProvider
-	mu               sync.RWMutex
-	tools            []types.Tool
-	toolsMap         map[string]types.Tool
-	systemPrompt     string
-	memory           []types.Message
+	_                  Agent // Ensure LangChainAgentEngine implements Agent interface
+	llm                types.LLMProvider
+	mu                 sync.RWMutex
+	tools              []types.Tool
+	toolsMap           map[string]types.Tool
+	systemPrompt       string
+	memory             []types.Message
 	maxHistoryMessages int
-	logger           *logger.Logger
+	logger             *logger.Logger
 }
 
 // NewLangChainAgentEngine creates a new LangChain agent engine

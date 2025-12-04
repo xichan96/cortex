@@ -2,9 +2,9 @@ package llm
 
 import (
 	"github.com/tmc/langchaingo/llms/openai"
-	"github.com/xichan96/cortex/agent/errors"
 	"github.com/xichan96/cortex/agent/providers"
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/pkg/errors"
 )
 
 // DeepSeekOptions DeepSeek configuration options
