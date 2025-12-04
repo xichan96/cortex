@@ -11,6 +11,7 @@ import (
 	"github.com/xichan96/cortex/agent/providers"
 	"github.com/xichan96/cortex/agent/tools/mcp"
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/pkg/mongodb"
 )
 
 // getLLMProvider creates an LLM provider (using hardcoded configuration)
@@ -54,6 +55,33 @@ func initMCPClient() (*mcp.Client, error) {
 	return client, nil
 }
 
+// initMongoDBMemory initializes MongoDB client and creates MongoDB memory provider
+func initMongoDBMemory(sessionID string) (types.MemoryProvider, error) {
+	// MongoDB configuration
+	mongoURI := "mongodb://localhost:27017"
+	database := "cortex"
+	username := "cortex"
+	password := "cortex"
+
+	fmt.Printf("Connecting to MongoDB: %s, Database: %s\n", mongoURI, database)
+
+	// Create MongoDB client
+	mongoClient, err := mongodb.NewClient(
+		mongodb.SetURI(mongoURI),
+		mongodb.SetDatabase(database),
+		mongodb.SetBasicAuth(username, password),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to create MongoDB client: %w", err)
+	}
+
+	fmt.Printf("Successfully connected to MongoDB, Session ID: %s\n", sessionID)
+
+	// Create MongoDB memory provider with limit
+	memory := providers.NewMongoDBMemoryProviderWithLimit(mongoClient, sessionID, 100)
+	return memory, nil
+}
+
 func main() {
 	fmt.Println("=== AI training service MCP integration test ===")
 
@@ -92,8 +120,14 @@ func main() {
 	// Create agent engine
 	agentEngine := engine.NewAgentEngine(llmProvider, agentConfig)
 
-	// Set memory
-	memory := providers.NewSimpleMemoryProvider()
+	// Initialize MongoDB memory
+	// memory := providers.NewSimpleMemoryProvider()
+	sessionID := fmt.Sprintf("session_%d", time.Now().Unix())
+	memory, err := initMongoDBMemory(sessionID)
+	if err != nil {
+		fmt.Printf("MongoDB memory initialization error: %v, falling back to simple memory\n", err)
+		memory = providers.NewSimpleMemoryProvider()
+	}
 	agentEngine.SetMemory(memory)
 
 	// Get MCP tools and add to agent engine
