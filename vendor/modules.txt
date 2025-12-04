@@ -35,11 +35,15 @@ github.com/bytedance/sonic/unquote
 github.com/bytedance/sonic/utf8
 # github.com/cespare/xxhash/v2 v2.3.0
 ## explicit; go 1.11
+github.com/cespare/xxhash/v2
 # github.com/chenzhuoyu/base64x v0.0.0-20221115062448-fe3a3abad311
 ## explicit; go 1.15
 github.com/chenzhuoyu/base64x
 # github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
 ## explicit
+# github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f
+## explicit
+github.com/dgryski/go-rendezvous
 # github.com/dlclark/regexp2 v1.10.0
 ## explicit; go 1.13
 github.com/dlclark/regexp2
@@ -172,6 +176,16 @@ github.com/qiniu/qmgo/middleware
 github.com/qiniu/qmgo/operator
 github.com/qiniu/qmgo/options
 github.com/qiniu/qmgo/validator
+# github.com/redis/go-redis/v9 v9.7.0
+## explicit; go 1.18
+github.com/redis/go-redis/v9
+github.com/redis/go-redis/v9/internal
+github.com/redis/go-redis/v9/internal/hashtag
+github.com/redis/go-redis/v9/internal/hscan
+github.com/redis/go-redis/v9/internal/pool
+github.com/redis/go-redis/v9/internal/proto
+github.com/redis/go-redis/v9/internal/rand
+github.com/redis/go-redis/v9/internal/util
 # github.com/rogpeppe/go-internal v1.13.1
 ## explicit; go 1.22
 # github.com/sirupsen/logrus v1.9.3
@@ -239,7 +253,7 @@ github.com/yosida95/uritemplate/v3
 ## explicit; go 1.17
 github.com/youmark/pkcs8
 # gitlab.gz.cvte.cn/research_engineer/kit/v2 v2.1.2
-## explicit
+## explicit; go 1.22.0
 # go.mongodb.org/mongo-driver v1.17.6
 ## explicit; go 1.18
 go.mongodb.org/mongo-driver/bson

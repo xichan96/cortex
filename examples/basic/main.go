@@ -11,7 +11,8 @@ import (
 	"github.com/xichan96/cortex/agent/providers"
 	"github.com/xichan96/cortex/agent/tools/mcp"
 	"github.com/xichan96/cortex/agent/types"
-	"github.com/xichan96/cortex/pkg/mongodb"
+	"github.com/xichan96/cortex/pkg/redis"
+	// "github.com/xichan96/cortex/pkg/mongodb"
 )
 
 // getLLMProvider creates an LLM provider (using hardcoded configuration)
@@ -55,32 +56,58 @@ func initMCPClient() (*mcp.Client, error) {
 	return client, nil
 }
 
-// initMongoDBMemory initializes MongoDB client and creates MongoDB memory provider
-func initMongoDBMemory(sessionID string) (types.MemoryProvider, error) {
-	// MongoDB configuration
-	mongoURI := "mongodb://localhost:27017"
-	database := "cortex"
-	username := "cortex"
-	password := "cortex"
-
-	fmt.Printf("Connecting to MongoDB: %s, Database: %s\n", mongoURI, database)
-
-	// Create MongoDB client
-	mongoClient, err := mongodb.NewClient(
-		mongodb.SetURI(mongoURI),
-		mongodb.SetDatabase(database),
-		mongodb.SetBasicAuth(username, password),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("Failed to create MongoDB client: %w", err)
+// initRedisMemory initializes Redis client and creates Redis memory provider
+func initRedisMemory(sessionID string) (types.MemoryProvider, error) {
+	// Redis configuration
+	redisConfig := &redis.Config{
+		Host:     "localhost",
+		Port:     6379,
+		DB:       0,
+		Password: "",
+		Username: "",
 	}
 
-	fmt.Printf("Successfully connected to MongoDB, Session ID: %s\n", sessionID)
+	fmt.Printf("Connecting to Redis: %s:%d, DB: %d\n", redisConfig.Host, redisConfig.Port, redisConfig.DB)
 
-	// Create MongoDB memory provider with limit
-	memory := providers.NewMongoDBMemoryProviderWithLimit(mongoClient, sessionID, 100)
+	// Create Redis client
+	redisClient, err := redis.NewClient(redisConfig)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to create Redis client: %w", err)
+	}
+
+	fmt.Printf("Successfully connected to Redis, Session ID: %s\n", sessionID)
+
+	// Create Redis memory provider with limit
+	memory := providers.NewRedisMemoryProviderWithLimit(redisClient, sessionID, 100)
 	return memory, nil
 }
+
+// initMongoDBMemory initializes MongoDB client and creates MongoDB memory provider
+// func initMongoDBMemory(sessionID string) (types.MemoryProvider, error) {
+// 	// MongoDB configuration
+// 	mongoURI := "mongodb://localhost:27017"
+// 	database := "cortex"
+// 	username := "cortex"
+// 	password := "cortex"
+//
+// 	fmt.Printf("Connecting to MongoDB: %s, Database: %s\n", mongoURI, database)
+//
+// 	// Create MongoDB client
+// 	mongoClient, err := mongodb.NewClient(
+// 		mongodb.SetURI(mongoURI),
+// 		mongodb.SetDatabase(database),
+// 		mongodb.SetBasicAuth(username, password),
+// 	)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("Failed to create MongoDB client: %w", err)
+// 	}
+//
+// 	fmt.Printf("Successfully connected to MongoDB, Session ID: %s\n", sessionID)
+//
+// 	// Create MongoDB memory provider with limit
+// 	memory := providers.NewMongoDBMemoryProviderWithLimit(mongoClient, sessionID, 100)
+// 	return memory, nil
+// }
 
 func main() {
 	fmt.Println("=== AI training service MCP integration test ===")
@@ -120,15 +147,24 @@ func main() {
 	// Create agent engine
 	agentEngine := engine.NewAgentEngine(llmProvider, agentConfig)
 
-	// Initialize MongoDB memory
+	// Initialize Redis memory
 	// memory := providers.NewSimpleMemoryProvider()
 	sessionID := fmt.Sprintf("session_%d", time.Now().Unix())
-	memory, err := initMongoDBMemory(sessionID)
+	memory, err := initRedisMemory(sessionID)
 	if err != nil {
-		fmt.Printf("MongoDB memory initialization error: %v, falling back to simple memory\n", err)
+		fmt.Printf("Redis memory initialization error: %v, falling back to simple memory\n", err)
 		memory = providers.NewSimpleMemoryProvider()
 	}
 	agentEngine.SetMemory(memory)
+
+	// Initialize MongoDB memory (commented out)
+	// sessionID := fmt.Sprintf("session_%d", time.Now().Unix())
+	// memory, err := initMongoDBMemory(sessionID)
+	// if err != nil {
+	// 	fmt.Printf("MongoDB memory initialization error: %v, falling back to simple memory\n", err)
+	// 	memory = providers.NewSimpleMemoryProvider()
+	// }
+	// agentEngine.SetMemory(memory)
 
 	// Get MCP tools and add to agent engine
 	mcpTools := mcpClient.GetTools()
