@@ -1,11 +1,10 @@
 package llm
 
 import (
-	"fmt"
-
 	"github.com/tmc/langchaingo/llms/openai"
 	"github.com/xichan96/cortex/agent/providers"
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/pkg/errors"
 )
 
 // DeepSeekOptions DeepSeek configuration options
@@ -18,7 +17,7 @@ type DeepSeekOptions struct {
 // NewDeepSeekClient creates a new DeepSeek client and returns LLMProvider
 func NewDeepSeekClient(opts DeepSeekOptions) (types.LLMProvider, error) {
 	if opts.APIKey == "" {
-		return nil, fmt.Errorf("API key is required")
+		return nil, errors.EC_LLM_API_KEY_REQUIRED
 	}
 
 	if opts.Model == "" {
@@ -36,7 +35,7 @@ func NewDeepSeekClient(opts DeepSeekOptions) (types.LLMProvider, error) {
 		openai.WithModel(opts.Model),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create DeepSeek client: %w", err)
+		return nil, errors.NewAgentError(errors.EC_LLM_CLIENT_CREATE_FAILED.Code, errors.EC_LLM_CLIENT_CREATE_FAILED.Message).Wrap(err)
 	}
 
 	// Directly return LLMProvider

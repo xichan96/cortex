@@ -35,7 +35,7 @@ CORTEX implements functionality similar to n8n's AI Agent but adopts a lightweig
 - **Multi-Modal Support**: Process text, images, and other media formats effortlessly.
 - **Tool Ecosystem**: Extensible tool system with built-in MCP and HTTP clients.
 - **Streaming Support**: Real-time response streaming for interactive applications.
-- **Memory Management**: Context-aware memory system for preserving conversation history.
+- **Memory Management**: Context-aware memory system for preserving conversation history with support for LangChain, MongoDB, and Redis storage backends.
 - **Configuration Flexibility**: Comprehensive options for fine-tuning agent behavior.
 - **Parallel Tool Calls**: Efficient execution of multiple tools simultaneously.
 - **Robust Error Handling**: Comprehensive error management and retry mechanisms.
@@ -367,15 +367,74 @@ func (t *CustomTool) Metadata() types.ToolMetadata {
 
 ### Memory Management
 
-Cortex provides memory management capabilities for conversation history:
+Cortex provides memory management capabilities for conversation history with multiple storage backends:
+
+#### LangChain Memory (Default)
 
 ```go
-// Set memory provider
+// Set LangChain memory provider
 memoryProvider := providers.NewLangChainMemory()
 agentEngine.SetMemory(memoryProvider)
 
 // Configure memory usage
 agentConfig.MaxTokensFromMemory = 1000 // Maximum tokens from memory
+```
+
+#### MongoDB Memory
+
+Use MongoDB as persistent storage:
+
+```go
+import (
+	"github.com/xichan96/cortex/agent/providers"
+	"github.com/xichan96/cortex/pkg/mongodb"
+)
+
+// Create MongoDB client
+mongoClient, err := mongodb.NewClient("mongodb://localhost:27017", "database_name")
+if err != nil {
+	// Handle error
+}
+
+// Create MongoDB memory provider
+memoryProvider := providers.NewMongoDBMemoryProvider(mongoClient, "session-id")
+
+// Optional: Set maximum history messages
+memoryProvider.SetMaxHistoryMessages(100)
+
+// Optional: Set collection name (default: "chat_messages")
+memoryProvider.SetCollectionName("chat_messages")
+
+// Set memory provider
+agentEngine.SetMemory(memoryProvider)
+```
+
+#### Redis Memory
+
+Use Redis as persistent storage:
+
+```go
+import (
+	"github.com/xichan96/cortex/agent/providers"
+	"github.com/xichan96/cortex/pkg/redis"
+)
+
+// Create Redis client
+redisClient := redis.NewClient(&redis.Options{
+	Addr: "localhost:6379",
+})
+
+// Create Redis memory provider
+memoryProvider := providers.NewRedisMemoryProvider(redisClient, "session-id")
+
+// Optional: Set maximum history messages
+memoryProvider.SetMaxHistoryMessages(100)
+
+// Optional: Set key prefix (default: "chat_messages")
+memoryProvider.SetKeyPrefix("chat_messages")
+
+// Set memory provider
+agentEngine.SetMemory(memoryProvider)
 ```
 
 ### Error Handling

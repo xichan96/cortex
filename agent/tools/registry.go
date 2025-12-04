@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/pkg/errors"
 )
 
 // Registry tool registry
@@ -27,7 +28,7 @@ func (r *Registry) Register(tool types.Tool) error {
 
 	name := tool.Name()
 	if _, exists := r.tools[name]; exists {
-		return fmt.Errorf("tool %s already registered", name)
+		return errors.NewAgentError(errors.EC_TOOL_ALREADY_REGISTERED.Code, fmt.Sprintf("tool %s already registered", name))
 	}
 
 	r.tools[name] = tool
@@ -51,7 +52,7 @@ func (r *Registry) Get(name string) (types.Tool, error) {
 
 	tool, exists := r.tools[name]
 	if !exists {
-		return nil, fmt.Errorf("tool %s not found", name)
+		return nil, errors.NewAgentError(errors.EC_TOOL_NOT_FOUND.Code, fmt.Sprintf("tool %s not found", name))
 	}
 
 	return tool, nil
@@ -92,7 +93,7 @@ func (r *Registry) Remove(name string) error {
 	defer r.mu.Unlock()
 
 	if _, exists := r.tools[name]; !exists {
-		return fmt.Errorf("tool %s not found", name)
+		return errors.NewAgentError(errors.EC_TOOL_NOT_FOUND.Code, fmt.Sprintf("tool %s not found", name))
 	}
 
 	delete(r.tools, name)

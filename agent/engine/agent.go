@@ -4,15 +4,17 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/xichan96/cortex/agent/errors"
-	"github.com/xichan96/cortex/agent/logger"
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/pkg/errors"
+	"github.com/xichan96/cortex/pkg/logger"
 )
 
 // Agent agent engine interface
@@ -30,13 +32,6 @@ type Agent interface {
 	SetRetryAttempts(attempts int)
 	SetRetryDelay(delay time.Duration)
 	SetEnableToolRetry(enable bool)
-	SetToolRetryAttempts(attempts int)
-	SetToolRetryDelay(delay time.Duration)
-	SetEnableContextWindow(enable bool)
-	SetContextWindowSize(size int)
-	SetEnableFunctionCalling(enable bool)
-	SetParallelToolCalls(enable bool)
-	SetToolCallTimeout(timeout time.Duration)
 	SetConfig(config *types.AgentConfig)
 
 	// Tool management methods
@@ -69,7 +64,7 @@ type AgentEngine struct {
 
 	// Internal state management
 	mu        sync.RWMutex       // State mutex lock
-	isRunning bool               // Running state
+	isRunning atomic.Bool        // Running state (atomic for thread safety)
 	ctx       context.Context    // Context
 	cancel    context.CancelFunc // Cancel function
 
@@ -114,6 +109,12 @@ func (ae *AgentEngine) SetMemory(memory types.MemoryProvider) {
 	ae.mu.Lock()
 	defer ae.mu.Unlock()
 	ae.memory = memory
+
+	if ae.config != nil && ae.config.MaxHistoryMessages > 0 {
+		if provider, ok := memory.(interface{ SetMaxHistoryMessages(int) }); ok {
+			provider.SetMaxHistoryMessages(ae.config.MaxHistoryMessages)
+		}
+	}
 }
 
 // SetOutputParser sets the output parser
@@ -200,55 +201,6 @@ func (ae *AgentEngine) SetEnableToolRetry(enable bool) {
 	})
 }
 
-// SetToolRetryAttempts sets the number of tool retry attempts
-func (ae *AgentEngine) SetToolRetryAttempts(attempts int) {
-	ae.setConfigValue(func() {
-		ae.config.ToolRetryAttempts = attempts
-	})
-}
-
-// SetToolRetryDelay sets the tool retry delay
-func (ae *AgentEngine) SetToolRetryDelay(delay time.Duration) {
-	ae.setConfigValue(func() {
-		ae.config.ToolRetryDelay = delay
-	})
-}
-
-// SetEnableContextWindow sets whether to enable context window
-func (ae *AgentEngine) SetEnableContextWindow(enable bool) {
-	ae.setConfigValue(func() {
-		ae.config.EnableContextWindow = enable
-	})
-}
-
-// SetContextWindowSize sets the context window size
-func (ae *AgentEngine) SetContextWindowSize(size int) {
-	ae.setConfigValue(func() {
-		ae.config.ContextWindowSize = size
-	})
-}
-
-// SetEnableFunctionCalling sets whether to enable function calling
-func (ae *AgentEngine) SetEnableFunctionCalling(enable bool) {
-	ae.setConfigValue(func() {
-		ae.config.EnableFunctionCalling = enable
-	})
-}
-
-// SetParallelToolCalls sets whether to enable parallel tool calls
-func (ae *AgentEngine) SetParallelToolCalls(enable bool) {
-	ae.setConfigValue(func() {
-		ae.config.ParallelToolCalls = enable
-	})
-}
-
-// SetToolCallTimeout sets the tool call timeout
-func (ae *AgentEngine) SetToolCallTimeout(timeout time.Duration) {
-	ae.setConfigValue(func() {
-		ae.config.ToolCallTimeout = timeout
-	})
-}
-
 // SetConfig sets the complete configuration
 func (ae *AgentEngine) SetConfig(config *types.AgentConfig) {
 	ae.mu.Lock()
@@ -292,21 +244,11 @@ func (ae *AgentEngine) AddTools(tools []types.Tool) {
 //   - execution result containing output, tool calls, and intermediate steps
 //   - error information
 func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallData) (*AgentResult, error) {
-	// Use write lock to set running state
-	ae.mu.Lock()
-	if ae.isRunning {
-		ae.mu.Unlock()
+	if !ae.isRunning.CompareAndSwap(false, true) {
 		return nil, errors.EC_AGENT_BUSY
 	}
-	ae.isRunning = true
-	ae.mu.Unlock()
 
-	// Ensure state is reset after execution completes
-	defer func() {
-		ae.mu.Lock()
-		ae.isRunning = false
-		ae.mu.Unlock()
-	}()
+	defer ae.isRunning.Store(false)
 
 	// Add execution tracking
 	startTime := time.Now()
@@ -323,7 +265,9 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 
 	var finalResult *AgentResult
 	iteration := 0
+	ae.mu.RLock()
 	maxIterations := ae.config.MaxIterations
+	ae.mu.RUnlock()
 
 	// Iterate until no tool calls or maximum iterations reached
 	for iteration < maxIterations {
@@ -381,24 +325,19 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 //   - streaming result channel for real-time content delivery during execution
 //   - error information (only during initialization)
 func (ae *AgentEngine) ExecuteStream(input string, previousRequests []types.ToolCallData) (<-chan StreamResult, error) {
-	// 使用写锁来设置运行状态
-	ae.mu.Lock()
-	if ae.isRunning {
-		ae.mu.Unlock()
+	if !ae.isRunning.CompareAndSwap(false, true) {
 		return nil, errors.EC_AGENT_BUSY
 	}
-	ae.isRunning = true
-	ae.mu.Unlock()
 
-	resultChan := make(chan StreamResult, DefaultChannelBuffer) // Using constant-defined buffer size
+	resultChan := make(chan StreamResult, DefaultChannelBuffer)
 
 	go func() {
 		defer close(resultChan)
+		defer ae.isRunning.Store(false)
 
 		startTime := time.Now()
 		ae.logger.LogExecution("ExecuteStream", 0, "Starting stream execution", slog.String("input", truncateString(input, 100)), slog.Int("previousRequests", len(previousRequests)))
 
-		// 确保执行结束后重置状态
 		defer func() {
 			if r := recover(); r != nil {
 				ae.logger.LogError("ExecuteStream", fmt.Errorf("panic recovered: %v", r))
@@ -407,9 +346,6 @@ func (ae *AgentEngine) ExecuteStream(input string, previousRequests []types.Tool
 					Error: errors.NewAgentError(errors.EC_STREAM_PANIC.Code, "panic in stream execution").Wrap(fmt.Errorf("%v", r)),
 				}
 			}
-			ae.mu.Lock()
-			ae.isRunning = false
-			ae.mu.Unlock()
 		}()
 
 		// 准备初始消息
@@ -442,36 +378,39 @@ func (ae *AgentEngine) ExecuteStream(input string, previousRequests []types.Tool
 //   - built message list
 //   - error information
 func (ae *AgentEngine) prepareMessages(input string, previousRequests []types.ToolCallData) ([]types.Message, error) {
-	// get chat history to accurately pre-allocate capacity
 	var history []types.Message
 	var historyErr error
 	if ae.memory != nil {
 		history, historyErr = ae.memory.GetChatHistory()
 		if historyErr != nil {
-			return nil, fmt.Errorf("failed to get chat history: %w", historyErr)
+			return nil, errors.NewAgentError(errors.EC_MEMORY_HISTORY_FAILED.Code, errors.EC_MEMORY_HISTORY_FAILED.Message).Wrap(historyErr)
 		}
 	}
 
-	// Precisely pre-allocate slice capacity
-	estimatedSize := 1 + // user message
-		len(history) + // chat history
-		len(previousRequests) // tool call context
-	if ae.config.SystemMessage != "" {
-		estimatedSize++ // system message
+	ae.mu.RLock()
+	config := ae.config
+	ae.mu.RUnlock()
+
+	estimatedSize := 1 +
+		len(history) +
+		len(previousRequests)
+	if config != nil && config.SystemMessage != "" {
+		estimatedSize++
 	}
 
 	messages := make([]types.Message, 0, estimatedSize)
 
-	// Add system message if configured
-	if ae.config.SystemMessage != "" {
+	if config != nil && config.SystemMessage != "" {
 		messages = append(messages, types.Message{
 			Role:    "system",
-			Content: ae.config.SystemMessage,
+			Content: config.SystemMessage,
 		})
 	}
 
-	// Add chat history if available
 	if len(history) > 0 {
+		if config != nil && config.MaxHistoryMessages > 0 && len(history) > config.MaxHistoryMessages {
+			history = history[len(history)-config.MaxHistoryMessages:]
+		}
 		messages = append(messages, history...)
 	}
 
@@ -514,11 +453,16 @@ func (ae *AgentEngine) buildContextFromPreviousRequests(requests []types.ToolCal
 //   - whether to continue iteration
 //   - error information
 func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int) (*AgentResult, bool, error) {
+	ae.mu.RLock()
+	maxIterations := ae.config.MaxIterations
+	ae.mu.RUnlock()
 	startTime := time.Now()
-	ae.logger.LogExecution("executeIteration", iteration, fmt.Sprintf("Starting iteration %d/%d", iteration+1, ae.config.MaxIterations))
+	ae.logger.LogExecution("executeIteration", iteration, fmt.Sprintf("Starting iteration %d/%d", iteration+1, maxIterations))
 
-	// Call LLM provider to get response with tool support
-	response, err := ae.model.ChatWithTools(messages, ae.tools)
+	ae.mu.RLock()
+	tools := ae.tools
+	ae.mu.RUnlock()
+	response, err := ae.model.ChatWithTools(messages, tools)
 	if err != nil {
 		ae.logger.LogError("executeIteration", err, slog.Int("iteration", iteration))
 		return nil, false, errors.NewAgentError(errors.EC_CHAT_FAILED.Code, "failed to chat with tools").Wrap(err)
@@ -530,11 +474,14 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 
 	// Handle tool calls
 	if len(response.ToolCalls) > 0 {
-		fmt.Printf("LLM requested to call %d tools\n", len(response.ToolCalls))
+		ae.logger.Info("LLM requested tool calls",
+			slog.Int("tool_count", len(response.ToolCalls)),
+			slog.Int("iteration", iteration+1))
 
-		// Check if it's the last iteration, if so, skip tool execution
-		if iteration+1 >= ae.config.MaxIterations {
-			fmt.Printf("Iteration %d: Reached maximum iterations, skipping tool execution\n", iteration+1)
+		if iteration+1 >= maxIterations {
+			ae.logger.Info("Reached maximum iterations, skipping tool execution",
+				slog.Int("iteration", iteration+1),
+				slog.Int("max_iterations", maxIterations))
 			return result, false, nil
 		}
 
@@ -542,12 +489,17 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 		intermediateSteps := make([]types.ToolCallData, 0, len(response.ToolCalls))
 
 		for _, toolCall := range response.ToolCalls {
-			fmt.Printf("Executing tool: %s\n", toolCall.Function.Name)
+			ae.logger.Info("Executing tool",
+				slog.String("tool_name", toolCall.Function.Name),
+				slog.Int("iteration", iteration+1))
 
-			// Use map for fast tool lookup
+			ae.mu.RLock()
 			tool, exists := ae.toolsMap[toolCall.Function.Name]
+			ae.mu.RUnlock()
 			if !exists {
-				fmt.Printf("Tool %s not found\n", toolCall.Function.Name)
+				ae.logger.Info("Tool not found",
+					slog.String("tool_name", toolCall.Function.Name),
+					slog.Int("iteration", iteration+1))
 				continue
 			}
 
@@ -580,7 +532,9 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 				ae.logger.LogToolExecution(toolCall.Function.Name, true, duration, slog.Bool("cached", false))
 			}
 
-			fmt.Printf("Tool %s executed successfully, result: %v\n", toolCall.Function.Name, toolResult)
+			ae.logger.Info("Tool executed successfully",
+				slog.String("tool_name", toolCall.Function.Name),
+				slog.Int("iteration", iteration+1))
 
 			toolCalls = append(toolCalls, types.ToolCallRequest{
 				Tool:       toolCall.Function.Name,
@@ -669,15 +623,18 @@ func (ae *AgentEngine) executeStreamWithIterations(initialMessages []types.Messa
 	messages := initialMessages
 	finalResult := &AgentResult{}
 
-	// Smarter pre-allocation: based on maximum iterations and average tool calls
-	estimatedToolCalls := ae.config.MaxIterations * 3 // Assume average of 3 tool calls per round
+	ae.mu.RLock()
+	maxIterations := ae.config.MaxIterations
+	ae.mu.RUnlock()
+
+	estimatedToolCalls := maxIterations * 3
 	toolCalls := make([]types.ToolCallRequest, 0, estimatedToolCalls)
 	intermediateSteps := make([]types.ToolCallData, 0, estimatedToolCalls)
 
-	for iteration := 0; iteration < ae.config.MaxIterations; iteration++ {
+	for iteration := 0; iteration < maxIterations; iteration++ {
 		iterationStartTime := time.Now()
 		ae.logger.LogExecution("executeStreamWithIterations", iteration,
-			fmt.Sprintf("Starting streaming iteration %d/%d", iteration+1, ae.config.MaxIterations))
+			fmt.Sprintf("Starting streaming iteration %d/%d", iteration+1, maxIterations))
 
 		// Execute single round iteration with streaming
 		iterationResult, hasMore, err := ae.executeStreamIteration(messages, resultChan, iteration)
@@ -704,8 +661,7 @@ func (ae *AgentEngine) executeStreamWithIterations(initialMessages []types.Messa
 			break
 		}
 
-		// Prepare next round messages - only prepare if there are more iterations
-		if iteration+1 < ae.config.MaxIterations {
+		if iteration+1 < maxIterations {
 			ae.logger.LogExecution("executeStreamWithIterations", iteration, "Preparing next iteration messages")
 			messages = ae.buildNextMessages(messages, iterationResult)
 		} else {
@@ -751,15 +707,16 @@ func (ae *AgentEngine) executeStreamWithIterations(initialMessages []types.Messa
 func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultChan chan<- StreamResult, iteration int) (*AgentResult, bool, error) {
 	result := &AgentResult{}
 
-	// 使用LLM提供商流式调用工具
-	stream, err := ae.model.ChatWithToolsStream(messages, ae.tools)
+	ae.mu.RLock()
+	tools := ae.tools
+	maxIterations := ae.config.MaxIterations
+	ae.mu.RUnlock()
+	stream, err := ae.model.ChatWithToolsStream(messages, tools)
 	if err != nil {
 		return nil, false, errors.NewAgentError(errors.EC_STREAM_CHAT_FAILED.Code, "failed to chat with tools stream").Wrap(err)
 	}
 
-	toolCalls := []types.ToolCallRequest{}
 	intermediateSteps := []types.ToolCallData{}
-	var hasToolCalls bool
 
 	for msg := range stream {
 		switch msg.Type {
@@ -769,40 +726,25 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 				Type:    "chunk",
 				Content: msg.Content,
 			}
-		case "tool_call":
-			// Streaming interface supports tool call information
-			// Note: Need to handle according to actual StreamMessage structure
-			// Current StreamMessage has no ToolCall field, skip this case
-			hasToolCalls = true
+		case "tool_calls":
+			for _, tc := range msg.ToolCalls {
+				result.ToolCalls = append(result.ToolCalls, types.ToolCallRequest{
+					Tool:       tc.Function.Name,
+					ToolInput:  tc.Function.Arguments,
+					ToolCallID: tc.ID,
+					Type:       tc.Type,
+				})
+			}
 		case "error":
 			return nil, false, errors.NewAgentError(errors.EC_STREAM_ERROR.Code, "stream error occurred").Wrap(fmt.Errorf("%s", msg.Error))
 		}
 	}
 
-	// If streaming interface doesn't provide tool call information, use blocking call to get
-	if !hasToolCalls && len(toolCalls) == 0 {
-		response, err := ae.model.ChatWithTools(messages, ae.tools)
-		if err != nil {
-			return nil, false, errors.NewAgentError(errors.EC_BLOCKING_CHAT_FAILED.Code, "failed to get tool calls").Wrap(err)
-		}
-		// Convert ToolCall to ToolCallRequest
-		for _, tc := range response.ToolCalls {
-			result.ToolCalls = append(result.ToolCalls, types.ToolCallRequest{
-				Tool:       tc.Function.Name,
-				ToolInput:  tc.Function.Arguments,
-				ToolCallID: tc.ID,
-				Type:       tc.Type,
-			})
-		}
-	}
-
-	// Process tool calls if available
 	if len(result.ToolCalls) > 0 {
 		ae.logger.LogExecution("executeStreamIteration", iteration, "Processing tool calls",
 			slog.Int("tool_count", len(result.ToolCalls)))
 
-		// Check if it's the last iteration, skip tool execution if so
-		if iteration+1 >= ae.config.MaxIterations {
+		if iteration+1 >= maxIterations {
 			ae.logger.LogExecution("executeStreamIteration", iteration, "Reached maximum iterations, skipping tool execution")
 			return result, false, nil
 		}
@@ -815,8 +757,9 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 			ae.logger.LogExecution("executeStreamIteration", iteration, "Executing tool",
 				slog.String("tool_name", toolCall.Tool))
 
-			// Use map to quickly find tool
+			ae.mu.RLock()
 			tool, exists := ae.toolsMap[toolCall.Tool]
+			ae.mu.RUnlock()
 			if !exists {
 				ae.logger.LogError("executeStreamIteration", fmt.Errorf("tool not found"),
 					slog.String("tool_name", toolCall.Tool))
@@ -889,10 +832,16 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 // Returns:
 //   - cache key string
 func generateToolCacheKey(toolName string, args map[string]interface{}) string {
-	// Simple key generation: tool name + parameter hash
 	hasher := md5.New()
 	hasher.Write([]byte(toolName))
-	// Can add parameter serialization here, but for performance, only use tool name for now
+
+	if len(args) > 0 {
+		argsJSON, err := json.Marshal(args)
+		if err == nil {
+			hasher.Write(argsJSON)
+		}
+	}
+
 	return hex.EncodeToString(hasher.Sum(nil))
 }
 
@@ -907,7 +856,10 @@ func generateToolCacheKey(toolName string, args map[string]interface{}) string {
 //   - execution error (if any)
 //   - whether cache was found
 func (ae *AgentEngine) getCachedToolResult(toolName string, args map[string]interface{}) (interface{}, error, bool) {
-	if !ae.config.EnableToolRetry { // If tool retry is disabled, also disable cache
+	ae.mu.RLock()
+	enableToolRetry := ae.config.EnableToolRetry
+	ae.mu.RUnlock()
+	if !enableToolRetry {
 		return nil, nil, false
 	}
 
@@ -930,7 +882,10 @@ func (ae *AgentEngine) getCachedToolResult(toolName string, args map[string]inte
 //   - result: tool execution result
 //   - err: execution error (if any)
 func (ae *AgentEngine) setCachedToolResult(toolName string, args map[string]interface{}, result interface{}, err error) {
-	if !ae.config.EnableToolRetry { // 如果禁用工具重试，也禁用缓存
+	ae.mu.RLock()
+	enableToolRetry := ae.config.EnableToolRetry
+	ae.mu.RUnlock()
+	if !enableToolRetry {
 		return
 	}
 
@@ -939,17 +894,30 @@ func (ae *AgentEngine) setCachedToolResult(toolName string, args map[string]inte
 	ae.toolCacheMu.Lock()
 	defer ae.toolCacheMu.Unlock()
 
-	// Simple LRU strategy: if cache is full, clear oldest entry
+	// Simple LRU strategy: if cache is full, remove expired entries first, then oldest entry
 	if len(ae.toolCache) >= ae.toolCacheSize {
+		now := time.Now()
+		expiredKeys := make([]string, 0)
 		var oldestKey string
 		var oldestTime time.Time
+
+		// First pass: collect expired entries and find oldest
 		for key, entry := range ae.toolCache {
-			if oldestKey == "" || entry.timestamp.Before(oldestTime) {
+			if now.Sub(entry.timestamp) >= CacheExpirationTime {
+				expiredKeys = append(expiredKeys, key)
+			} else if oldestKey == "" || entry.timestamp.Before(oldestTime) {
 				oldestKey = key
 				oldestTime = entry.timestamp
 			}
 		}
-		if oldestKey != "" {
+
+		// Remove expired entries first
+		for _, key := range expiredKeys {
+			delete(ae.toolCache, key)
+		}
+
+		// If still full after removing expired, remove oldest
+		if len(ae.toolCache) >= ae.toolCacheSize && oldestKey != "" {
 			delete(ae.toolCache, oldestKey)
 		}
 	}
@@ -972,5 +940,5 @@ func (ae *AgentEngine) Stop() {
 	if ae.cancel != nil {
 		ae.cancel()
 	}
-	ae.isRunning = false
+	ae.isRunning.Store(false)
 }

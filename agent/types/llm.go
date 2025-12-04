@@ -77,9 +77,10 @@ type ToolFunction struct {
 
 // StreamMessage streaming message
 type StreamMessage struct {
-	Type    string `json:"type"` // "chunk", "end", "error"
-	Content string `json:"content,omitempty"`
-	Error   string `json:"error,omitempty"`
+	Type      string     `json:"type"` // "chunk", "end", "error", "tool_calls"
+	Content   string     `json:"content,omitempty"`
+	Error     string     `json:"error,omitempty"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 }
 
 // MemoryProvider memory system interface

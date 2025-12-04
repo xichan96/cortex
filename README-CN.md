@@ -36,7 +36,7 @@ CORTEX 实现的功能类似于 n8n 的 AI Agent，但采用了轻量级设计�
 - **多模态支持**：轻松处理文本、图像和其他媒体格式。
 - **工具生态系统**：可扩展的工具系统，内置 MCP 和 HTTP 客户端。
 - **流式传输支持**：为交互式应用程序提供实时响应流式传输。
-- **内存管理**：用于保存对话历史的上下文感知内存系统。
+- **记忆体**：用于保存对话历史的上下文感知内存系统，支持 LangChain、MongoDB 和 Redis 存储。
 - **配置灵活性**：全面的选项，用于微调代理行为。
 - **并行工具调用**：高效地同时执行多个工具。
 - **健壮的错误处理**：全面的错误管理和重试机制。
@@ -367,17 +367,76 @@ func (t *CustomTool) Metadata() types.ToolMetadata {
 }
 ```
 
-### 内存管理
+### 记忆体管理
 
-Cortex 提供用于对话历史的内存管理功能：
+Cortex 提供用于对话历史的内存管理功能，支持多种存储后端：
+
+#### LangChain 记忆体（默认）
 
 ```go
-// 设置内存提供商
+// 设置 LangChain 内存提供商
 memoryProvider := providers.NewLangChainMemory()
 agentEngine.SetMemory(memoryProvider)
 
 // 配置内存使用
 agentConfig.MaxTokensFromMemory = 1000 // 内存中的最大令牌数
+```
+
+#### MongoDB 记忆体
+
+使用 MongoDB 作为持久化存储：
+
+```go
+import (
+	"github.com/xichan96/cortex/agent/providers"
+	"github.com/xichan96/cortex/pkg/mongodb"
+)
+
+// 创建 MongoDB 客户端
+mongoClient, err := mongodb.NewClient("mongodb://localhost:27017", "database_name")
+if err != nil {
+	// 处理错误
+}
+
+// 创建 MongoDB 内存提供商
+memoryProvider := providers.NewMongoDBMemoryProvider(mongoClient, "session-id")
+
+// 可选：设置最大历史消息数
+memoryProvider.SetMaxHistoryMessages(100)
+
+// 可选：设置集合名称（默认为 "chat_messages"）
+memoryProvider.SetCollectionName("chat_messages")
+
+// 设置内存提供商
+agentEngine.SetMemory(memoryProvider)
+```
+
+#### Redis 记忆体
+
+使用 Redis 作为持久化存储：
+
+```go
+import (
+	"github.com/xichan96/cortex/agent/providers"
+	"github.com/xichan96/cortex/pkg/redis"
+)
+
+// 创建 Redis 客户端
+redisClient := redis.NewClient(&redis.Options{
+	Addr: "localhost:6379",
+})
+
+// 创建 Redis 内存提供商
+memoryProvider := providers.NewRedisMemoryProvider(redisClient, "session-id")
+
+// 可选：设置最大历史消息数
+memoryProvider.SetMaxHistoryMessages(100)
+
+// 可选：设置键前缀（默认为 "chat_messages"）
+memoryProvider.SetKeyPrefix("chat_messages")
+
+// 设置内存提供商
+agentEngine.SetMemory(memoryProvider)
 ```
 
 ### 错误处理

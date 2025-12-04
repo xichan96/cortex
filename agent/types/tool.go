@@ -91,63 +91,37 @@ type ToolActionStep struct {
 
 // AgentConfig agent configuration
 type AgentConfig struct {
-	MaxIterations           int           `json:"maxIterations"`
-	ReturnIntermediateSteps bool          `json:"returnIntermediateSteps"`
-	EnableStreaming         bool          `json:"enableStreaming"`
-	SystemMessage           string        `json:"systemMessage"`
-	BatchSize               int           `json:"batchSize"`
-	DelayBetweenBatches     time.Duration `json:"delayBetweenBatches"`
-	MaxTokensFromMemory     int           `json:"maxTokensFromMemory"`
-	ContinueOnFail          bool          `json:"continueOnFail"`
-	Temperature             float32       `json:"temperature"`           // 温度参数 (0.0-1.0)
-	MaxTokens               int           `json:"maxTokens"`             // 最大token数
-	TopP                    float32       `json:"topP"`                  // Top P采样
-	FrequencyPenalty        float32       `json:"frequencyPenalty"`      // 频率惩罚
-	PresencePenalty         float32       `json:"presencePenalty"`       // 存在惩罚
-	StopSequences           []string      `json:"stopSequences"`         // 停止序列
-	Timeout                 time.Duration `json:"timeout"`               // 超时时间
-	RetryAttempts           int           `json:"retryAttempts"`         // 重试次数
-	RetryDelay              time.Duration `json:"retryDelay"`            // 重试延迟
-	EnableToolRetry         bool          `json:"enableToolRetry"`       // 启用工具重试
-	ToolRetryAttempts       int           `json:"toolRetryAttempts"`     // 工具重试次数
-	ToolRetryDelay          time.Duration `json:"toolRetryDelay"`        // 工具重试延迟
-	EnableContextWindow     bool          `json:"enableContextWindow"`   // 启用上下文窗口
-	ContextWindowSize       int           `json:"contextWindowSize"`     // 上下文窗口大小
-	EnableFunctionCalling   bool          `json:"enableFunctionCalling"` // 启用函数调用
-	ParallelToolCalls       bool          `json:"parallelToolCalls"`     // 并行工具调用
-	ToolCallTimeout         time.Duration `json:"toolCallTimeout"`       // 工具调用超时
+	MaxIterations     int           `json:"maxIterations"`
+	SystemMessage     string        `json:"systemMessage"`
+	Temperature       float32       `json:"temperature"`     // 温度参数 (0.0-1.0)
+	MaxTokens         int           `json:"maxTokens"`       // 最大token数
+	TopP              float32       `json:"topP"`            // Top P采样
+	FrequencyPenalty  float32       `json:"frequencyPenalty"` // 频率惩罚
+	PresencePenalty   float32       `json:"presencePenalty"` // 存在惩罚
+	StopSequences     []string      `json:"stopSequences"`   // 停止序列
+	Timeout           time.Duration `json:"timeout"`         // 超时时间
+	RetryAttempts     int           `json:"retryAttempts"`   // 重试次数
+	RetryDelay        time.Duration `json:"retryDelay"`      // 重试延迟
+	EnableToolRetry   bool          `json:"enableToolRetry"` // 启用工具重试
+	MaxHistoryMessages int          `json:"maxHistoryMessages"` // 最大历史消息数
 }
 
 // NewAgentConfig creates a new agent configuration with reasonable defaults
 func NewAgentConfig() *AgentConfig {
 	return &AgentConfig{
-		MaxIterations:           10,
-		ReturnIntermediateSteps: false,
-		EnableStreaming:         false,
-		SystemMessage:           "",
-		BatchSize:               10,
-		DelayBetweenBatches:     100 * time.Millisecond,
-		MaxTokensFromMemory:     2000,
-		ContinueOnFail:          false,
-
-		// Default values for new parameters
-		Temperature:           0.7,
-		MaxTokens:             4096,
-		TopP:                  1.0,
-		FrequencyPenalty:      0.0,
-		PresencePenalty:       0.0,
-		StopSequences:         []string{},
-		Timeout:               30 * time.Second,
-		RetryAttempts:         3,
-		RetryDelay:            1 * time.Second,
-		EnableToolRetry:       true,
-		ToolRetryAttempts:     2,
-		ToolRetryDelay:        500 * time.Millisecond,
-		EnableContextWindow:   true,
-		ContextWindowSize:     8000,
-		EnableFunctionCalling: true,
-		ParallelToolCalls:     true,
-		ToolCallTimeout:       10 * time.Second,
+		MaxIterations:     10,
+		SystemMessage:     "",
+		Temperature:       0.7,
+		MaxTokens:         4096,
+		TopP:              1.0,
+		FrequencyPenalty:  0.0,
+		PresencePenalty:   0.0,
+		StopSequences:     []string{},
+		Timeout:           30 * time.Second,
+		RetryAttempts:     3,
+		RetryDelay:        1 * time.Second,
+		EnableToolRetry:   true,
+		MaxHistoryMessages: 100,
 	}
 }
 
