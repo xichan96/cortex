@@ -47,7 +47,6 @@ func createAgentEngine() (*engine.AgentEngine, error) {
 	// Create agent configuration
 	agentConfig := types.NewAgentConfig()
 	agentConfig.MaxIterations = 5
-	agentConfig.ReturnIntermediateSteps = true
 	agentConfig.SystemMessage = "You are a task self-check assistant: Users may send you task_id or links. You need to: 1. Collect information as needed. If previous information is insufficient to analyze the problem, continue collecting (task details, logs, workflow, task monitoring statistics, etc.) 2. Comprehensive analysis of problems or evaluation of resource utilization of training tasks based on the collected information"
 
 	// Set advanced parameters
@@ -59,9 +58,6 @@ func createAgentEngine() (*engine.AgentEngine, error) {
 	agentConfig.Timeout = 30 * time.Second
 	agentConfig.RetryAttempts = 3
 	agentConfig.EnableToolRetry = true
-	agentConfig.ToolRetryAttempts = 2
-	agentConfig.ParallelToolCalls = true
-	agentConfig.ToolCallTimeout = 10 * time.Second
 
 	// Create agent engine
 	agentEngine := engine.NewAgentEngine(llmProvider, agentConfig)

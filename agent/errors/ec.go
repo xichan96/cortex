@@ -12,6 +12,7 @@ var (
 	EC_PREPARE_MESSAGES_FAILED = NewAgentError(1007, "failed to prepare messages")                // 1007
 	EC_ITERATION_FAILED        = NewAgentError(1008, "iteration failed")                          // 1008
 	EC_BLOCKING_CHAT_FAILED    = NewAgentError(1009, "failed to get tool calls in blocking mode") // 1009
+	EC_MEMORY_HISTORY_FAILED   = NewAgentError(1010, "failed to get chat history")                // 1010
 
 	// Tool-related errors (2xxx)
 	EC_TOOL_EXECUTION_FAILED  = NewAgentError(2001, "tool execution failed")  // 2001
@@ -19,6 +20,7 @@ var (
 	EC_TOOL_VALIDATION_FAILED = NewAgentError(2003, "tool validation failed") // 2003
 	EC_TOOL_PARAMETER_INVALID = NewAgentError(2004, "tool parameter invalid") // 2004
 	EC_TOOL_EXECUTION_TIMEOUT = NewAgentError(2005, "tool execution timeout") // 2005
+	EC_TOOL_ALREADY_REGISTERED = NewAgentError(2006, "tool already registered") // 2006
 
 	// Configuration errors (3xxx)
 	EC_INVALID_CONFIG           = NewAgentError(3001, "invalid configuration")           // 3001
@@ -64,4 +66,28 @@ var (
 	EC_FORBIDDEN             = NewAgentError(9002, "forbidden")             // 9002
 	EC_AUTHENTICATION_FAILED = NewAgentError(9003, "authentication failed") // 9003
 	EC_PERMISSION_DENIED     = NewAgentError(9004, "permission denied")     // 9004
+
+	// LLM provider errors (10xxx)
+	EC_LLM_NO_RESPONSE       = NewAgentError(10001, "no response content")   // 10001
+	EC_LLM_CALL_FAILED       = NewAgentError(10002, "LLM call failed")       // 10002
+	EC_LLM_API_KEY_REQUIRED  = NewAgentError(10003, "API key is required")  // 10003
+	EC_LLM_CLIENT_CREATE_FAILED = NewAgentError(10004, "failed to create LLM client") // 10004
+
+	// MCP client errors (11xxx)
+	EC_MCP_UNSUPPORTED_TRANSPORT = NewAgentError(11001, "unsupported transport")        // 11001
+	EC_MCP_CLIENT_CREATE_FAILED   = NewAgentError(11002, "failed to create MCP client")  // 11002
+	EC_MCP_CLIENT_START_FAILED    = NewAgentError(11003, "failed to start MCP client")  // 11003
+	EC_MCP_CLIENT_INIT_FAILED     = NewAgentError(11004, "failed to initialize MCP client") // 11004
+	EC_MCP_REFRESH_TOOLS_FAILED   = NewAgentError(11005, "failed to refresh tools")      // 11005
+	EC_MCP_NOT_CONNECTED          = NewAgentError(11006, "not connected to MCP server") // 11006
+	EC_MCP_CALL_TOOL_FAILED       = NewAgentError(11007, "failed to call tool")         // 11007
+	EC_MCP_TOOL_RETURNED_ERROR    = NewAgentError(11008, "tool returned error")        // 11008
+	EC_MCP_NO_ACTIVE_CLIENT       = NewAgentError(11009, "no active client")           // 11009
+	EC_MCP_GET_TOOLS_FAILED       = NewAgentError(11010, "failed to get tools from server") // 11010
+	EC_MCP_TOOL_NOT_CONNECTED     = NewAgentError(11011, "MCP tool not connected to client") // 11011
+
+	// HTTP client errors (12xxx)
+	EC_HTTP_REQUEST_FAILED        = NewAgentError(12001, "HTTP request failed")         // 12001
+	EC_HTTP_MARSHAL_FAILED        = NewAgentError(12002, "failed to marshal request body") // 12002
+	EC_HTTP_STATUS_ERROR          = NewAgentError(12003, "request failed with status error") // 12003
 )

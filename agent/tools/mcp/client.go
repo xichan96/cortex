@@ -3,26 +3,29 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"net/http"
+	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/xichan96/cortex/agent/errors"
+	"github.com/xichan96/cortex/agent/logger"
 	"github.com/xichan96/cortex/agent/types"
 )
 
 // Client MCP client - using official SDK
 
 type Client struct {
-	serverURL  string
-	transport  string // "httpStreamable" or "sse"
-	headers    map[string]string
-	mcpClient  *client.Client
-	tools      []types.Tool
-	toolsMu    sync.RWMutex
-	connected  bool
-	connectMu  sync.Mutex
-	httpClient *http.Client
+	serverURL string
+	transport string // "httpStreamable" or "sse"
+	headers   map[string]string
+	mcpClient *client.Client
+	tools     []types.Tool
+	toolsMu   sync.RWMutex
+	connected bool
+	connectMu sync.RWMutex
+	logger    *logger.Logger
 }
 
 // NewClient creates a new MCP client
@@ -35,11 +38,11 @@ func NewClient(url string, transport string, headers map[string]string) *Client 
 	}
 
 	return &Client{
-		serverURL:  url,
-		transport:  transport,
-		headers:    headers,
-		tools:      make([]types.Tool, 0),
-		httpClient: &http.Client{},
+		serverURL: url,
+		transport: transport,
+		headers:   headers,
+		tools:     make([]types.Tool, 0),
+		logger:    logger.NewLogger(),
 	}
 }
 
@@ -52,7 +55,9 @@ func (c *Client) Connect(ctx context.Context) error {
 		return nil
 	}
 
-	fmt.Printf("Connecting to MCP server: %s (transport: %s)\n", c.serverURL, c.transport)
+	c.logger.Info("Connecting to MCP server",
+		slog.String("server_url", c.serverURL),
+		slog.String("transport", c.transport))
 
 	var err error
 
@@ -62,15 +67,15 @@ func (c *Client) Connect(ctx context.Context) error {
 	case "sse":
 		c.mcpClient, err = client.NewSSEMCPClient(c.serverURL, client.WithHeaders(c.headers))
 	default:
-		return fmt.Errorf("unsupported transport: %s", c.transport)
+		return errors.NewAgentError(errors.EC_MCP_UNSUPPORTED_TRANSPORT.Code, fmt.Sprintf("unsupported transport: %s", c.transport))
 	}
 
 	if err != nil {
-		return fmt.Errorf("failed to create MCP client: %w", err)
+		return errors.NewAgentError(errors.EC_MCP_CLIENT_CREATE_FAILED.Code, errors.EC_MCP_CLIENT_CREATE_FAILED.Message).Wrap(err)
 	}
 
 	if err := c.mcpClient.Start(ctx); err != nil {
-		return fmt.Errorf("failed to start MCP client: %w", err)
+		return errors.NewAgentError(errors.EC_MCP_CLIENT_START_FAILED.Code, errors.EC_MCP_CLIENT_START_FAILED.Message).Wrap(err)
 	}
 
 	// Initialize client
@@ -91,7 +96,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	_, err = c.mcpClient.Initialize(ctx, initRequest)
 	if err != nil {
 		c.mcpClient.Close()
-		return fmt.Errorf("failed to initialize MCP client: %w", err)
+		return errors.NewAgentError(errors.EC_MCP_CLIENT_INIT_FAILED.Code, errors.EC_MCP_CLIENT_INIT_FAILED.Message).Wrap(err)
 	}
 
 	c.connected = true
@@ -100,7 +105,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	if err := c.refreshTools(ctx); err != nil {
 		c.connected = false
 		c.mcpClient.Close()
-		return fmt.Errorf("failed to refresh tools: %w", err)
+		return errors.NewAgentError(errors.EC_MCP_REFRESH_TOOLS_FAILED.Code, errors.EC_MCP_REFRESH_TOOLS_FAILED.Message).Wrap(err)
 	}
 
 	return nil
@@ -128,8 +133,8 @@ func (c *Client) Disconnect(ctx context.Context) error {
 
 // IsConnected checks if connected
 func (c *Client) IsConnected() bool {
-	c.connectMu.Lock()
-	defer c.connectMu.Unlock()
+	c.connectMu.RLock()
+	defer c.connectMu.RUnlock()
 	return c.connected
 }
 
@@ -145,12 +150,13 @@ func (c *Client) GetTools() []types.Tool {
 
 // CallTool calls a tool on the MCP server
 func (c *Client) CallTool(ctx context.Context, toolName string, arguments map[string]interface{}) (interface{}, error) {
-	c.connectMu.Lock()
-	defer c.connectMu.Unlock()
-
+	c.connectMu.RLock()
 	if !c.connected {
-		return nil, fmt.Errorf("not connected to MCP server")
+		c.connectMu.RUnlock()
+		return nil, errors.EC_MCP_NOT_CONNECTED
 	}
+	mcpClient := c.mcpClient
+	c.connectMu.RUnlock()
 
 	params := mcp.CallToolRequest{
 		Request: mcp.Request{
@@ -162,13 +168,13 @@ func (c *Client) CallTool(ctx context.Context, toolName string, arguments map[st
 		},
 	}
 
-	result, err := c.mcpClient.CallTool(ctx, params)
+	result, err := mcpClient.CallTool(ctx, params)
 	if err != nil {
-		return nil, fmt.Errorf("failed to call tool %s: %w", toolName, err)
+		return nil, errors.NewAgentError(errors.EC_MCP_CALL_TOOL_FAILED.Code, fmt.Sprintf("failed to call tool %s", toolName)).Wrap(err)
 	}
 
 	if result.IsError {
-		return nil, fmt.Errorf("tool %s returned error: %v", toolName, result.Content)
+		return nil, errors.NewAgentError(errors.EC_MCP_TOOL_RETURNED_ERROR.Code, fmt.Sprintf("tool %s returned error: %v", toolName, result.Content))
 	}
 
 	return map[string]interface{}{
@@ -181,15 +187,15 @@ func (c *Client) CallTool(ctx context.Context, toolName string, arguments map[st
 // refreshTools refreshes tool list
 func (c *Client) refreshTools(ctx context.Context) error {
 	if c.mcpClient == nil {
-		return fmt.Errorf("no active client")
+		return errors.EC_MCP_NO_ACTIVE_CLIENT
 	}
 
-	fmt.Printf("Fetching tool list from MCP server...\n")
+	c.logger.Info("Fetching tool list from MCP server")
 
 	request := mcp.ListToolsRequest{}
 	result, err := c.mcpClient.ListTools(ctx, request)
 	if err != nil {
-		return fmt.Errorf("failed to get tools from server: %w", err)
+		return errors.NewAgentError(errors.EC_MCP_GET_TOOLS_FAILED.Code, errors.EC_MCP_GET_TOOLS_FAILED.Message).Wrap(err)
 	}
 
 	// Convert fetched tools to MCP tools
@@ -222,7 +228,8 @@ func (c *Client) refreshTools(ctx context.Context) error {
 	c.tools = mcpTools
 	c.toolsMu.Unlock()
 
-	fmt.Printf("Successfully fetched %d tools\n", len(mcpTools))
+	c.logger.Info("Successfully fetched tools from MCP server",
+		slog.Int("tool_count", len(mcpTools)))
 	return nil
 }
 
@@ -266,11 +273,14 @@ func (t *MCPTool) Schema() map[string]interface{} {
 // Execute executes the tool
 func (t *MCPTool) Execute(input map[string]interface{}) (interface{}, error) {
 	if t.client == nil {
-		return nil, fmt.Errorf("MCP tool not connected to client")
+		return nil, errors.EC_MCP_TOOL_NOT_CONNECTED
 	}
 
-	ctx := context.Background()
-	return t.client.CallTool(ctx, t.name, input)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	client := t.client
+	return client.CallTool(ctx, t.name, input)
 }
 
 // Metadata gets tool metadata

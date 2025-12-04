@@ -1,9 +1,8 @@
 package llm
 
 import (
-	"fmt"
-
 	"github.com/tmc/langchaingo/llms/openai"
+	"github.com/xichan96/cortex/agent/errors"
 	"github.com/xichan96/cortex/agent/providers"
 	"github.com/xichan96/cortex/agent/types"
 )
@@ -20,7 +19,7 @@ type OpenAIOptions struct {
 // NewOpenAIClient creates a new OpenAI client and returns LLMProvider
 func NewOpenAIClient(opts OpenAIOptions) (types.LLMProvider, error) {
 	if opts.APIKey == "" {
-		return nil, fmt.Errorf("API key is required")
+		return nil, errors.EC_LLM_API_KEY_REQUIRED
 	}
 
 	if opts.Model == "" {
@@ -39,7 +38,7 @@ func NewOpenAIClient(opts OpenAIOptions) (types.LLMProvider, error) {
 		openai.WithOrganization(opts.OrgID),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create OpenAI client: %w", err)
+		return nil, errors.NewAgentError(errors.EC_LLM_CLIENT_CREATE_FAILED.Code, errors.EC_LLM_CLIENT_CREATE_FAILED.Message).Wrap(err)
 	}
 
 	// Directly return LLMProvider

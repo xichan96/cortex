@@ -76,21 +76,17 @@ func main() {
 
 	// Set basic parameters
 	agentConfig.MaxIterations = 5
-	agentConfig.ReturnIntermediateSteps = true
 	agentConfig.SystemMessage = "You are a task self-check assistant: xxx"
 
 	// Set advanced parameters (new feature)
-	agentConfig.Temperature = 0.7                  // Moderate creativity
-	agentConfig.MaxTokens = 2048                   // Limit response length
-	agentConfig.TopP = 0.9                         // Top P sampling
-	agentConfig.FrequencyPenalty = 0.1             // Frequency penalty
-	agentConfig.PresencePenalty = 0.1              // Presence penalty
-	agentConfig.Timeout = 30 * time.Second         // Timeout duration
-	agentConfig.RetryAttempts = 3                  // Retry attempts
-	agentConfig.EnableToolRetry = true             // Enable tool retry
-	agentConfig.ToolRetryAttempts = 2              // Tool retry attempts
-	agentConfig.ParallelToolCalls = true           // Parallel tool calls
-	agentConfig.ToolCallTimeout = 10 * time.Second // Tool call timeout
+	agentConfig.Temperature = 0.7          // Moderate creativity
+	agentConfig.MaxTokens = 2048           // Limit response length
+	agentConfig.TopP = 0.9                 // Top P sampling
+	agentConfig.FrequencyPenalty = 0.1     // Frequency penalty
+	agentConfig.PresencePenalty = 0.1      // Presence penalty
+	agentConfig.Timeout = 30 * time.Second // Timeout duration
+	agentConfig.RetryAttempts = 3          // Retry attempts
+	agentConfig.EnableToolRetry = true     // Enable tool retry
 
 	// Create agent engine
 	agentEngine := engine.NewAgentEngine(llmProvider, agentConfig)

@@ -2,31 +2,39 @@ package engine
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/xichan96/cortex/agent/errors"
+	"github.com/xichan96/cortex/agent/logger"
 	"github.com/xichan96/cortex/agent/types"
 )
 
 // LangChainAgentEngine LangChain agent engine
 type LangChainAgentEngine struct {
-	_            Agent // Ensure LangChainAgentEngine implements Agent interface
-	llm          types.LLMProvider
-	tools        []types.Tool
-	toolsMap     map[string]types.Tool // Tool map for optimized lookup performance
-	systemPrompt string
-	memory       []types.Message
+	_                Agent // Ensure LangChainAgentEngine implements Agent interface
+	llm              types.LLMProvider
+	mu               sync.RWMutex
+	tools            []types.Tool
+	toolsMap         map[string]types.Tool
+	systemPrompt     string
+	memory           []types.Message
+	maxHistoryMessages int
+	logger           *logger.Logger
 }
 
 // NewLangChainAgentEngine creates a new LangChain agent engine
 func NewLangChainAgentEngine(llm types.LLMProvider, systemPrompt string) *LangChainAgentEngine {
 	return &LangChainAgentEngine{
-		llm:          llm,
-		tools:        make([]types.Tool, 0),
-		toolsMap:     make(map[string]types.Tool),
-		systemPrompt: systemPrompt,
-		memory:       make([]types.Message, 0),
+		llm:                llm,
+		tools:              make([]types.Tool, 0),
+		toolsMap:           make(map[string]types.Tool),
+		systemPrompt:       systemPrompt,
+		memory:             make([]types.Message, 0),
+		maxHistoryMessages: 100,
+		logger:             logger.NewLogger(),
 	}
 }
 
@@ -37,12 +45,16 @@ func NewLangChainAgent(llm types.LLMProvider, systemPrompt string) Agent {
 
 // AddTool adds a tool
 func (e *LangChainAgentEngine) AddTool(tool types.Tool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.tools = append(e.tools, tool)
 	e.toolsMap[tool.Name()] = tool
 }
 
 // SetTools sets tools
 func (e *LangChainAgentEngine) SetTools(tools []types.Tool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.tools = tools
 	e.toolsMap = make(map[string]types.Tool, len(tools))
 	for _, tool := range tools {
@@ -52,7 +64,8 @@ func (e *LangChainAgentEngine) SetTools(tools []types.Tool) {
 
 // BuildAgent builds the agent (simplified version)
 func (e *LangChainAgentEngine) BuildAgent() error {
-	// Add system prompt to memory
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	if e.systemPrompt != "" && len(e.memory) == 0 {
 		e.memory = append(e.memory, types.Message{
 			Role:    "system",
@@ -64,23 +77,29 @@ func (e *LangChainAgentEngine) BuildAgent() error {
 
 // ExecuteSimple simple execution method (for backward compatibility)
 func (e *LangChainAgentEngine) ExecuteSimple(input string) (string, error) {
-	// Add user message to memory
+	e.mu.Lock()
 	e.memory = append(e.memory, types.Message{
 		Role:    "user",
 		Content: input,
 	})
+	e.limitMemoryLocked()
+	tools := make([]types.Tool, len(e.tools))
+	copy(tools, e.tools)
+	memory := make([]types.Message, len(e.memory))
+	copy(memory, e.memory)
+	e.mu.Unlock()
 
-	// Use tool calling if tools are available
-	if len(e.tools) > 0 {
-		response, err := e.llm.ChatWithTools(e.memory, e.tools)
+	if len(tools) > 0 {
+		response, err := e.llm.ChatWithTools(memory, tools)
 		if err != nil {
-			return "", fmt.Errorf("LLM call failed: %w", err)
+			return "", errors.NewAgentError(errors.EC_LLM_CALL_FAILED.Code, errors.EC_LLM_CALL_FAILED.Message).Wrap(err)
 		}
 
-		// Add assistant response to memory
+		e.mu.Lock()
 		e.memory = append(e.memory, response)
+		e.limitMemoryLocked()
+		e.mu.Unlock()
 
-		// Handle tool calls
 		if len(response.ToolCalls) > 0 {
 			return e.handleToolCalls(response)
 		}
@@ -88,33 +107,36 @@ func (e *LangChainAgentEngine) ExecuteSimple(input string) (string, error) {
 		return response.Content, nil
 	}
 
-	// Regular chat
-	response, err := e.llm.Chat(e.memory)
+	response, err := e.llm.Chat(memory)
 	if err != nil {
-		return "", fmt.Errorf("LLM call failed: %w", err)
+		return "", errors.NewAgentError(errors.EC_LLM_CALL_FAILED.Code, errors.EC_LLM_CALL_FAILED.Message).Wrap(err)
 	}
 
-	// Add assistant response to memory
+	e.mu.Lock()
 	e.memory = append(e.memory, response)
+	e.limitMemoryLocked()
+	e.mu.Unlock()
 
 	return response.Content, nil
 }
 
 // ExecuteStreamSimple simple streaming execution (for backward compatibility)
 func (e *LangChainAgentEngine) ExecuteStreamSimple(input string) (<-chan string, error) {
-	// Add user message to memory
+	e.mu.Lock()
 	e.memory = append(e.memory, types.Message{
 		Role:    "user",
 		Content: input,
 	})
+	memory := make([]types.Message, len(e.memory))
+	copy(memory, e.memory)
+	e.mu.Unlock()
 
 	outputChan := make(chan string, 100)
 
 	go func() {
 		defer close(outputChan)
 
-		// Streaming call
-		stream, err := e.llm.ChatStream(e.memory)
+		stream, err := e.llm.ChatStream(memory)
 		if err != nil {
 			outputChan <- fmt.Sprintf("Error: %v", err)
 			return
@@ -131,11 +153,13 @@ func (e *LangChainAgentEngine) ExecuteStreamSimple(input string) (<-chan string,
 			}
 		}
 
-		// Add assistant response to memory
+		e.mu.Lock()
 		e.memory = append(e.memory, types.Message{
 			Role:    "assistant",
 			Content: fullContent.String(),
 		})
+		e.limitMemoryLocked()
+		e.mu.Unlock()
 	}()
 
 	return outputChan, nil
@@ -143,18 +167,22 @@ func (e *LangChainAgentEngine) ExecuteStreamSimple(input string) (<-chan string,
 
 // handleToolCalls handles tool calls
 func (e *LangChainAgentEngine) handleToolCalls(response types.Message) (string, error) {
-	// Pre-allocate slice capacity to reduce memory reallocations
 	results := make([]string, 0, len(response.ToolCalls))
 
+	e.mu.RLock()
+	toolsMap := make(map[string]types.Tool, len(e.toolsMap))
+	for k, v := range e.toolsMap {
+		toolsMap[k] = v
+	}
+	e.mu.RUnlock()
+
 	for _, toolCall := range response.ToolCalls {
-		// Use map for fast tool lookup
-		tool, exists := e.toolsMap[toolCall.Function.Name]
+		tool, exists := toolsMap[toolCall.Function.Name]
 		if !exists {
 			results = append(results, fmt.Sprintf("Tool %s not found", toolCall.Function.Name))
 			continue
 		}
 
-		// Execute tool
 		result, err := tool.Execute(toolCall.Function.Arguments)
 		if err != nil {
 			results = append(results, fmt.Sprintf("Tool %s execution failed: %v", toolCall.Function.Name, err))
@@ -169,11 +197,17 @@ func (e *LangChainAgentEngine) handleToolCalls(response types.Message) (string, 
 
 // GetMemory gets memory
 func (e *LangChainAgentEngine) GetMemory() []types.Message {
-	return e.memory
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	memory := make([]types.Message, len(e.memory))
+	copy(memory, e.memory)
+	return memory
 }
 
 // ClearMemory clears memory
 func (e *LangChainAgentEngine) ClearMemory() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.memory = make([]types.Message, 0)
 	if e.systemPrompt != "" {
 		e.memory = append(e.memory, types.Message{
@@ -252,44 +286,8 @@ func (e *LangChainAgentEngine) SetEnableToolRetry(enable bool) {
 	// Support determined by specific LLM implementation
 }
 
-// SetToolRetryAttempts sets tool retry attempts
-func (e *LangChainAgentEngine) SetToolRetryAttempts(attempts int) {
-	// Support determined by specific LLM implementation
-}
-
-// SetToolRetryDelay sets tool retry delay
-func (e *LangChainAgentEngine) SetToolRetryDelay(delay time.Duration) {
-	// Support determined by specific LLM implementation
-}
-
-// SetEnableContextWindow sets whether to enable context window
-func (e *LangChainAgentEngine) SetEnableContextWindow(enable bool) {
-	// Support determined by specific LLM implementation
-}
-
-// SetContextWindowSize sets context window size
-func (e *LangChainAgentEngine) SetContextWindowSize(size int) {
-	// Support determined by specific LLM implementation
-}
-
-// SetEnableFunctionCalling sets whether to enable function calling
-func (e *LangChainAgentEngine) SetEnableFunctionCalling(enable bool) {
-	// Support determined by specific LLM implementation
-}
-
-// SetParallelToolCalls sets whether to enable parallel tool calls
-func (e *LangChainAgentEngine) SetParallelToolCalls(enable bool) {
-	// Support determined by specific LLM implementation
-}
-
-// SetToolCallTimeout sets tool call timeout
-func (e *LangChainAgentEngine) SetToolCallTimeout(timeout time.Duration) {
-	// Support determined by specific LLM implementation
-}
-
 // SetConfig sets complete configuration
 func (e *LangChainAgentEngine) SetConfig(config *types.AgentConfig) {
-	// 设置所有支持的参数
 	e.SetTemperature(config.Temperature)
 	e.SetMaxTokens(config.MaxTokens)
 	e.SetTopP(config.TopP)
@@ -299,6 +297,35 @@ func (e *LangChainAgentEngine) SetConfig(config *types.AgentConfig) {
 	e.SetTimeout(config.Timeout)
 	e.SetRetryAttempts(config.RetryAttempts)
 	e.SetRetryDelay(config.RetryDelay)
+	e.mu.Lock()
+	e.maxHistoryMessages = config.MaxHistoryMessages
+	e.limitMemoryLocked()
+	e.mu.Unlock()
+}
+
+// limitMemory limits memory size based on maxHistoryMessages
+func (e *LangChainAgentEngine) limitMemory() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.limitMemoryLocked()
+}
+
+// limitMemoryLocked limits memory size (must be called with lock held)
+func (e *LangChainAgentEngine) limitMemoryLocked() {
+	if e.maxHistoryMessages > 0 && len(e.memory) > e.maxHistoryMessages {
+		keepSystem := false
+		var systemMsg types.Message
+		if len(e.memory) > 0 && e.memory[0].Role == "system" {
+			keepSystem = true
+			systemMsg = e.memory[0]
+		}
+		start := len(e.memory) - e.maxHistoryMessages
+		if keepSystem {
+			e.memory = append([]types.Message{systemMsg}, e.memory[start+1:]...)
+		} else {
+			e.memory = e.memory[start:]
+		}
+	}
 }
 
 // SetMemory sets memory system (LangChain engine uses internal memory management)
@@ -313,6 +340,8 @@ func (e *LangChainAgentEngine) SetOutputParser(parser types.OutputParser) {
 
 // AddTools adds tools in batch
 func (e *LangChainAgentEngine) AddTools(tools []types.Tool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.tools = append(e.tools, tools...)
 	for _, tool := range tools {
 		e.toolsMap[tool.Name()] = tool
@@ -322,17 +351,19 @@ func (e *LangChainAgentEngine) AddTools(tools []types.Tool) {
 // Execute executes the agent (implements Agent interface)
 func (e *LangChainAgentEngine) Execute(input string, previousRequests []types.ToolCallData) (*AgentResult, error) {
 	startTime := time.Now()
-	log.Printf("[LangChainAgentEngine] Starting execution with input: %s", truncateString(input, 100))
+	e.logger.LogExecution("LangChainAgentEngine.Execute", 0, "Starting execution",
+		slog.String("input", truncateString(input, 100)))
 
 	// Adapt to Agent interface, ignore previousRequests parameter
 	output, err := e.ExecuteSimple(input)
 	if err != nil {
-		log.Printf("[LangChainAgentEngine] Execution failed: %v", err)
+		e.logger.LogError("LangChainAgentEngine.Execute", err)
 		return nil, err
 	}
 
 	executionTime := time.Since(startTime)
-	log.Printf("[LangChainAgentEngine] Execution completed in %v", executionTime)
+	e.logger.LogExecution("LangChainAgentEngine.Execute", 0, "Execution completed",
+		slog.Duration("duration", executionTime))
 
 	return &AgentResult{
 		Output: output,

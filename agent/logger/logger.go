@@ -48,3 +48,13 @@ func (l *Logger) LogError(operation string, err error, attrs ...slog.Attr) {
 		slog.Time("timestamp", time.Now()),
 	)
 }
+
+// Info logs informational message
+func (l *Logger) Info(message string, attrs ...slog.Attr) {
+	allAttrs := make([]any, 0, len(attrs)*2+2)
+	allAttrs = append(allAttrs, slog.Time("timestamp", time.Now()))
+	for _, attr := range attrs {
+		allAttrs = append(allAttrs, attr)
+	}
+	l.logger.Info(message, allAttrs...)
+}
