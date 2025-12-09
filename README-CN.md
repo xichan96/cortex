@@ -304,6 +304,91 @@ httpTools := httpClient.GetTools()
 agentEngine.AddTools(httpTools)
 ```
 
+#### 内建工具
+
+Cortex 提供了一系列开箱即用的内建工具，可以直接添加到Agent中使用：
+
+##### SSH 工具
+
+通过 SSH 在远程服务器上执行命令，支持密码、私钥和 SSH 代理认证，还支持跳板机：
+
+```go
+import "github.com/xichan96/cortex/agent/tools/builtin"
+
+// 创建 SSH 工具
+sshTool := builtin.NewSSHTool()
+agentEngine.AddTool(sshTool)
+```
+
+SSH 工具支持以下参数：
+- `username`: SSH 用户名（必需）
+- `address`: SSH 服务器地址（必需）
+- `command`: 要执行的命令（必需）
+- `password`: SSH 密码（可选）
+- `private_key`: SSH 私钥内容（可选）
+- `agent_socket`: SSH 代理套接字路径（可选）
+- `port`: SSH 服务器端口（默认：22）
+- `timeout`: 连接超时时间（秒，默认：15）
+- `bastion`: 跳板机地址（可选）
+- `bastion_port`: 跳板机端口（默认：22）
+- `bastion_user`: 跳板机用户名（可选）
+
+##### 文件工具
+
+执行文件和目录操作，包括读取、写入、创建、删除、复制、移动和列出操作：
+
+```go
+import "github.com/xichan96/cortex/agent/tools/builtin"
+
+// 创建文件工具
+fileTool := builtin.NewFileTool()
+agentEngine.AddTool(fileTool)
+```
+
+文件工具支持以下操作：
+- `read_file`: 读取文件内容
+- `write_file`: 写入文件
+- `append_file`: 追加内容到文件
+- `create_dir`: 创建目录
+- `delete_file`: 删除文件
+- `delete_dir`: 删除目录
+- `list_dir`: 列出目录内容
+- `exists`: 检查文件或目录是否存在
+- `copy`: 复制文件或目录
+- `move`: 移动文件或目录
+- `is_file`: 检查路径是否为文件
+- `is_dir`: 检查路径是否为目录
+
+##### 邮件工具
+
+发送邮件，支持 HTML、纯文本和 Markdown 内容类型：
+
+```go
+import (
+	"github.com/xichan96/cortex/agent/tools/builtin"
+	"github.com/xichan96/cortex/pkg/email"
+)
+
+// 配置邮件客户端
+emailConfig := &email.Config{
+	SMTPHost:     "smtp.example.com",
+	SMTPPort:     587,
+	SMTPUsername: "your-username",
+	SMTPPassword: "your-password",
+	From:         "sender@example.com",
+}
+
+// 创建邮件工具
+emailTool := builtin.NewEmailTool(emailConfig)
+agentEngine.AddTool(emailTool)
+```
+
+邮件工具支持以下参数：
+- `to`: 收件人邮箱地址列表（必需）
+- `subject`: 邮件主题（必需）
+- `type`: 内容类型，支持 `text/html`、`text/plain`、`text/markdown`（必需）
+- `message`: 邮件内容（必需）
+
 
 ## 示例
 

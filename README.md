@@ -303,6 +303,91 @@ httpTools := httpClient.GetTools()
 agentEngine.AddTools(httpTools)
 ```
 
+#### Built-in Tools
+
+Cortex provides a set of built-in tools that can be directly added to your agent:
+
+##### SSH Tool
+
+Execute commands on a remote server via SSH, supporting password, private key, and SSH agent authentication, with bastion host support:
+
+```go
+import "github.com/xichan96/cortex/agent/tools/builtin"
+
+// Create SSH tool
+sshTool := builtin.NewSSHTool()
+agentEngine.AddTool(sshTool)
+```
+
+The SSH tool supports the following parameters:
+- `username`: SSH username (required)
+- `address`: SSH server address (required)
+- `command`: Command to execute (required)
+- `password`: SSH password (optional)
+- `private_key`: SSH private key content (optional)
+- `agent_socket`: SSH agent socket path (optional)
+- `port`: SSH server port (default: 22)
+- `timeout`: Connection timeout in seconds (default: 15)
+- `bastion`: Bastion host address (optional)
+- `bastion_port`: Bastion host port (default: 22)
+- `bastion_user`: Bastion host username (optional)
+
+##### File Tool
+
+Perform file and directory operations including read, write, create, delete, copy, move, and list operations:
+
+```go
+import "github.com/xichan96/cortex/agent/tools/builtin"
+
+// Create file tool
+fileTool := builtin.NewFileTool()
+agentEngine.AddTool(fileTool)
+```
+
+The file tool supports the following operations:
+- `read_file`: Read file content
+- `write_file`: Write to file
+- `append_file`: Append content to file
+- `create_dir`: Create directory
+- `delete_file`: Delete file
+- `delete_dir`: Delete directory
+- `list_dir`: List directory contents
+- `exists`: Check if file or directory exists
+- `copy`: Copy file or directory
+- `move`: Move file or directory
+- `is_file`: Check if path is a file
+- `is_dir`: Check if path is a directory
+
+##### Email Tool
+
+Send emails with support for HTML, plain text, and Markdown content types:
+
+```go
+import (
+	"github.com/xichan96/cortex/agent/tools/builtin"
+	"github.com/xichan96/cortex/pkg/email"
+)
+
+// Configure email client
+emailConfig := &email.Config{
+	SMTPHost:     "smtp.example.com",
+	SMTPPort:     587,
+	SMTPUsername: "your-username",
+	SMTPPassword: "your-password",
+	From:         "sender@example.com",
+}
+
+// Create email tool
+emailTool := builtin.NewEmailTool(emailConfig)
+agentEngine.AddTool(emailTool)
+```
+
+The email tool supports the following parameters:
+- `to`: List of recipient email addresses (required)
+- `subject`: Email subject line (required)
+- `type`: Content type, supports `text/html`, `text/plain`, `text/markdown` (required)
+- `message`: Email message content (required)
+
 ## Examples
 
 ### Basic Example
