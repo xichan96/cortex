@@ -260,7 +260,7 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 	messages, err := ae.prepareMessages(input, previousRequests)
 	if err != nil {
 		ae.logger.LogError("Execute", err, slog.String("phase", "prepare_messages"))
-		return nil, errors.NewAgentError(errors.EC_PREPARE_MESSAGES_FAILED.Code, errors.EC_PREPARE_MESSAGES_FAILED.Message).Wrap(err)
+		return nil, errors.NewError(errors.EC_PREPARE_MESSAGES_FAILED.Code, errors.EC_PREPARE_MESSAGES_FAILED.Message).Wrap(err)
 	}
 
 	var finalResult *AgentResult
@@ -277,7 +277,7 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 		result, continueIterating, err := ae.executeIteration(messages, iteration)
 		if err != nil {
 			ae.logger.LogError("Execute", err, slog.Int("iteration", iteration+1))
-			return nil, errors.NewAgentError(errors.EC_ITERATION_FAILED.Code, fmt.Sprintf("iteration %d failed", iteration+1)).Wrap(err)
+			return nil, errors.NewError(errors.EC_ITERATION_FAILED.Code, fmt.Sprintf("iteration %d failed", iteration+1)).Wrap(err)
 		}
 
 		// Save final result
@@ -343,7 +343,7 @@ func (ae *AgentEngine) ExecuteStream(input string, previousRequests []types.Tool
 				ae.logger.LogError("ExecuteStream", fmt.Errorf("panic recovered: %v", r))
 				resultChan <- StreamResult{
 					Type:  "error",
-					Error: errors.NewAgentError(errors.EC_STREAM_PANIC.Code, "panic in stream execution").Wrap(fmt.Errorf("%v", r)),
+					Error: errors.NewError(errors.EC_STREAM_PANIC.Code, "panic in stream execution").Wrap(fmt.Errorf("%v", r)),
 				}
 			}
 		}()
@@ -354,7 +354,7 @@ func (ae *AgentEngine) ExecuteStream(input string, previousRequests []types.Tool
 			ae.logger.LogError("ExecuteStream", err, slog.String("phase", "prepare_messages"))
 			resultChan <- StreamResult{
 				Type:  "error",
-				Error: errors.NewAgentError(errors.EC_PREPARE_MESSAGES_FAILED.Code, "failed to prepare messages").Wrap(err),
+				Error: errors.NewError(errors.EC_PREPARE_MESSAGES_FAILED.Code, "failed to prepare messages").Wrap(err),
 			}
 			return
 		}
@@ -383,7 +383,7 @@ func (ae *AgentEngine) prepareMessages(input string, previousRequests []types.To
 	if ae.memory != nil {
 		history, historyErr = ae.memory.GetChatHistory()
 		if historyErr != nil {
-			return nil, errors.NewAgentError(errors.EC_MEMORY_HISTORY_FAILED.Code, errors.EC_MEMORY_HISTORY_FAILED.Message).Wrap(historyErr)
+			return nil, errors.NewError(errors.EC_MEMORY_HISTORY_FAILED.Code, errors.EC_MEMORY_HISTORY_FAILED.Message).Wrap(historyErr)
 		}
 	}
 
@@ -465,7 +465,7 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 	response, err := ae.model.ChatWithTools(messages, tools)
 	if err != nil {
 		ae.logger.LogError("executeIteration", err, slog.Int("iteration", iteration))
-		return nil, false, errors.NewAgentError(errors.EC_CHAT_FAILED.Code, "failed to chat with tools").Wrap(err)
+		return nil, false, errors.NewError(errors.EC_CHAT_FAILED.Code, "failed to chat with tools").Wrap(err)
 	}
 
 	result := &AgentResult{
@@ -642,7 +642,7 @@ func (ae *AgentEngine) executeStreamWithIterations(initialMessages []types.Messa
 			ae.logger.LogError("executeStreamWithIterations", err, slog.Int("iteration", iteration+1))
 			resultChan <- StreamResult{
 				Type:  "error",
-				Error: errors.NewAgentError(errors.EC_STREAM_ITERATION_FAILED.Code, fmt.Sprintf("iteration %d failed", iteration+1)).Wrap(err),
+				Error: errors.NewError(errors.EC_STREAM_ITERATION_FAILED.Code, fmt.Sprintf("iteration %d failed", iteration+1)).Wrap(err),
 			}
 			return
 		}
@@ -713,7 +713,7 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 	ae.mu.RUnlock()
 	stream, err := ae.model.ChatWithToolsStream(messages, tools)
 	if err != nil {
-		return nil, false, errors.NewAgentError(errors.EC_STREAM_CHAT_FAILED.Code, "failed to chat with tools stream").Wrap(err)
+		return nil, false, errors.NewError(errors.EC_STREAM_CHAT_FAILED.Code, "failed to chat with tools stream").Wrap(err)
 	}
 
 	intermediateSteps := []types.ToolCallData{}
@@ -736,7 +736,7 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 				})
 			}
 		case "error":
-			return nil, false, errors.NewAgentError(errors.EC_STREAM_ERROR.Code, "stream error occurred").Wrap(fmt.Errorf("%s", msg.Error))
+			return nil, false, errors.NewError(errors.EC_STREAM_ERROR.Code, "stream error occurred").Wrap(fmt.Errorf("%s", msg.Error))
 		}
 	}
 

@@ -35,7 +35,7 @@ func NewDeepSeekClient(opts DeepSeekOptions) (types.LLMProvider, error) {
 		openai.WithModel(opts.Model),
 	)
 	if err != nil {
-		return nil, errors.NewAgentError(errors.EC_LLM_CLIENT_CREATE_FAILED.Code, errors.EC_LLM_CLIENT_CREATE_FAILED.Message).Wrap(err)
+		return nil, errors.NewError(errors.EC_LLM_CLIENT_CREATE_FAILED.Code, errors.EC_LLM_CLIENT_CREATE_FAILED.Message).Wrap(err)
 	}
 
 	// Directly return LLMProvider

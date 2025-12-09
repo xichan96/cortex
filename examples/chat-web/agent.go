@@ -7,8 +7,8 @@ import (
 
 	"github.com/xichan96/cortex/agent/engine"
 	"github.com/xichan96/cortex/agent/llm"
-	"github.com/xichan96/cortex/agent/tools/mcp"
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/pkg/mcp"
 )
 
 // Custom Agent Provider implementation

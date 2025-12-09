@@ -159,7 +159,7 @@ func WrapRedisErr(err error) error {
 	if errors.Is(err, redis.Nil) {
 		return cerrors.EC_DATA_NOT_FOUND
 	}
-	return cerrors.NewAgentError(cerrors.EC_INTERNAL_ERROR.Code, "redis error").Wrap(err)
+	return cerrors.NewError(cerrors.EC_INTERNAL_ERROR.Code, "redis error").Wrap(err)
 }
 
 func roundFloat(val float64, precision int) float64 {

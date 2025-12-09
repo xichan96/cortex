@@ -72,7 +72,7 @@ func NewClient(cfg *Config, ops ...Option) (c *Client, err error) {
 	defer cancel()
 	if _, err := c.Ping(ctx).Result(); err != nil {
 		e := fmt.Sprintf("ping redis %s:%d %s", cfg.Host, cfg.Port, err.Error())
-		return nil, cerrors.NewAgentError(cerrors.EC_CONNECTION_FAILED.Code, e).Wrap(err)
+		return nil, cerrors.NewError(cerrors.EC_CONNECTION_FAILED.Code, e).Wrap(err)
 	}
 
 	return c, nil

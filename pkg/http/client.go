@@ -61,7 +61,7 @@ func (c *HTTPClient) Get(ctx context.Context, path string, params map[string]str
 	c.setFastHTTPHeaders(req)
 
 	if err := c.client.Do(req, resp); err != nil {
-		return nil, errors.NewAgentError(errors.EC_HTTP_REQUEST_FAILED.Code, "GET request failed").Wrap(err)
+		return nil, errors.NewError(errors.EC_HTTP_REQUEST_FAILED.Code, "GET request failed").Wrap(err)
 	}
 
 	return c.readFastHTTPResponse(resp)
@@ -81,14 +81,14 @@ func (c *HTTPClient) Post(ctx context.Context, path string, body interface{}) ([
 	if body != nil {
 		jsonBody, err := json.Marshal(body)
 		if err != nil {
-			return nil, errors.NewAgentError(errors.EC_HTTP_MARSHAL_FAILED.Code, errors.EC_HTTP_MARSHAL_FAILED.Message).Wrap(err)
+			return nil, errors.NewError(errors.EC_HTTP_MARSHAL_FAILED.Code, errors.EC_HTTP_MARSHAL_FAILED.Message).Wrap(err)
 		}
 		req.SetBody(jsonBody)
 		req.Header.SetContentType("application/json")
 	}
 
 	if err := c.client.Do(req, resp); err != nil {
-		return nil, errors.NewAgentError(errors.EC_HTTP_REQUEST_FAILED.Code, "POST request failed").Wrap(err)
+		return nil, errors.NewError(errors.EC_HTTP_REQUEST_FAILED.Code, "POST request failed").Wrap(err)
 	}
 
 	return c.readFastHTTPResponse(resp)
@@ -108,14 +108,14 @@ func (c *HTTPClient) Put(ctx context.Context, path string, body interface{}) ([]
 	if body != nil {
 		jsonBody, err := json.Marshal(body)
 		if err != nil {
-			return nil, errors.NewAgentError(errors.EC_HTTP_MARSHAL_FAILED.Code, errors.EC_HTTP_MARSHAL_FAILED.Message).Wrap(err)
+			return nil, errors.NewError(errors.EC_HTTP_MARSHAL_FAILED.Code, errors.EC_HTTP_MARSHAL_FAILED.Message).Wrap(err)
 		}
 		req.SetBody(jsonBody)
 		req.Header.SetContentType("application/json")
 	}
 
 	if err := c.client.Do(req, resp); err != nil {
-		return nil, errors.NewAgentError(errors.EC_HTTP_REQUEST_FAILED.Code, "PUT request failed").Wrap(err)
+		return nil, errors.NewError(errors.EC_HTTP_REQUEST_FAILED.Code, "PUT request failed").Wrap(err)
 	}
 
 	return c.readFastHTTPResponse(resp)
@@ -133,12 +133,12 @@ func (c *HTTPClient) Delete(ctx context.Context, path string) error {
 	c.setFastHTTPHeaders(req)
 
 	if err := c.client.Do(req, resp); err != nil {
-		return errors.NewAgentError(errors.EC_HTTP_REQUEST_FAILED.Code, "DELETE request failed").Wrap(err)
+		return errors.NewError(errors.EC_HTTP_REQUEST_FAILED.Code, "DELETE request failed").Wrap(err)
 	}
 
 	if resp.StatusCode() >= 400 {
 		body := resp.Body()
-		return errors.NewAgentError(errors.EC_HTTP_STATUS_ERROR.Code, fmt.Sprintf("DELETE request failed with status %d: %s", resp.StatusCode(), string(body)))
+		return errors.NewError(errors.EC_HTTP_STATUS_ERROR.Code, fmt.Sprintf("DELETE request failed with status %d: %s", resp.StatusCode(), string(body)))
 	}
 
 	return nil
@@ -162,7 +162,7 @@ func (c *HTTPClient) readFastHTTPResponse(resp *fasthttp.Response) ([]byte, erro
 	body := resp.Body()
 
 	if resp.StatusCode() >= 400 {
-		return nil, errors.NewAgentError(errors.EC_HTTP_STATUS_ERROR.Code, fmt.Sprintf("request failed with status %d: %s", resp.StatusCode(), string(body)))
+		return nil, errors.NewError(errors.EC_HTTP_STATUS_ERROR.Code, fmt.Sprintf("request failed with status %d: %s", resp.StatusCode(), string(body)))
 	}
 
 	return body, nil

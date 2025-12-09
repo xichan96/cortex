@@ -67,15 +67,15 @@ func (c *Client) Connect(ctx context.Context) error {
 	case "sse":
 		c.mcpClient, err = client.NewSSEMCPClient(c.serverURL, client.WithHeaders(c.headers))
 	default:
-		return errors.NewAgentError(errors.EC_MCP_UNSUPPORTED_TRANSPORT.Code, fmt.Sprintf("unsupported transport: %s", c.transport))
+		return errors.NewError(errors.EC_MCP_UNSUPPORTED_TRANSPORT.Code, fmt.Sprintf("unsupported transport: %s", c.transport))
 	}
 
 	if err != nil {
-		return errors.NewAgentError(errors.EC_MCP_CLIENT_CREATE_FAILED.Code, errors.EC_MCP_CLIENT_CREATE_FAILED.Message).Wrap(err)
+		return errors.NewError(errors.EC_MCP_CLIENT_CREATE_FAILED.Code, errors.EC_MCP_CLIENT_CREATE_FAILED.Message).Wrap(err)
 	}
 
 	if err := c.mcpClient.Start(ctx); err != nil {
-		return errors.NewAgentError(errors.EC_MCP_CLIENT_START_FAILED.Code, errors.EC_MCP_CLIENT_START_FAILED.Message).Wrap(err)
+		return errors.NewError(errors.EC_MCP_CLIENT_START_FAILED.Code, errors.EC_MCP_CLIENT_START_FAILED.Message).Wrap(err)
 	}
 
 	// Initialize client
@@ -96,7 +96,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	_, err = c.mcpClient.Initialize(ctx, initRequest)
 	if err != nil {
 		c.mcpClient.Close()
-		return errors.NewAgentError(errors.EC_MCP_CLIENT_INIT_FAILED.Code, errors.EC_MCP_CLIENT_INIT_FAILED.Message).Wrap(err)
+		return errors.NewError(errors.EC_MCP_CLIENT_INIT_FAILED.Code, errors.EC_MCP_CLIENT_INIT_FAILED.Message).Wrap(err)
 	}
 
 	c.connected = true
@@ -105,7 +105,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	if err := c.refreshTools(ctx); err != nil {
 		c.connected = false
 		c.mcpClient.Close()
-		return errors.NewAgentError(errors.EC_MCP_REFRESH_TOOLS_FAILED.Code, errors.EC_MCP_REFRESH_TOOLS_FAILED.Message).Wrap(err)
+		return errors.NewError(errors.EC_MCP_REFRESH_TOOLS_FAILED.Code, errors.EC_MCP_REFRESH_TOOLS_FAILED.Message).Wrap(err)
 	}
 
 	return nil
@@ -170,11 +170,11 @@ func (c *Client) CallTool(ctx context.Context, toolName string, arguments map[st
 
 	result, err := mcpClient.CallTool(ctx, params)
 	if err != nil {
-		return nil, errors.NewAgentError(errors.EC_MCP_CALL_TOOL_FAILED.Code, fmt.Sprintf("failed to call tool %s", toolName)).Wrap(err)
+		return nil, errors.NewError(errors.EC_MCP_CALL_TOOL_FAILED.Code, fmt.Sprintf("failed to call tool %s", toolName)).Wrap(err)
 	}
 
 	if result.IsError {
-		return nil, errors.NewAgentError(errors.EC_MCP_TOOL_RETURNED_ERROR.Code, fmt.Sprintf("tool %s returned error: %v", toolName, result.Content))
+		return nil, errors.NewError(errors.EC_MCP_TOOL_RETURNED_ERROR.Code, fmt.Sprintf("tool %s returned error: %v", toolName, result.Content))
 	}
 
 	return map[string]interface{}{
@@ -195,7 +195,7 @@ func (c *Client) refreshTools(ctx context.Context) error {
 	request := mcp.ListToolsRequest{}
 	result, err := c.mcpClient.ListTools(ctx, request)
 	if err != nil {
-		return errors.NewAgentError(errors.EC_MCP_GET_TOOLS_FAILED.Code, errors.EC_MCP_GET_TOOLS_FAILED.Message).Wrap(err)
+		return errors.NewError(errors.EC_MCP_GET_TOOLS_FAILED.Code, errors.EC_MCP_GET_TOOLS_FAILED.Message).Wrap(err)
 	}
 
 	// Convert fetched tools to MCP tools
@@ -273,7 +273,7 @@ func (t *MCPTool) Schema() map[string]interface{} {
 // Execute executes the tool
 func (t *MCPTool) Execute(input map[string]interface{}) (interface{}, error) {
 	if t.client == nil {
-		return nil, errors.EC_MCP_TOOL_NOT_CONNECTED
+		return nil, errors.NewError(errors.EC_MCP_TOOL_NOT_CONNECTED.Code, errors.EC_MCP_TOOL_NOT_CONNECTED.Message)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
