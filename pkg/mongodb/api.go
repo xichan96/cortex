@@ -120,5 +120,5 @@ func WrapErr(err error) error {
 	if IsNoFoundError(err) {
 		return cerrors.EC_DATA_NOT_FOUND
 	}
-	return cerrors.NewAgentError(cerrors.EC_INTERNAL_ERROR.Code, "mongodb error").Wrap(err)
+	return cerrors.NewError(cerrors.EC_INTERNAL_ERROR.Code, "mongodb error").Wrap(err)
 }

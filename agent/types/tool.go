@@ -20,7 +20,7 @@ type Tool interface {
 type ToolMetadata struct {
 	SourceNodeName string                 `json:"sourceNodeName"`
 	IsFromToolkit  bool                   `json:"isFromToolkit"`
-	ToolType       string                 `json:"toolType"` // "mcp" or "http"
+	ToolType       string                 `json:"toolType"` // "mcp","http","builtin"
 	Extra          map[string]interface{} `json:"extra,omitempty"`
 }
 
@@ -91,36 +91,36 @@ type ToolActionStep struct {
 
 // AgentConfig agent configuration
 type AgentConfig struct {
-	MaxIterations     int           `json:"maxIterations"`
-	SystemMessage     string        `json:"systemMessage"`
-	Temperature       float32       `json:"temperature"`     // 温度参数 (0.0-1.0)
-	MaxTokens         int           `json:"maxTokens"`       // 最大token数
-	TopP              float32       `json:"topP"`            // Top P采样
-	FrequencyPenalty  float32       `json:"frequencyPenalty"` // 频率惩罚
-	PresencePenalty   float32       `json:"presencePenalty"` // 存在惩罚
-	StopSequences     []string      `json:"stopSequences"`   // 停止序列
-	Timeout           time.Duration `json:"timeout"`         // 超时时间
-	RetryAttempts     int           `json:"retryAttempts"`   // 重试次数
-	RetryDelay        time.Duration `json:"retryDelay"`      // 重试延迟
-	EnableToolRetry   bool          `json:"enableToolRetry"` // 启用工具重试
-	MaxHistoryMessages int          `json:"maxHistoryMessages"` // 最大历史消息数
+	MaxIterations      int           `json:"maxIterations"`
+	SystemMessage      string        `json:"systemMessage"`
+	Temperature        float32       `json:"temperature"`        // 温度参数 (0.0-1.0)
+	MaxTokens          int           `json:"maxTokens"`          // 最大token数
+	TopP               float32       `json:"topP"`               // Top P采样
+	FrequencyPenalty   float32       `json:"frequencyPenalty"`   // 频率惩罚
+	PresencePenalty    float32       `json:"presencePenalty"`    // 存在惩罚
+	StopSequences      []string      `json:"stopSequences"`      // 停止序列
+	Timeout            time.Duration `json:"timeout"`            // 超时时间
+	RetryAttempts      int           `json:"retryAttempts"`      // 重试次数
+	RetryDelay         time.Duration `json:"retryDelay"`         // 重试延迟
+	EnableToolRetry    bool          `json:"enableToolRetry"`    // 启用工具重试
+	MaxHistoryMessages int           `json:"maxHistoryMessages"` // 最大历史消息数
 }
 
 // NewAgentConfig creates a new agent configuration with reasonable defaults
 func NewAgentConfig() *AgentConfig {
 	return &AgentConfig{
-		MaxIterations:     10,
-		SystemMessage:     "",
-		Temperature:       0.7,
-		MaxTokens:         4096,
-		TopP:              1.0,
-		FrequencyPenalty:  0.0,
-		PresencePenalty:   0.0,
-		StopSequences:     []string{},
-		Timeout:           30 * time.Second,
-		RetryAttempts:     3,
-		RetryDelay:        1 * time.Second,
-		EnableToolRetry:   true,
+		MaxIterations:      10,
+		SystemMessage:      "",
+		Temperature:        0.7,
+		MaxTokens:          4096,
+		TopP:               1.0,
+		FrequencyPenalty:   0.0,
+		PresencePenalty:    0.0,
+		StopSequences:      []string{},
+		Timeout:            30 * time.Second,
+		RetryAttempts:      3,
+		RetryDelay:         1 * time.Second,
+		EnableToolRetry:    true,
 		MaxHistoryMessages: 100,
 	}
 }

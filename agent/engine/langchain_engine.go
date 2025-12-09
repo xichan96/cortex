@@ -92,7 +92,7 @@ func (e *LangChainAgentEngine) ExecuteSimple(input string) (string, error) {
 	if len(tools) > 0 {
 		response, err := e.llm.ChatWithTools(memory, tools)
 		if err != nil {
-			return "", errors.NewAgentError(errors.EC_LLM_CALL_FAILED.Code, errors.EC_LLM_CALL_FAILED.Message).Wrap(err)
+			return "", errors.NewError(errors.EC_LLM_CALL_FAILED.Code, errors.EC_LLM_CALL_FAILED.Message).Wrap(err)
 		}
 
 		e.mu.Lock()
@@ -109,7 +109,7 @@ func (e *LangChainAgentEngine) ExecuteSimple(input string) (string, error) {
 
 	response, err := e.llm.Chat(memory)
 	if err != nil {
-		return "", errors.NewAgentError(errors.EC_LLM_CALL_FAILED.Code, errors.EC_LLM_CALL_FAILED.Message).Wrap(err)
+		return "", errors.NewError(errors.EC_LLM_CALL_FAILED.Code, errors.EC_LLM_CALL_FAILED.Message).Wrap(err)
 	}
 
 	e.mu.Lock()

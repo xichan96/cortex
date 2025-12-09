@@ -10,7 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/xichan96/cortex/agent/engine"
-	"github.com/xichan96/cortex/agent/tools/mcp"
+	"github.com/xichan96/cortex/pkg/mcp"
 )
 
 // ServerConfig contains server configuration settings

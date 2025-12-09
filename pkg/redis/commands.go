@@ -40,7 +40,7 @@ func (c *Client) GetObject(ctx context.Context, key string, obj any) error {
 	}
 
 	if err := json.Unmarshal([]byte(result), obj); err != nil {
-		return cerrors.NewAgentError(cerrors.EC_DATA_FORMAT_INVALID.Code, "redis unmarshal error").Wrap(err)
+		return cerrors.NewError(cerrors.EC_DATA_FORMAT_INVALID.Code, "redis unmarshal error").Wrap(err)
 	}
 	return nil
 }
@@ -49,7 +49,7 @@ func (c *Client) GetObject(ctx context.Context, key string, obj any) error {
 func (c *Client) SetObjectEx(ctx context.Context, key string, val any, expire time.Duration) error {
 	body, err := json.Marshal(val)
 	if err != nil {
-		return cerrors.NewAgentError(cerrors.EC_DATA_FORMAT_INVALID.Code, "redis marshal error").Wrap(err)
+		return cerrors.NewError(cerrors.EC_DATA_FORMAT_INVALID.Code, "redis marshal error").Wrap(err)
 	}
 	_, err = c.Set(ctx, key, body, expire).Result()
 	return WrapRedisErr(err)

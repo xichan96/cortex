@@ -4,30 +4,30 @@ import (
 	"fmt"
 )
 
-// AgentError agent engine error type
-type AgentError struct {
+// Error agent engine error type
+type Error struct {
 	Code    int
 	Message string
 	Err     error
 }
 
-func (e *AgentError) Error() string {
+func (e *Error) Error() string {
 	if e.Err != nil {
 		return fmt.Sprintf("%d: %s (caused by: %v)", e.Code, e.Message, e.Err)
 	}
 	return fmt.Sprintf("%d: %s", e.Code, e.Message)
 }
 
-func (e *AgentError) Wrap(err error) *AgentError {
+func (e *Error) Wrap(err error) *Error {
 	e.Err = err
 	return e
 }
 
-func (e *AgentError) Unwrap() error {
+func (e *Error) Unwrap() error {
 	return e.Err
 }
 
-// NewAgentError creates an agent engine error
+// NewError creates an agent engine error
 // Creates an agent engine error with error code and detailed information
 // Parameters:
 //   - code: error code
@@ -36,8 +36,8 @@ func (e *AgentError) Unwrap() error {
 //
 // Returns:
 //   - agent engine error instance
-func NewAgentError(code int, message string) *AgentError {
-	return &AgentError{
+func NewError(code int, message string) *Error {
+	return &Error{
 		Code:    code,
 		Message: message,
 	}

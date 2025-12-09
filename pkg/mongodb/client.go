@@ -132,7 +132,7 @@ func NewClient(fn ...ClientOptionFunc) (c *Client, err error) {
 
 	client, err := qmgo.Open(context.Background(), qConfig, opts)
 	if err != nil {
-		return nil, cerrors.NewAgentError(cerrors.EC_CONNECTION_FAILED.Code, "failed to connect to mongodb").Wrap(err)
+		return nil, cerrors.NewError(cerrors.EC_CONNECTION_FAILED.Code, "failed to connect to mongodb").Wrap(err)
 	}
 	c.Client = client.Client
 	c.DB = client.Database
