@@ -263,11 +263,15 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 		return nil, errors.NewError(errors.EC_PREPARE_MESSAGES_FAILED.Code, errors.EC_PREPARE_MESSAGES_FAILED.Message).Wrap(err)
 	}
 
-	var finalResult *AgentResult
+	finalResult := &AgentResult{}
 	iteration := 0
 	ae.mu.RLock()
 	maxIterations := ae.config.MaxIterations
 	ae.mu.RUnlock()
+
+	estimatedToolCalls := maxIterations * 3
+	toolCalls := make([]types.ToolCallRequest, 0, estimatedToolCalls)
+	intermediateSteps := make([]types.ToolCallData, 0, estimatedToolCalls)
 
 	// Iterate until no tool calls or maximum iterations reached
 	for iteration < maxIterations {
@@ -280,8 +284,10 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 			return nil, errors.NewError(errors.EC_ITERATION_FAILED.Code, fmt.Sprintf("iteration %d failed", iteration+1)).Wrap(err)
 		}
 
-		// Save final result
-		finalResult = result
+		// Accumulate final result
+		finalResult.Output = result.Output
+		toolCalls = append(toolCalls, result.ToolCalls...)
+		intermediateSteps = append(intermediateSteps, result.IntermediateSteps...)
 
 		// If no tool calls or continuation not needed, end
 		if !continueIterating || len(result.ToolCalls) == 0 {
@@ -301,6 +307,10 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 			ae.logger.LogExecution("Execute", iteration, "Reached maximum iterations")
 		}
 	}
+
+	// Set final result's tool calls and intermediate steps
+	finalResult.ToolCalls = toolCalls
+	finalResult.IntermediateSteps = intermediateSteps
 
 	if iteration >= maxIterations {
 		ae.logger.LogExecution("Execute", iteration, fmt.Sprintf("Reached maximum iteration limit: %d", maxIterations))
