@@ -263,15 +263,11 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 		return nil, errors.NewError(errors.EC_PREPARE_MESSAGES_FAILED.Code, errors.EC_PREPARE_MESSAGES_FAILED.Message).Wrap(err)
 	}
 
-	finalResult := &AgentResult{}
+	var finalResult *AgentResult
 	iteration := 0
 	ae.mu.RLock()
 	maxIterations := ae.config.MaxIterations
 	ae.mu.RUnlock()
-
-	estimatedToolCalls := maxIterations * 3
-	toolCalls := make([]types.ToolCallRequest, 0, estimatedToolCalls)
-	intermediateSteps := make([]types.ToolCallData, 0, estimatedToolCalls)
 
 	// Iterate until no tool calls or maximum iterations reached
 	for iteration < maxIterations {
@@ -284,10 +280,8 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 			return nil, errors.NewError(errors.EC_ITERATION_FAILED.Code, fmt.Sprintf("iteration %d failed", iteration+1)).Wrap(err)
 		}
 
-		// Accumulate final result
-		finalResult.Output = result.Output
-		toolCalls = append(toolCalls, result.ToolCalls...)
-		intermediateSteps = append(intermediateSteps, result.IntermediateSteps...)
+		// Save final result
+		finalResult = result
 
 		// If no tool calls or continuation not needed, end
 		if !continueIterating || len(result.ToolCalls) == 0 {
@@ -308,10 +302,6 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 		}
 	}
 
-	// Set final result's tool calls and intermediate steps
-	finalResult.ToolCalls = toolCalls
-	finalResult.IntermediateSteps = intermediateSteps
-
 	if iteration >= maxIterations {
 		ae.logger.LogExecution("Execute", iteration, fmt.Sprintf("Reached maximum iteration limit: %d", maxIterations))
 	}
@@ -321,6 +311,16 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 		slog.Duration("total_duration", executionTime),
 		slog.Int("total_iterations", iteration+1),
 		slog.Int("output_length", len(finalResult.Output)))
+
+	// Save to memory system
+	if ae.memory != nil && finalResult != nil {
+		inputMap := map[string]interface{}{"input": input}
+		outputMap := map[string]interface{}{"output": finalResult.Output}
+		if err := ae.memory.SaveContext(inputMap, outputMap); err != nil {
+			ae.logger.LogError("Execute", err, slog.String("phase", "save_context"))
+			// Do not interrupt execution as main flow is complete
+		}
+	}
 
 	return finalResult, nil
 }
