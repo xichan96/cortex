@@ -33,10 +33,10 @@ func main() {
 	s := server.NewServer(serverConfig)
 
 	log.Println("Creating HTTP trigger server...")
-	httpServer := httptrigger.NewServer(agentEngine)
+	httpHandler := httptrigger.NewHandler(agentEngine)
 
 	log.Println("Registering API routes...")
-	server.RegisterAPIRouter(s.Engine(), httpServer)
+	server.RegisterAPIRouter(s.Engine(), httpHandler)
 
 	log.Printf("Server will start on port %d", serverConfig.Port)
 	log.Printf("Chat interface: http://localhost:%d/chat", serverConfig.Port)

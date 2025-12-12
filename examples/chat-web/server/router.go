@@ -31,7 +31,7 @@ func (r *DefaultRouter) SetupRoutes(engine *gin.Engine, server *Server) {
 }
 
 // SetupRoutesWithHTTPTrigger configures all routes with HTTP trigger server
-func SetupRoutesWithHTTPTrigger(engine *gin.Engine, httpServer httptrigger.ServerIer) {
+func SetupRoutesWithHTTPTrigger(engine *gin.Engine, httpHandler httptrigger.Handler) {
 	// Disable all redirects
 	engine.RedirectTrailingSlash = false
 	engine.RedirectFixedPath = false
@@ -127,14 +127,14 @@ func SetupRoutesWithHTTPTrigger(engine *gin.Engine, httpServer httptrigger.Serve
 	})
 
 	// Chat route
-	engine.POST("/chat", httpServer.ChatHandler)
+	engine.POST("/chat", httpHandler.ChatAPI)
 
 	// SSE chat route (supports both GET and POST)
-	engine.GET("/chat/stream", httpServer.StreamChatHandler)
-	engine.POST("/chat/stream", httpServer.StreamChatHandler)
+	engine.GET("/chat/stream", httpHandler.StreamChatAPI)
+	engine.POST("/chat/stream", httpHandler.StreamChatAPI)
 }
 
 // RegisterAPIRouter registers API routes (external interface)
-func RegisterAPIRouter(engine *gin.Engine, httpServer httptrigger.ServerIer) {
-	SetupRoutesWithHTTPTrigger(engine, httpServer)
+func RegisterAPIRouter(engine *gin.Engine, httpHandler httptrigger.Handler) {
+	SetupRoutesWithHTTPTrigger(engine, httpHandler)
 }

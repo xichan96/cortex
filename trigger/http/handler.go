@@ -12,23 +12,23 @@ import (
 	"github.com/xichan96/cortex/pkg/errors"
 )
 
-type ServerIer interface {
-	ChatHandler(c *gin.Context)
-	StreamChatHandler(c *gin.Context)
+type Handler interface {
+	ChatAPI(c *gin.Context)
+	StreamChatAPI(c *gin.Context)
 }
 
-type Server struct {
+type handler struct {
 	engine *engine.AgentEngine
 }
 
-func NewServer(engine *engine.AgentEngine) ServerIer {
-	return &Server{
+func NewHandler(engine *engine.AgentEngine) Handler {
+	return &handler{
 		engine: engine,
 	}
 }
 
 // sendSSEvent sends an SSE event
-func (s *Server) sendSSEvent(c *gin.Context, event SSEvent) {
+func (h *handler) sendSSEvent(c *gin.Context, event SSEvent) {
 	data, err := json.Marshal(event)
 	if err != nil {
 		log.Printf("Failed to serialize SSE event: %v", err)
@@ -43,7 +43,7 @@ func (s *Server) sendSSEvent(c *gin.Context, event SSEvent) {
 		flusher.Flush()
 	}
 }
-func (s *Server) ChatHandler(c *gin.Context) {
+func (h *handler) ChatAPI(c *gin.Context) {
 	var req MessageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -53,7 +53,7 @@ func (s *Server) ChatHandler(c *gin.Context) {
 		return
 	}
 
-	result, err := s.engine.Execute(req.Message, nil)
+	result, err := h.engine.Execute(req.Message, nil)
 	if err != nil {
 		var ec *errors.Error
 		if e, ok := err.(*errors.Error); ok {
@@ -70,12 +70,12 @@ func (s *Server) ChatHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-func (s *Server) StreamChatHandler(c *gin.Context) {
+func (h *handler) StreamChatAPI(c *gin.Context) {
 	var req MessageRequest
 	if c.Request.Method == "GET" {
 		req.Message = c.Query("message")
 		if req.Message == "" {
-			s.sendSSEvent(c, SSEvent{
+			h.sendSSEvent(c, SSEvent{
 				Type:  "error",
 				Error: fmt.Sprintf("%d: %s", errors.EC_HTTP_MESSAGE_EMPTY.Code, errors.EC_HTTP_MESSAGE_EMPTY.Message),
 			})
@@ -83,7 +83,7 @@ func (s *Server) StreamChatHandler(c *gin.Context) {
 		}
 	} else {
 		if err := c.ShouldBindJSON(&req); err != nil {
-			s.sendSSEvent(c, SSEvent{
+			h.sendSSEvent(c, SSEvent{
 				Type:  "error",
 				Error: fmt.Sprintf("%d: %s", errors.EC_HTTP_INVALID_REQUEST.Code, errors.EC_HTTP_INVALID_REQUEST.Message),
 			})
@@ -107,7 +107,7 @@ func (s *Server) StreamChatHandler(c *gin.Context) {
 		cancel()
 	}()
 
-	stream, err := s.engine.ExecuteStream(req.Message, nil)
+	stream, err := h.engine.ExecuteStream(req.Message, nil)
 	if err != nil {
 		var ec *errors.Error
 		if e, ok := err.(*errors.Error); ok {
@@ -115,7 +115,7 @@ func (s *Server) StreamChatHandler(c *gin.Context) {
 		} else {
 			ec = errors.EC_HTTP_STREAM_EXECUTE_FAILED.Wrap(err)
 		}
-		s.sendSSEvent(c, SSEvent{
+		h.sendSSEvent(c, SSEvent{
 			Type:  "error",
 			Error: fmt.Sprintf("%d: %s", ec.Code, ec.Message),
 		})
@@ -130,7 +130,7 @@ func (s *Server) StreamChatHandler(c *gin.Context) {
 		default:
 			switch result.Type {
 			case "chunk":
-				s.sendSSEvent(c, SSEvent{
+				h.sendSSEvent(c, SSEvent{
 					Type:    "chunk",
 					Content: result.Content,
 				})
@@ -143,12 +143,12 @@ func (s *Server) StreamChatHandler(c *gin.Context) {
 						errorMsg = result.Error.Error()
 					}
 				}
-				s.sendSSEvent(c, SSEvent{
+				h.sendSSEvent(c, SSEvent{
 					Type:  "error",
 					Error: errorMsg,
 				})
 			case "end":
-				s.sendSSEvent(c, SSEvent{
+				h.sendSSEvent(c, SSEvent{
 					Type: "end",
 					End:  true,
 					Data: result.Result,
