@@ -56,10 +56,14 @@ cortex/
 │   ├── providers/     # External service providers
 │   ├── errors/        # Error handling
 │   └── logger/        # Structured logging
+├── trigger/           # Trigger modules
+│   ├── http/          # HTTP trigger (REST API)
+│   └── mcp/           # MCP trigger (MCP server)
 └── examples/          # Example applications
     ├── basic/         # Basic usage example
-    └── chat-web/      # Web-based chat application
-        └── server/    # Web server implementation
+    ├── chat-web/      # Web-based chat application
+    │   └── server/    # Web server implementation
+    └── mcp-server/    # MCP server example
 ```
 
 ## Getting Started
@@ -388,6 +392,69 @@ The email tool supports the following parameters:
 - `type`: Content type, supports `text/html`, `text/plain`, `text/markdown` (required)
 - `message`: Email message content (required)
 
+### Trigger Modules
+
+Cortex provides trigger modules to expose your agent through different protocols, making it easy to integrate with various systems.
+
+#### HTTP Trigger
+
+Expose your agent as HTTP API endpoints for chat and streaming chat:
+
+```go
+import (
+	"github.com/gin-gonic/gin"
+	httptrigger "github.com/xichan96/cortex/trigger/http"
+)
+
+// Create HTTP handler
+httpHandler := httptrigger.NewHandler(agentEngine)
+
+// Setup routes
+r := gin.Default()
+r.POST("/chat", httpHandler.ChatAPI)
+r.GET("/chat/stream", httpHandler.StreamChatAPI)
+r.POST("/chat/stream", httpHandler.StreamChatAPI)
+```
+
+The HTTP trigger provides two endpoints:
+- `ChatAPI`: Standard chat endpoint that returns complete results
+- `StreamChatAPI`: Streaming chat endpoint using Server-Sent Events (SSE) for real-time responses
+
+#### MCP Trigger
+
+Expose your agent as an MCP (Model Context Protocol) server, allowing it to be used as a tool by other MCP clients:
+
+```go
+import (
+	"github.com/gin-gonic/gin"
+	"github.com/xichan96/cortex/trigger/mcp"
+)
+
+// Configure MCP options
+mcpOpt := mcp.Options{
+	Server: mcp.Metadata{
+		Name:    "cortex-mcp",
+		Version: "0.1.0",
+	},
+	Tool: mcp.Metadata{
+		Name:        "chat",
+		Description: "Chat with the AI agent",
+	},
+}
+
+// Create MCP handler
+mcpHandler := mcp.NewHandler(agentEngine, mcpOpt)
+
+// Setup routes
+r := gin.Default()
+mcpGroup := r.Group("/mcp")
+mcpGroup.Any("", mcpHandler.Agent())
+```
+
+The MCP trigger automatically registers:
+- `ping`: Health check tool
+- A configurable chat tool that executes the agent
+
 ## Examples
 
 ### Basic Example
@@ -400,12 +467,20 @@ The `examples/basic` directory contains a simple example demonstrating how to us
 
 ### Chat Web Example
 
-The `examples/chat-web` directory contains a web-based chat application using Cortex.
+The `examples/chat-web` directory contains a web-based chat application using Cortex with HTTP trigger.
 
 ```go
 // See examples/chat-web/main.go for a complete example
 ```
 ![chat-web-screenshot.png](docs/images/e.png)
+
+### MCP Server Example
+
+The `examples/mcp-server` directory contains an example demonstrating how to expose your agent as an MCP server.
+
+```go
+// See examples/mcp-server/main.go for a complete example
+```
 ## Advanced Usage
 
 ### Custom Tools
