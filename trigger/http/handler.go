@@ -1,11 +1,10 @@
 package http
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xichan96/cortex/agent/engine"
@@ -27,43 +26,52 @@ func NewHandler(engine *engine.AgentEngine) Handler {
 	}
 }
 
-// sendSSEvent sends an SSE event
-func (h *handler) sendSSEvent(c *gin.Context, event SSEvent) {
+func (h *handler) handleError(err error) *errors.Error {
+	if e, ok := err.(*errors.Error); ok {
+		return e
+	}
+	return errors.EC_HTTP_EXECUTE_FAILED.Wrap(err)
+}
+
+func (h *handler) sendSSEvent(c *gin.Context, event SSEvent) bool {
 	data, err := json.Marshal(event)
 	if err != nil {
-		log.Printf("Failed to serialize SSE event: %v", err)
-		return
+		return false
 	}
-
-	// Write SSE formatted data
-	fmt.Fprintf(c.Writer, "data: %s\n\n", data)
-
-	// Flush buffer
+	if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", data); err != nil {
+		return false
+	}
 	if flusher, ok := c.Writer.(http.Flusher); ok {
 		flusher.Flush()
 	}
+	return true
 }
+
 func (h *handler) ChatAPI(c *gin.Context) {
 	var req MessageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"status": errors.EC_HTTP_INVALID_REQUEST.Code,
-			"msg":    errors.EC_HTTP_INVALID_REQUEST.Message,
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Status: errors.EC_HTTP_INVALID_REQUEST.Code,
+			Msg:    errors.EC_HTTP_INVALID_REQUEST.Message,
+		})
+		return
+	}
+
+	req.Message = strings.TrimSpace(req.Message)
+	if req.Message == "" {
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Status: errors.EC_HTTP_MESSAGE_EMPTY.Code,
+			Msg:    errors.EC_HTTP_MESSAGE_EMPTY.Message,
 		})
 		return
 	}
 
 	result, err := h.engine.Execute(req.Message, nil)
 	if err != nil {
-		var ec *errors.Error
-		if e, ok := err.(*errors.Error); ok {
-			ec = e
-		} else {
-			ec = errors.EC_HTTP_EXECUTE_FAILED.Wrap(err)
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"status": ec.Code,
-			"msg":    ec.Message,
+		ec := h.handleError(err)
+		c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Status: ec.Code,
+			Msg:    ec.Message,
 		})
 		return
 	}
@@ -73,56 +81,49 @@ func (h *handler) ChatAPI(c *gin.Context) {
 func (h *handler) StreamChatAPI(c *gin.Context) {
 	var req MessageRequest
 	if c.Request.Method == "GET" {
-		req.Message = c.Query("message")
+		req.Message = strings.TrimSpace(c.Query("message"))
 		if req.Message == "" {
-			h.sendSSEvent(c, SSEvent{
-				Type:  "error",
-				Error: fmt.Sprintf("%d: %s", errors.EC_HTTP_MESSAGE_EMPTY.Code, errors.EC_HTTP_MESSAGE_EMPTY.Message),
+			c.JSON(http.StatusBadRequest, ErrorResponse{
+				Status: errors.EC_HTTP_MESSAGE_EMPTY.Code,
+				Msg:    errors.EC_HTTP_MESSAGE_EMPTY.Message,
 			})
 			return
 		}
 	} else {
 		if err := c.ShouldBindJSON(&req); err != nil {
-			h.sendSSEvent(c, SSEvent{
-				Type:  "error",
-				Error: fmt.Sprintf("%d: %s", errors.EC_HTTP_INVALID_REQUEST.Code, errors.EC_HTTP_INVALID_REQUEST.Message),
+			c.JSON(http.StatusBadRequest, ErrorResponse{
+				Status: errors.EC_HTTP_INVALID_REQUEST.Code,
+				Msg:    errors.EC_HTTP_INVALID_REQUEST.Message,
+			})
+			return
+		}
+		req.Message = strings.TrimSpace(req.Message)
+		if req.Message == "" {
+			c.JSON(http.StatusBadRequest, ErrorResponse{
+				Status: errors.EC_HTTP_MESSAGE_EMPTY.Code,
+				Msg:    errors.EC_HTTP_MESSAGE_EMPTY.Message,
 			})
 			return
 		}
 	}
 
-	// Set SSE response headers
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 
-	// Create context with cancellation support
-	ctx, cancel := context.WithCancel(c.Request.Context())
-	defer cancel()
-
-	// Use channel to listen for client disconnection
-	notify := c.Writer.CloseNotify()
-	go func() {
-		<-notify
-		cancel()
-	}()
-
+	ctx := c.Request.Context()
 	stream, err := h.engine.ExecuteStream(req.Message, nil)
 	if err != nil {
-		var ec *errors.Error
-		if e, ok := err.(*errors.Error); ok {
-			ec = e
-		} else {
-			ec = errors.EC_HTTP_STREAM_EXECUTE_FAILED.Wrap(err)
-		}
-		h.sendSSEvent(c, SSEvent{
+		ec := h.handleError(err)
+		if !h.sendSSEvent(c, SSEvent{
 			Type:  "error",
 			Error: fmt.Sprintf("%d: %s", ec.Code, ec.Message),
-		})
+		}) {
+			return
+		}
 		return
 	}
 
-	// Process streaming results
 	for result := range stream {
 		select {
 		case <-ctx.Done():
@@ -130,10 +131,12 @@ func (h *handler) StreamChatAPI(c *gin.Context) {
 		default:
 			switch result.Type {
 			case "chunk":
-				h.sendSSEvent(c, SSEvent{
+				if !h.sendSSEvent(c, SSEvent{
 					Type:    "chunk",
 					Content: result.Content,
-				})
+				}) {
+					return
+				}
 			case "error":
 				var errorMsg string
 				if result.Error != nil {
@@ -143,16 +146,20 @@ func (h *handler) StreamChatAPI(c *gin.Context) {
 						errorMsg = result.Error.Error()
 					}
 				}
-				h.sendSSEvent(c, SSEvent{
+				if !h.sendSSEvent(c, SSEvent{
 					Type:  "error",
 					Error: errorMsg,
-				})
+				}) {
+					return
+				}
 			case "end":
-				h.sendSSEvent(c, SSEvent{
+				if !h.sendSSEvent(c, SSEvent{
 					Type: "end",
 					End:  true,
 					Data: result.Result,
-				})
+				}) {
+					return
+				}
 			}
 		}
 	}
