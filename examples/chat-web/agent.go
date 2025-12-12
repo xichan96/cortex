@@ -11,22 +11,6 @@ import (
 	"github.com/xichan96/cortex/pkg/mcp"
 )
 
-// Custom Agent Provider implementation
-type MyAgentProvider struct {
-	agentEngine *engine.AgentEngine
-	mcpClient   *mcp.Client
-}
-
-// GetAgentEngine gets the agent engine
-func (p *MyAgentProvider) GetAgentEngine() *engine.AgentEngine {
-	return p.agentEngine
-}
-
-// GetMCPClient gets the MCP client
-func (p *MyAgentProvider) GetMCPClient() *mcp.Client {
-	return p.mcpClient
-}
-
 // createAgentEngine creates an agent engine
 func createAgentEngine() (*engine.AgentEngine, error) {
 	// LLM configuration

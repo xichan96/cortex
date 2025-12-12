@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	httptrigger "github.com/xichan96/cortex/trigger/http"
 )
 
 // Router defines the interface for route configuration
@@ -26,17 +27,20 @@ func NewDefaultRouter() *DefaultRouter {
 
 // SetupRoutes configures all routes for the application
 func (r *DefaultRouter) SetupRoutes(engine *gin.Engine, server *Server) {
+	// This method is kept for compatibility but not used
+}
+
+// SetupRoutesWithHTTPTrigger configures all routes with HTTP trigger server
+func SetupRoutesWithHTTPTrigger(engine *gin.Engine, httpServer httptrigger.ServerIer) {
 	// Disable all redirects
 	engine.RedirectTrailingSlash = false
 	engine.RedirectFixedPath = false
 	engine.HandleMethodNotAllowed = true
 
-	// Add request logging middleware to track request handling flow
+	// Add request logging middleware
 	engine.Use(func(c *gin.Context) {
 		log.Printf("Received request: %s %s", c.Request.Method, c.Request.URL.Path)
-		// Continue processing the request
 		c.Next()
-		// Log response status after request processing is complete
 		log.Printf("Response status: %d for %s %s", c.Writer.Status(), c.Request.Method, c.Request.URL.Path)
 	})
 
@@ -54,35 +58,31 @@ func (r *DefaultRouter) SetupRoutes(engine *gin.Engine, server *Server) {
 		c.Next()
 	})
 
-	// Get absolute path of the current file's directory (independent of working directory)
+	// Get absolute path of the current file's directory
 	_, b, _, _ := runtime.Caller(0)
 	serverDir := filepath.Dir(b)
 	log.Printf("Using server directory: %s", serverDir)
 
-	// Provide direct access to index.html - ensure no redirects
+	// Provide direct access to index.html
 	engine.GET("/index.html", func(c *gin.Context) {
 		log.Println("Executing /index.html handler")
 		indexPath := filepath.Join(serverDir, "index.html")
 		log.Printf("Reading index.html from: %s", indexPath)
-		// Manually read file content for complete control over response process
 		content, err := ioutil.ReadFile(indexPath)
 		if err != nil {
 			log.Printf("Error reading index.html: %v", err)
 			c.AbortWithStatus(http.StatusInternalServerError)
 			return
 		}
-		// Set response headers
 		c.Header("Content-Type", "text/html; charset=utf-8")
 		c.Header("Content-Length", strconv.Itoa(len(content)))
-		// Ensure no Location header is set (redirect)
 		c.Header("Location", "")
-		// Write response content
 		c.Writer.WriteHeader(http.StatusOK)
 		c.Writer.Write(content)
 		log.Println("Successfully served index.html with 200 status")
 	})
 
-	// Root path route, providing chat interface (redirects to index.html)
+	// Root path route
 	engine.GET("/", func(c *gin.Context) {
 		log.Println("Executing root path handler, redirecting to /index.html")
 		c.Redirect(http.StatusMovedPermanently, "/index.html")
@@ -92,7 +92,6 @@ func (r *DefaultRouter) SetupRoutes(engine *gin.Engine, server *Server) {
 	engine.Use(func(c *gin.Context) {
 		path := c.Request.URL.Path
 		if len(path) > 1 && path[0:2] == "//" {
-			// Correct double slash path
 			correctedPath := "/" + path[2:]
 			log.Printf("Detected double slash in path '%s', redirecting to '%s'", path, correctedPath)
 			c.Redirect(http.StatusMovedPermanently, correctedPath)
@@ -101,21 +100,16 @@ func (r *DefaultRouter) SetupRoutes(engine *gin.Engine, server *Server) {
 		c.Next()
 	})
 
-	// Manually handle static file requests, avoiding Gin's Static method
+	// Handle static file requests
 	engine.GET("/static/*filepath", func(c *gin.Context) {
-		// Get file path
 		filePath := c.Param("filepath")
-		// Security check: prevent path traversal attacks
 		cleanPath := filepath.Clean(filePath)
-		// If cleaned path still contains "..", reject the request
 		if filepath.Base(cleanPath) == ".." || filepath.Dir(cleanPath) == ".." {
 			c.AbortWithStatus(http.StatusForbidden)
 			return
 		}
-		// Join to form full path
 		fullPath := filepath.Join(serverDir, "static"+filePath)
 		log.Printf("Serving static file from: %s", fullPath)
-		// Serve file
 		http.ServeFile(c.Writer, c.Request, fullPath)
 	})
 
@@ -133,16 +127,14 @@ func (r *DefaultRouter) SetupRoutes(engine *gin.Engine, server *Server) {
 	})
 
 	// Chat route
-	engine.POST("/chat", server.handleChat)
+	engine.POST("/chat", httpServer.ChatHandler)
 
 	// SSE chat route (supports both GET and POST)
-	engine.GET("/chat/stream", server.handleChatStream)
-	engine.POST("/chat/stream", server.handleChatStream)
+	engine.GET("/chat/stream", httpServer.StreamChatHandler)
+	engine.POST("/chat/stream", httpServer.StreamChatHandler)
 }
 
 // RegisterAPIRouter registers API routes (external interface)
-func RegisterAPIRouter(engine *gin.Engine, server *Server) {
-	// Create default router instance and set up routes
-	defaultRouter := NewDefaultRouter()
-	defaultRouter.SetupRoutes(engine, server)
+func RegisterAPIRouter(engine *gin.Engine, httpServer httptrigger.ServerIer) {
+	SetupRoutesWithHTTPTrigger(engine, httpServer)
 }
