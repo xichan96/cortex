@@ -2,11 +2,13 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/gin-gonic/gin"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpsrv "github.com/mark3labs/mcp-go/server"
 	"github.com/xichan96/cortex/agent/engine"
+	"github.com/xichan96/cortex/pkg/errors"
 )
 
 type Handler interface {
@@ -14,26 +16,29 @@ type Handler interface {
 }
 
 type handler struct {
-	engine *engine.AgentEngine
-	opt    Options
+	engine    *engine.AgentEngine
+	opt       Options
+	mcpServer *mcpsrv.MCPServer
 }
 
 func NewHandler(engine *engine.AgentEngine, opt Options) Handler {
-	return &handler{
-		engine: engine,
-		opt:    opt,
+	mcp := mcpsrv.NewMCPServer(
+		opt.Server.Name,
+		opt.Server.Version,
+		mcpsrv.WithToolCapabilities(true),
+	)
+	h := &handler{
+		engine:    engine,
+		opt:       opt,
+		mcpServer: mcp,
 	}
+	h.registerTools(mcp)
+	return h
 }
 
 func (h *handler) Agent() gin.HandlerFunc {
-	var mcp = mcpsrv.NewMCPServer(
-		h.opt.Server.Name,
-		h.opt.Server.Version,
-		mcpsrv.WithToolCapabilities(true),
-	)
-	h.registerTools(mcp)
 	mcpHandler := mcpsrv.NewStreamableHTTPServer(
-		mcp,
+		h.mcpServer,
 		mcpsrv.WithEndpointPath("/mcp"),
 	)
 	return gin.WrapH(mcpHandler)
@@ -42,8 +47,13 @@ func (h *handler) Agent() gin.HandlerFunc {
 func (h *handler) registerTools(mcp *mcpsrv.MCPServer) {
 	mcp.AddTool(
 		mcpgo.NewTool("ping", mcpgo.WithDescription("health check")),
-		func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-			return mcpgo.NewToolResultText("ok"), nil
+		func(ctx context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+				return mcpgo.NewToolResultText("ok"), nil
+			}
 		},
 	)
 	chatTool := mcpgo.NewTool(h.opt.Tool.Name, mcpgo.WithDescription(h.opt.Tool.Description),
@@ -53,11 +63,25 @@ func (h *handler) registerTools(mcp *mcpsrv.MCPServer) {
 	)
 	mcp.AddTool(
 		chatTool,
-		func(_ context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		func(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+			}
 			message := request.GetString("message", "")
+			if message == "" {
+				return mcpgo.NewToolResultError("message parameter is required"), nil
+			}
 			result, err := h.engine.Execute(message, nil)
 			if err != nil {
-				return mcpgo.NewToolResultError(err.Error()), nil
+				var errorMsg string
+				if e, ok := err.(*errors.Error); ok {
+					errorMsg = fmt.Sprintf("%d: %s", e.Code, e.Message)
+				} else {
+					errorMsg = err.Error()
+				}
+				return mcpgo.NewToolResultError(errorMsg), nil
 			}
 			return mcpgo.NewToolResultText(result.Output), nil
 		},
