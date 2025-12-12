@@ -91,6 +91,12 @@ var (
 	EC_HTTP_MARSHAL_FAILED = NewError(12002, "failed to marshal request body")   // 12002
 	EC_HTTP_STATUS_ERROR   = NewError(12003, "request failed with status error") // 12003
 
+	// HTTP server errors (12xxx)
+	EC_HTTP_INVALID_REQUEST    = NewError(12004, "invalid request parameters")    // 12004
+	EC_HTTP_MESSAGE_EMPTY      = NewError(12005, "message parameter cannot be empty") // 12005
+	EC_HTTP_EXECUTE_FAILED     = NewError(12006, "failed to execute agent engine")    // 12006
+	EC_HTTP_STREAM_EXECUTE_FAILED = NewError(12007, "failed to execute agent engine in stream") // 12007
+
 	// Email errors (13xxx)
 	EC_EMAIL_SEND_FAILED = NewError(13001, "failed to send email") // 13001
 )

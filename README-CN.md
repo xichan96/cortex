@@ -57,10 +57,14 @@ cortex/
 │   ├── providers/     # 外部服务提供商
 │   ├── errors/        # 错误处理
 │   └── logger/        # 结构化日志记录
+├── trigger/           # 触发器模块
+│   ├── http/          # HTTP 触发器（REST API）
+│   └── mcp/           # MCP 触发器（MCP 服务器）
 └── examples/          # 示例应用程序
     ├── basic/         # 基本用法示例
-    └── chat-web/      # 基于Web的聊天应用
-        └── server/    # Web服务器实现
+    ├── chat-web/      # 基于Web的聊天应用
+    │   └── server/    # Web服务器实现
+    └── mcp-server/    # MCP 服务器示例
 ```
 
 ## 快速开始
@@ -389,6 +393,68 @@ agentEngine.AddTool(emailTool)
 - `type`: 内容类型，支持 `text/html`、`text/plain`、`text/markdown`（必需）
 - `message`: 邮件内容（必需）
 
+### 触发器模块
+
+Cortex 提供触发器模块，通过不同协议暴露您的代理，便于与各种系统集成。
+
+#### HTTP 触发器
+
+将您的代理暴露为 HTTP API 端点，支持聊天和流式聊天：
+
+```go
+import (
+	"github.com/gin-gonic/gin"
+	httptrigger "github.com/xichan96/cortex/trigger/http"
+)
+
+// 创建 HTTP 处理器
+httpHandler := httptrigger.NewHandler(agentEngine)
+
+// 设置路由
+r := gin.Default()
+r.POST("/chat", httpHandler.ChatAPI)
+r.GET("/chat/stream", httpHandler.StreamChatAPI)
+r.POST("/chat/stream", httpHandler.StreamChatAPI)
+```
+
+HTTP 触发器提供两个端点：
+- `ChatAPI`: 标准聊天端点，返回完整结果
+- `StreamChatAPI`: 流式聊天端点，使用服务器发送事件 (SSE) 提供实时响应
+
+#### MCP 触发器
+
+将您的代理暴露为 MCP（模型上下文协议）服务器，允许其他 MCP 客户端将其作为工具使用：
+
+```go
+import (
+	"github.com/gin-gonic/gin"
+	"github.com/xichan96/cortex/trigger/mcp"
+)
+
+// 配置 MCP 选项
+mcpOpt := mcp.Options{
+	Server: mcp.Metadata{
+		Name:    "cortex-mcp",
+		Version: "0.1.0",
+	},
+	Tool: mcp.Metadata{
+		Name:        "chat",
+		Description: "与 AI 代理聊天",
+	},
+}
+
+// 创建 MCP 处理器
+mcpHandler := mcp.NewHandler(agentEngine, mcpOpt)
+
+// 设置路由
+r := gin.Default()
+mcpGroup := r.Group("/mcp")
+mcpGroup.Any("", mcpHandler.Agent())
+```
+
+MCP 触发器自动注册：
+- `ping`: 健康检查工具
+- 一个可配置的聊天工具，用于执行代理
 
 ## 示例
 
@@ -402,12 +468,20 @@ agentEngine.AddTool(emailTool)
 
 ### 聊天 Web 示例
 
-`examples/chat-web` 目录包含使用 Cortex 的基于 Web 的聊天应用程序。
+`examples/chat-web` 目录包含使用 Cortex 和 HTTP 触发器的基于 Web 的聊天应用程序。
 
 ```go
 // 请参阅 examples/chat-web/main.go 获取完整示例
 ```
 ![chat-web-screenshot.png](docs/images/c.png)
+
+### MCP 服务器示例
+
+`examples/mcp-server` 目录包含一个示例，演示如何将您的代理暴露为 MCP 服务器。
+
+```go
+// 请参阅 examples/mcp-server/main.go 获取完整示例
+```
 ## 高级用法
 
 ### 自定义工具

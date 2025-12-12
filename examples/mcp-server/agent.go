@@ -15,7 +15,7 @@ import (
 func createAgentEngine() (*engine.AgentEngine, error) {
 	// LLM configuration
 	llmAPIKey := ""
-	llmBaseURL := "https://xxx.cn"
+	llmBaseURL := ""
 	llmModel := "gpt-4.1"
 
 	// Create LLM provider
