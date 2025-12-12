@@ -34,9 +34,9 @@ var bufferPool = sync.Pool{
 
 // AgentResult agent execution result
 type AgentResult struct {
-	Output            string
-	ToolCalls         []types.ToolCallRequest
-	IntermediateSteps []types.ToolCallData
+	Output            string                  `json:"output"`
+	ToolCalls         []types.ToolCallRequest `json:"tool_calls"`
+	IntermediateSteps []types.ToolCallData    `json:"intermediate_steps"`
 }
 
 // toolCacheEntry tool cache entry
