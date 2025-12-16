@@ -136,6 +136,40 @@ func main() {
 }
 ```
 
+### Running the Main Program
+
+Cortex provides a ready-to-use main program that can quickly start the service with a configuration file:
+
+```bash
+# Use default config file cortex.yaml
+go run cortex.go
+
+# Or specify a config file path
+go run cortex.go -config /path/to/cortex.yaml
+```
+
+The main program provides the following HTTP endpoints:
+- `POST /chat`: Standard chat endpoint
+- `POST /chat/stream`: Streaming chat endpoint
+- `ANY /mcp`: MCP protocol endpoint
+
+The default service port is `:5678`, which can be modified via the configuration file.
+
+### Docker Deployment
+
+Quickly deploy Cortex service using Docker:
+
+```bash
+# Build Docker image
+docker build -f build/Dockerfile -t cortex:latest .
+
+# Run container
+docker run -d -p 5678:5678 \
+  -v /path/to/cortex.yaml:/go/bin/cortex.yaml \
+  cortex:latest \
+  /go/bin/cortex -config /go/bin/cortex.yaml
+```
+
 ## Agent Module Usage
 
 The agent module is the core of the Cortex framework, providing the intelligence and tool integration capabilities.
