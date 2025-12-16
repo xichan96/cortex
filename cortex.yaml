@@ -1,0 +1,96 @@
+llm:
+  provider: "openai"
+  
+  openai:
+    api_key: ""
+    base_url: ""
+    model: "gpt-4.1"
+    org_id: ""
+    api_type: ""
+  
+  deepseek:
+    api_key: ""
+    base_url: "https://api.deepseek.com"
+    model: "deepseek-chat"
+  
+  volce:
+    api_key: ""
+    base_url: "https://ark.cn-beijing.volces.com/api/v3"
+    model: "doubao-seed-1-6-251015"
+
+tools:
+  mcp:
+    enabled: true
+    url: ""
+    transport: "http"
+    headers:
+      Content-Type: "application/json; charset=utf-8"
+  
+  http:
+    enabled: true
+  
+  builtin:
+    enabled: true
+    ssh:
+      enabled: false
+    file:
+      enabled: false
+    email:
+      enabled: false
+      config:
+        address: ""
+        name: ""
+        pwd: ""
+        host: ""
+        port: 587
+    command:
+      enabled: false
+    math:
+      enabled: false
+    ping:
+      enabled: true
+    time:
+      enabled: true
+
+memory:
+  provider: "mongodb"
+  session_id: ""
+  max_history_messages: 100
+  
+  redis:
+    host: "localhost"
+    port: 6379
+    db: 0
+    username: ""
+    password: ""
+    key_prefix: "chat_messages"
+  
+  mongodb:
+    uri: ""
+    username: ""
+    password: ""
+    database: ""
+    collection: "chat_messages"
+    max_pool_size: 100
+    min_pool_size: 0
+
+agent:
+  max_iterations: 5
+  system_message: ""
+  temperature: 0.7
+  max_tokens: 2048
+  top_p: 0.9
+  frequency_penalty: 0.1
+  presence_penalty: 0.1
+  timeout: "30s"
+  retry_attempts: 3
+  enable_tool_retry: true
+  max_history_messages: 100
+  mcp:
+    server:
+      name: "cortex-mcp"
+      version: "0.1.0"
+    tool:
+      name: "chat"
+      description: "a task self-check assistant: Users may send you task_id or links. You need to: 1. Collect information as needed. If previous information is insufficient to analyze the problem, continue collecting (task details, logs, workflow, task monitoring statistics, etc.) 2. Comprehensive analysis of problems or evaluation of resource utilization of training tasks based on the collected information"
+

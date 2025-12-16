@@ -21,9 +21,9 @@ func main() {
 	}
 	defer mcpClient.Disconnect(context.Background())
 
-	httpHandler := httptrigger.NewHandler(agentEngine)
+	httpHandler := httptrigger.NewHandler()
 	r := gin.Default()
-	server.SetupRoutes(r, httpHandler)
+	server.SetupRoutes(r, httpHandler, agentEngine)
 	log.Println("Starting chat server on :8765")
 	r.Run(":8765")
 }

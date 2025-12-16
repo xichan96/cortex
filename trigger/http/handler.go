@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xichan96/cortex/agent/engine"
@@ -12,18 +11,16 @@ import (
 )
 
 type Handler interface {
-	ChatAPI(c *gin.Context)
-	StreamChatAPI(c *gin.Context)
+	GetMessageRequest(c *gin.Context) (*MessageRequest, error)
+	ChatAPI(c *gin.Context, engine *engine.AgentEngine, req *MessageRequest)
+	StreamChatAPI(c *gin.Context, engine *engine.AgentEngine, req *MessageRequest)
 }
 
 type handler struct {
-	engine *engine.AgentEngine
 }
 
-func NewHandler(engine *engine.AgentEngine) Handler {
-	return &handler{
-		engine: engine,
-	}
+func NewHandler() Handler {
+	return &handler{}
 }
 
 func (h *handler) handleError(err error) *errors.Error {
@@ -47,26 +44,28 @@ func (h *handler) sendSSEvent(c *gin.Context, event SSEvent) bool {
 	return true
 }
 
-func (h *handler) ChatAPI(c *gin.Context) {
+func (h *handler) GetMessageRequest(c *gin.Context) (*MessageRequest, error) {
 	var req MessageRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{
-			Status: errors.EC_HTTP_INVALID_REQUEST.Code,
-			Msg:    errors.EC_HTTP_INVALID_REQUEST.Message,
+	if c.Request.Method == "POST" {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, ErrorResponse{
+				Status: errors.EC_HTTP_INVALID_REQUEST.Code,
+				Msg:    errors.EC_HTTP_INVALID_REQUEST.Message,
+			})
+			return nil, errors.EC_HTTP_INVALID_REQUEST.Wrap(err)
+		}
+	} else {
+		c.JSON(http.StatusMethodNotAllowed, ErrorResponse{
+			Status: errors.EC_HTTP_INVALID_METHOD.Code,
+			Msg:    errors.EC_HTTP_INVALID_METHOD.Message,
 		})
-		return
+		return nil, errors.EC_HTTP_INVALID_METHOD
 	}
+	return &req, nil
+}
 
-	req.Message = strings.TrimSpace(req.Message)
-	if req.Message == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{
-			Status: errors.EC_HTTP_MESSAGE_EMPTY.Code,
-			Msg:    errors.EC_HTTP_MESSAGE_EMPTY.Message,
-		})
-		return
-	}
-
-	result, err := h.engine.Execute(req.Message, nil)
+func (h *handler) ChatAPI(c *gin.Context, engine *engine.AgentEngine, req *MessageRequest) {
+	result, err := engine.Execute(req.Message, nil)
 	if err != nil {
 		ec := h.handleError(err)
 		c.JSON(http.StatusInternalServerError, ErrorResponse{
@@ -78,41 +77,13 @@ func (h *handler) ChatAPI(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-func (h *handler) StreamChatAPI(c *gin.Context) {
-	var req MessageRequest
-	if c.Request.Method == "GET" {
-		req.Message = strings.TrimSpace(c.Query("message"))
-		if req.Message == "" {
-			c.JSON(http.StatusBadRequest, ErrorResponse{
-				Status: errors.EC_HTTP_MESSAGE_EMPTY.Code,
-				Msg:    errors.EC_HTTP_MESSAGE_EMPTY.Message,
-			})
-			return
-		}
-	} else {
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, ErrorResponse{
-				Status: errors.EC_HTTP_INVALID_REQUEST.Code,
-				Msg:    errors.EC_HTTP_INVALID_REQUEST.Message,
-			})
-			return
-		}
-		req.Message = strings.TrimSpace(req.Message)
-		if req.Message == "" {
-			c.JSON(http.StatusBadRequest, ErrorResponse{
-				Status: errors.EC_HTTP_MESSAGE_EMPTY.Code,
-				Msg:    errors.EC_HTTP_MESSAGE_EMPTY.Message,
-			})
-			return
-		}
-	}
-
+func (h *handler) StreamChatAPI(c *gin.Context, engine *engine.AgentEngine, req *MessageRequest) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 
 	ctx := c.Request.Context()
-	stream, err := h.engine.ExecuteStream(req.Message, nil)
+	stream, err := engine.ExecuteStream(req.Message, nil)
 	if err != nil {
 		ec := h.handleError(err)
 		if !h.sendSSEvent(c, SSEvent{

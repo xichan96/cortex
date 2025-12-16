@@ -137,6 +137,40 @@ func main() {
 }
 ```
 
+### 运行主程序
+
+Cortex 提供了开箱即用的主程序，可以通过配置文件快速启动服务：
+
+```bash
+# 使用默认配置文件 cortex.yaml
+go run cortex.go
+
+# 或指定配置文件路径
+go run cortex.go -config /path/to/cortex.yaml
+```
+
+主程序提供了以下 HTTP 端点：
+- `POST /chat`: 标准聊天接口
+- `POST /chat/stream`: 流式聊天接口
+- `ANY /mcp`: MCP 协议接口
+
+默认服务端口为 `:5678`，可通过配置文件进行修改。
+
+### Docker 部署
+
+使用 Docker 快速部署 Cortex 服务：
+
+```bash
+# 构建 Docker 镜像
+docker build -f build/Dockerfile -t cortex:latest .
+
+# 运行容器
+docker run -d -p 5678:5678 \
+  -v /path/to/cortex.yaml:/go/bin/cortex.yaml \
+  cortex:latest \
+  /go/bin/cortex -config /go/bin/cortex.yaml
+```
+
 ## Agent 模块使用
 
 Agent 模块是 Cortex 框架的核心，提供智能和工具集成功能。

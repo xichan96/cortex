@@ -7,10 +7,11 @@ import (
 	"runtime"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xichan96/cortex/agent/engine"
 	httptrigger "github.com/xichan96/cortex/trigger/http"
 )
 
-func SetupRoutes(r *gin.Engine, httpHandler httptrigger.Handler) {
+func SetupRoutes(r *gin.Engine, httpHandler httptrigger.Handler, engine *engine.AgentEngine) {
 	_, b, _, _ := runtime.Caller(0)
 	serverDir := filepath.Dir(b)
 
@@ -50,7 +51,28 @@ func SetupRoutes(r *gin.Engine, httpHandler httptrigger.Handler) {
 		http.ServeFile(c.Writer, c.Request, filepath.Join(serverDir, "static", c.Param("filepath")))
 	})
 
-	r.POST("/chat", httpHandler.ChatAPI)
-	r.GET("/chat/stream", httpHandler.StreamChatAPI)
-	r.POST("/chat/stream", httpHandler.StreamChatAPI)
+	r.POST("/chat", func(c *gin.Context) {
+		req, err := httpHandler.GetMessageRequest(c)
+		if err != nil {
+			c.AbortWithStatus(http.StatusInternalServerError)
+			return
+		}
+		httpHandler.ChatAPI(c, engine, req)
+	})
+	r.GET("/chat/stream", func(c *gin.Context) {
+		req, err := httpHandler.GetMessageRequest(c)
+		if err != nil {
+			c.AbortWithStatus(http.StatusInternalServerError)
+			return
+		}
+		httpHandler.StreamChatAPI(c, engine, req)
+	})
+	r.POST("/chat/stream", func(c *gin.Context) {
+		req, err := httpHandler.GetMessageRequest(c)
+		if err != nil {
+			c.AbortWithStatus(http.StatusInternalServerError)
+			return
+		}
+		httpHandler.StreamChatAPI(c, engine, req)
+	})
 }
