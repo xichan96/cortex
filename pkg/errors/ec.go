@@ -92,11 +92,17 @@ var (
 	EC_HTTP_STATUS_ERROR   = NewError(12003, "request failed with status error") // 12003
 
 	// HTTP server errors (12xxx)
-	EC_HTTP_INVALID_REQUEST    = NewError(12004, "invalid request parameters")    // 12004
-	EC_HTTP_MESSAGE_EMPTY      = NewError(12005, "message parameter cannot be empty") // 12005
-	EC_HTTP_EXECUTE_FAILED     = NewError(12006, "failed to execute agent engine")    // 12006
+	EC_HTTP_INVALID_REQUEST       = NewError(12004, "invalid request parameters")               // 12004
+	EC_HTTP_MESSAGE_EMPTY         = NewError(12005, "message parameter cannot be empty")        // 12005
+	EC_HTTP_EXECUTE_FAILED        = NewError(12006, "failed to execute agent engine")           // 12006
 	EC_HTTP_STREAM_EXECUTE_FAILED = NewError(12007, "failed to execute agent engine in stream") // 12007
+	EC_HTTP_INVALID_METHOD        = NewError(12008, "invalid HTTP method")                      // 12008
+	EC_HTTP_INVALID_SESSION_ID    = NewError(12009, "invalid session ID")                       // 12009
+	EC_HTTP_SESSION_NOT_FOUND     = NewError(12010, "session not found")                        // 12010
 
 	// Email errors (13xxx)
 	EC_EMAIL_SEND_FAILED = NewError(13001, "failed to send email") // 13001
+
+	// Cache errors (14xxx)
+	EC_CACHE_NO_FOUND = NewError(14001, "cache not found") // 14001
 )

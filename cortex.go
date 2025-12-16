@@ -5,46 +5,50 @@ import (
 	"log"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/xichan96/cortex/internal/app"
 	"github.com/xichan96/cortex/internal/config"
 )
 
 func chatHandler(c *gin.Context) {
-	sessionID := c.Query("session_id")
-	if sessionID == "" {
-		sessionID = uuid.New().String()
-	}
 	agent := app.NewAgent()
-	if err := agent.Build(sessionID); err != nil {
-		panic(err)
+	httptrigger := agent.HttpTrigger()
+	req, err := httptrigger.GetMessageRequest(c)
+	if err != nil {
+		return
 	}
-	agent.HttpTrigger().ChatAPI(c)
+
+	engine, err := agent.Engine(req.SessionID)
+	if err != nil {
+		return
+	}
+	httptrigger.ChatAPI(c, engine, req)
 }
 
 func streamChatHandler(c *gin.Context) {
-	sessionID := c.Query("session_id")
-	if sessionID == "" {
-		sessionID = uuid.New().String()
-	}
 	agent := app.NewAgent()
-	if err := agent.Build(sessionID); err != nil {
-		panic(err)
+	httptrigger := agent.HttpTrigger()
+	req, err := httptrigger.GetMessageRequest(c)
+	if err != nil {
+		return
 	}
-	agent.HttpTrigger().StreamChatAPI(c)
+	engine, err := agent.Engine(req.SessionID)
+	if err != nil {
+		return
+	}
+	httptrigger.StreamChatAPI(c, engine, req)
 }
 
 func mcpHandler(c *gin.Context) {
 	agent := app.NewAgent()
-	if err := agent.Build("default"); err != nil {
-		panic(err)
+	mcptrigger, err := agent.McpTrigger()
+	if err != nil {
+		return
 	}
-	agent.McpTrigger().Agent()(c)
+	mcptrigger.Agent()(c)
 }
 
 func router(r *gin.Engine) {
 	r.POST("/chat", chatHandler)
-	r.GET("/chat/stream", streamChatHandler)
 	r.POST("/chat/stream", streamChatHandler)
 	r.Any("/mcp", mcpHandler)
 }

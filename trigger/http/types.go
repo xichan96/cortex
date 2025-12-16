@@ -2,7 +2,8 @@ package http
 
 // MessageRequest defines the structure for message requests
 type MessageRequest struct {
-	Message string `json:"message" binding:"required"`
+	SessionID string `json:"session_id" binding:"required,min=1"`
+	Message   string `json:"message" binding:"required,min=1"`
 }
 
 // ErrorResponse defines the structure for error responses
