@@ -376,6 +376,12 @@ func (p *LangChainLLMProvider) convertToLangChainMessages(messages []types.Messa
 			parts = []llms.ContentPart{llms.TextPart(msg.Content)}
 		}
 
+		// Ensure content is never null - provide empty string if no content exists
+		// This is required by some APIs that expect content to be a string, not null
+		if len(parts) == 0 {
+			parts = []llms.ContentPart{llms.TextPart("")}
+		}
+
 		langChainMessages[i] = llms.MessageContent{
 			Role:  role,
 			Parts: parts,
