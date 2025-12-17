@@ -37,7 +37,7 @@ type VolceConfig struct {
 }
 
 type ToolsConfig struct {
-	MCP     MCPConfig     `yaml:"mcp"`
+	MCP     []MCPConfig   `yaml:"mcp"`
 	HTTP    HTTPConfig    `yaml:"http"`
 	Builtin BuiltinConfig `yaml:"builtin"`
 }

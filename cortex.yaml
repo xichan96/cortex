@@ -20,11 +20,11 @@ llm:
 
 tools:
   mcp:
-    enabled: true
-    url: ""
-    transport: "http"
-    headers:
-      Content-Type: "application/json; charset=utf-8"
+    - enabled: true
+      url: ""
+      transport: "http"
+      headers:
+        Content-Type: "application/json; charset=utf-8"
   
   http:
     enabled: true
