@@ -5,6 +5,7 @@ import (
 
 	"github.com/xichan96/cortex/agent/tools/builtin"
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/internal/config"
 	"github.com/xichan96/cortex/pkg/email"
 	"github.com/xichan96/cortex/pkg/mcp"
 )
@@ -18,9 +19,11 @@ func (a *agent) setupTools() []types.Tool {
 		tools = append(tools, a.initBuiltinTools()...)
 	}
 
-	if toolsCfg.MCP.Enabled {
-		mcpTools := a.initMCPTools()
-		tools = append(tools, mcpTools...)
+	for _, mcpCfg := range toolsCfg.MCP {
+		if mcpCfg.Enabled {
+			mcpTools := a.initMCPTools(mcpCfg)
+			tools = append(tools, mcpTools...)
+		}
 	}
 
 	return tools
@@ -68,8 +71,7 @@ func (a *agent) initBuiltinTools() []types.Tool {
 	return tools
 }
 
-func (a *agent) initMCPTools() []types.Tool {
-	cfg := a.config.Tools.MCP
+func (a *agent) initMCPTools(cfg config.MCPConfig) []types.Tool {
 	if cfg.URL == "" {
 		return nil
 	}
