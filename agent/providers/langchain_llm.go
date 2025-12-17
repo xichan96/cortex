@@ -379,7 +379,17 @@ func (p *LangChainLLMProvider) convertToLangChainMessages(messages []types.Messa
 		// Ensure content is never null - provide empty string if no content exists
 		// This is required by some APIs that expect content to be a string, not null
 		if len(parts) == 0 {
-			parts = []llms.ContentPart{llms.TextPart("")}
+			// For tool messages, use ToolCallResponse if ToolCallID is present
+			if msg.Role == "tool" && msg.ToolCallID != "" {
+				parts = []llms.ContentPart{llms.ToolCallResponse{
+					ToolCallID: msg.ToolCallID,
+					Name:       msg.Name,
+					Content:    msg.Content,
+				}}
+			} else {
+				// For other messages, use empty text part
+				parts = []llms.ContentPart{llms.TextPart("")}
+			}
 		}
 
 		langChainMessages[i] = llms.MessageContent{
