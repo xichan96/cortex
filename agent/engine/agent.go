@@ -504,9 +504,11 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 	ae.mu.RLock()
 	maxIterations := 10
 	timeout := time.Duration(0)
+	toolExecutionTimeout := time.Duration(0)
 	if ae.config != nil {
 		maxIterations = ae.config.MaxIterations
 		timeout = ae.config.Timeout
+		toolExecutionTimeout = ae.config.ToolExecutionTimeout
 	}
 	tools := ae.tools
 	ctx := ae.ctx
@@ -579,8 +581,8 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 			if cached {
 				ae.logger.LogToolExecution(toolCall.Function.Name, true, 0, slog.Bool("cached", true))
 			} else {
-				// Execute tool
-				toolResult, err = tool.Execute(toolCall.Function.Arguments)
+				// Execute tool with timeout
+				toolResult, err = ae.executeToolWithTimeout(tool, toolCall.Function.Arguments, toolExecutionTimeout)
 				duration := time.Since(toolStartTime)
 
 				if err != nil {
@@ -834,9 +836,11 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 	tools := ae.tools
 	maxIterations := 10
 	timeout := time.Duration(0)
+	toolExecutionTimeout := time.Duration(0)
 	if ae.config != nil {
 		maxIterations = ae.config.MaxIterations
 		timeout = ae.config.Timeout
+		toolExecutionTimeout = ae.config.ToolExecutionTimeout
 	}
 	ctx := ae.ctx
 	ae.mu.RUnlock()
@@ -944,8 +948,8 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 			if cached {
 				ae.logger.LogToolExecution(toolCall.Tool, true, 0, slog.Bool("cached", true), slog.String("context", "streaming"))
 			} else {
-				// Execute tool if not cached
-				toolResult, err = tool.Execute(toolCall.ToolInput)
+				// Execute tool with timeout
+				toolResult, err = ae.executeToolWithTimeout(tool, toolCall.ToolInput, toolExecutionTimeout)
 				duration := time.Since(toolStartTime)
 
 				if err != nil {
@@ -991,6 +995,35 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 
 	ae.logger.LogExecution("executeStreamIteration", iteration, "No tool calls in this iteration")
 	return result, false, nil
+}
+
+// ==================== Tool Execution Methods ====================
+
+// executeToolWithTimeout executes a tool with timeout control
+// Uses goroutine + channel to implement timeout without modifying Tool interface
+func (ae *AgentEngine) executeToolWithTimeout(tool types.Tool, args map[string]interface{}, timeout time.Duration) (interface{}, error) {
+	if timeout <= 0 {
+		// No timeout, execute directly
+		return tool.Execute(args)
+	}
+
+	type result struct {
+		value interface{}
+		err   error
+	}
+
+	resultChan := make(chan result, 1)
+	go func() {
+		value, err := tool.Execute(args)
+		resultChan <- result{value: value, err: err}
+	}()
+
+	select {
+	case res := <-resultChan:
+		return res.value, res.err
+	case <-time.After(timeout):
+		return nil, errors.EC_TOOL_EXECUTION_TIMEOUT.Wrap(fmt.Errorf("tool execution timeout after %v", timeout))
+	}
 }
 
 // ==================== Cache Management Methods ====================
