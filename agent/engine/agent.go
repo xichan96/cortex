@@ -637,12 +637,7 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 			})
 
 			// Format observation from tool result
-			var observation string
-			if toolResult == nil {
-				observation = "Tool executed successfully but returned no result"
-			} else {
-				observation = truncateString(fmt.Sprintf("%v", toolResult), MaxTruncationLength)
-			}
+			observation := truncateString(formatToolResult(toolResult), MaxTruncationLength)
 
 			intermediateSteps = append(intermediateSteps, types.ToolCallData{
 				Action: types.ToolActionStep{
@@ -1022,12 +1017,7 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 			toolErrors = append(toolErrors, nil) // err is nil here
 
 			// Format observation from tool result
-			var observation string
-			if toolResult == nil {
-				observation = "Tool executed successfully but returned no result"
-			} else {
-				observation = truncateString(fmt.Sprintf("%v", toolResult), MaxTruncationLength)
-			}
+			observation := truncateString(formatToolResult(toolResult), MaxTruncationLength)
 
 			intermediateSteps = append(intermediateSteps, types.ToolCallData{
 				Action: types.ToolActionStep{
