@@ -236,30 +236,62 @@ func (p *RedisMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages 
 		return fmt.Errorf("failed to generate memory summary: %w", err)
 	}
 
-	// Clear and reinsert compressed messages
-	if err := p.Clear(); err != nil {
-		return err
-	}
+	// Prepare compressed messages
+	compressedMessages := make([]types.Message, 0, len(systemMessages)+1+len(recentMessages))
+	compressedMessages = append(compressedMessages, systemMessages...)
+	compressedMessages = append(compressedMessages, types.Message{
+		Role:    "system",
+		Content: fmt.Sprintf("Previous conversation summary: %s", summaryMsg.Content),
+	})
+	compressedMessages = append(compressedMessages, recentMessages...)
 
-	// Reinsert system messages and summary
-	for _, msg := range systemMessages {
-		if err := p.AddMessage(ctx, msg); err != nil {
-			return err
+	// Use temporary key for atomic replacement
+	tempKey := p.getKey() + ":temp:" + fmt.Sprintf("%d", time.Now().UnixNano())
+	key := p.getKey()
+
+	// Insert compressed messages to temporary key first
+	for i := len(compressedMessages) - 1; i >= 0; i-- {
+		msg := compressedMessages[i]
+		msgData := map[string]interface{}{
+			"role":       msg.Role,
+			"content":    msg.Content,
+			"name":       msg.Name,
+			"created_at": time.Now().Unix(),
+		}
+		msgJSON, err := json.Marshal(msgData)
+		if err != nil {
+			// Clean up temp key on error
+			p.client.Del(ctx, tempKey)
+			return fmt.Errorf("failed to marshal message: %w", err)
+		}
+		if err := p.client.LPush(ctx, tempKey, msgJSON).Err(); err != nil {
+			// Clean up temp key on error
+			p.client.Del(ctx, tempKey)
+			return fmt.Errorf("failed to insert compressed message to temp key: %w", err)
 		}
 	}
 
-	// Add summary as system message
-	if err := p.AddMessage(ctx, types.Message{
-		Role:    "system",
-		Content: fmt.Sprintf("Previous conversation summary: %s", summaryMsg.Content),
-	}); err != nil {
-		return err
+	// Verify temp key has correct number of messages
+	tempCount, err := p.client.LLen(ctx, tempKey).Result()
+	if err != nil || tempCount != int64(len(compressedMessages)) {
+		// Clean up temp key on verification failure
+		p.client.Del(ctx, tempKey)
+		return fmt.Errorf("failed to verify compressed messages in temp key")
 	}
 
-	// Reinsert recent messages
-	for _, msg := range recentMessages {
-		if err := p.AddMessage(ctx, msg); err != nil {
-			return err
+	// Atomically replace old key with temp key using RENAME
+	// This is atomic in Redis - either succeeds or fails, no partial state
+	if err := p.client.Rename(ctx, tempKey, key).Err(); err != nil {
+		// If rename fails, clean up temp key
+		p.client.Del(ctx, tempKey)
+		return fmt.Errorf("failed to atomically replace messages: %w", err)
+	}
+
+	// Apply max history limit if needed
+	if p.maxHistoryMessages > 0 {
+		if err := p.trimHistory(ctx); err != nil {
+			// Log but don't fail - data is already compressed
+			return fmt.Errorf("failed to trim history after compression: %w", err)
 		}
 	}
 
