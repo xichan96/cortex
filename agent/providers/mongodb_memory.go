@@ -263,31 +263,75 @@ func (p *MongoDBMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessage
 		return fmt.Errorf("failed to generate memory summary: %w", err)
 	}
 
-	// Clear and reinsert compressed messages
-	if err := p.Clear(); err != nil {
-		return err
-	}
+	// Prepare compressed messages to insert
+	compressedMessages := make([]MessageDocument, 0, len(systemMessages)+1+len(recentMessages))
+	now := time.Now()
 
-	// Reinsert system messages and summary
+	// Add system messages
 	for _, msg := range systemMessages {
-		if err := p.AddMessage(ctx, msg); err != nil {
-			return err
-		}
+		compressedMessages = append(compressedMessages, MessageDocument{
+			SessionID: p.sessionID,
+			Role:      msg.Role,
+			Content:   msg.Content,
+			Name:      msg.Name,
+			CreatedAt: now,
+		})
 	}
 
 	// Add summary as system message
-	if err := p.AddMessage(ctx, types.Message{
-		Role:    "system",
-		Content: fmt.Sprintf("Previous conversation summary: %s", summaryMsg.Content),
-	}); err != nil {
-		return err
+	compressedMessages = append(compressedMessages, MessageDocument{
+		SessionID: p.sessionID,
+		Role:      "system",
+		Content:   fmt.Sprintf("Previous conversation summary: %s", summaryMsg.Content),
+		CreatedAt: now,
+	})
+
+	// Add recent messages
+	for _, msg := range recentMessages {
+		compressedMessages = append(compressedMessages, MessageDocument{
+			SessionID: p.sessionID,
+			Role:      msg.Role,
+			Content:   msg.Content,
+			Name:      msg.Name,
+			CreatedAt: now,
+		})
 	}
 
-	// Reinsert recent messages
-	for _, msg := range recentMessages {
-		if err := p.AddMessage(ctx, msg); err != nil {
-			return err
-		}
+	// Convert to []interface{} for batch insert
+	insertData := make([]interface{}, len(compressedMessages))
+	for i := range compressedMessages {
+		insertData[i] = compressedMessages[i]
+	}
+
+	// Insert compressed messages first (safer: if this fails, original data remains)
+	collection := p.getCollection()
+	if err := collection.Insert(ctx, insertData); err != nil {
+		return fmt.Errorf("failed to insert compressed messages: %w", err)
+	}
+
+	// Verify compressed messages were inserted successfully
+	var insertedDocs []MessageDocument
+	countFilter := bson.M{"session_id": p.sessionID, "created_at": now}
+	_, err = collection.QueryByPaging(ctx, countFilter, []string{"created_at"}, 1, int64(len(compressedMessages)), &insertedDocs)
+	if err != nil || len(insertedDocs) < len(compressedMessages) {
+		// Insert verification failed, try to clean up inserted messages
+		collection.DeleteAll(ctx, bson.M{"session_id": p.sessionID, "created_at": now})
+		return fmt.Errorf("failed to verify compressed messages insertion, rolled back")
+	}
+
+	// Only delete old messages after successful insert and verification
+	// Delete messages that were created before the compression (old messages)
+	// We keep system messages and messages created at compression time (new compressed messages)
+	filter := bson.M{
+		"session_id": p.sessionID,
+		"created_at": bson.M{"$lt": now},
+	}
+
+	// Safe to delete old messages now
+	if err := collection.DeleteAll(ctx, filter); err != nil {
+		// If deletion fails, we still have the compressed messages, which is acceptable
+		// The old messages will be cleaned up later or can be manually removed
+		return fmt.Errorf("failed to delete old messages after compression (compressed messages are safe): %w", err)
 	}
 
 	return nil
