@@ -600,11 +600,11 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 
 // buildNextMessages builds messages for the next round
 func (ae *AgentEngine) buildNextMessages(previousMessages []types.Message, result *AgentResult) []types.Message {
-	// Only keep initial system message and user's original question
-	// Pre-allocate slice capacity, usually only need system message and user message
-	messages := make([]types.Message, 0, 2)
+	// Keep system messages, user's original question, and assistant's previous response
+	// Pre-allocate slice capacity: system messages + user message + assistant response + tool results
+	messages := make([]types.Message, 0, 4)
 
-	// Keep system message (if any)
+	// Keep system messages (if any)
 	for _, msg := range previousMessages {
 		if msg.Role == "system" {
 			messages = append(messages, msg)
@@ -617,6 +617,28 @@ func (ae *AgentEngine) buildNextMessages(previousMessages []types.Message, resul
 			messages = append(messages, previousMessages[i])
 			break
 		}
+	}
+
+	// Keep assistant's previous response if it has content
+	// This preserves context between iterations
+	if result != nil && result.Output != "" {
+		// Convert ToolCallRequest to ToolCall for message format
+		toolCalls := make([]types.ToolCall, 0, len(result.ToolCalls))
+		for _, tc := range result.ToolCalls {
+			toolCalls = append(toolCalls, types.ToolCall{
+				ID:   tc.ToolCallID,
+				Type: tc.Type,
+				Function: types.ToolFunction{
+					Name:      tc.Tool,
+					Arguments: tc.ToolInput,
+				},
+			})
+		}
+		messages = append(messages, types.Message{
+			Role:     "assistant",
+			Content:  result.Output,
+			ToolCalls: toolCalls,
+		})
 	}
 
 	// Build summary of tool execution results
