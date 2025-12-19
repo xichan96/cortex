@@ -433,9 +433,9 @@ func (ae *AgentEngine) prepareMessages(input string, previousRequests []types.To
 		})
 	}
 
-	// Add user input (using "human" role to match API requirements)
+	// Add user input
 	messages = append(messages, types.Message{
-		Role:    "human",
+		Role:    "user",
 		Content: input,
 	})
 
@@ -471,7 +471,22 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 
 	ae.mu.RLock()
 	tools := ae.tools
+	ctx := ae.ctx
 	ae.mu.RUnlock()
+
+	// Create context with timeout if configured
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ae.mu.RLock()
+	timeout := ae.config.Timeout
+	ae.mu.RUnlock()
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
 	response, err := ae.model.ChatWithTools(messages, tools)
 	if err != nil {
 		ae.logger.LogError("executeIteration", err, slog.Int("iteration", iteration))
@@ -596,9 +611,9 @@ func (ae *AgentEngine) buildNextMessages(previousMessages []types.Message, resul
 		}
 	}
 
-	// Keep user's original question (last user message)
+	// Keep user's original question (last user/human message)
 	for i := len(previousMessages) - 1; i >= 0; i-- {
-		if previousMessages[i].Role == "user" {
+		if previousMessages[i].Role == "user" || previousMessages[i].Role == "human" {
 			messages = append(messages, previousMessages[i])
 			break
 		}
@@ -720,7 +735,22 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 	ae.mu.RLock()
 	tools := ae.tools
 	maxIterations := ae.config.MaxIterations
+	ctx := ae.ctx
 	ae.mu.RUnlock()
+
+	// Create context with timeout if configured
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ae.mu.RLock()
+	timeout := ae.config.Timeout
+	ae.mu.RUnlock()
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
 	stream, err := ae.model.ChatWithToolsStream(messages, tools)
 	if err != nil {
 		return nil, false, errors.NewError(errors.EC_STREAM_CHAT_FAILED.Code, "failed to chat with tools stream").Wrap(err)
@@ -907,14 +937,20 @@ func (ae *AgentEngine) setCachedToolResult(toolName string, args map[string]inte
 	// Simple LRU strategy: if cache is full, remove expired entries first, then oldest entry
 	if len(ae.toolCache) >= ae.toolCacheSize {
 		now := time.Now()
-		expiredKeys := make([]string, 0)
+		expiredKeys := make([]string, 0, len(ae.toolCache)/4)
 		var oldestKey string
 		var oldestTime time.Time
+		removedCount := 0
+		maxRemovals := len(ae.toolCache) / 4
 
-		// First pass: collect expired entries and find oldest
+		// First pass: collect expired entries and find oldest (limit iterations)
 		for key, entry := range ae.toolCache {
+			if removedCount >= maxRemovals {
+				break
+			}
 			if now.Sub(entry.timestamp) >= CacheExpirationTime {
 				expiredKeys = append(expiredKeys, key)
+				removedCount++
 			} else if oldestKey == "" || entry.timestamp.Before(oldestTime) {
 				oldestKey = key
 				oldestTime = entry.timestamp

@@ -18,18 +18,32 @@ import (
 
 // LangChainLLMProvider LangChain LLM provider
 type LangChainLLMProvider struct {
-	model     llms.Model
-	modelName string
-	logger    *logger.Logger
+	model      llms.Model
+	modelName  string
+	logger     *logger.Logger
+	maxRetries int
+	retryDelay time.Duration
 }
 
 // NewLangChainLLMProvider creates a new LangChain LLM provider
 func NewLangChainLLMProvider(model llms.Model, modelName string) *LangChainLLMProvider {
 	return &LangChainLLMProvider{
-		model:     model,
-		modelName: modelName,
-		logger:    logger.NewLogger(),
+		model:      model,
+		modelName:  modelName,
+		logger:     logger.NewLogger(),
+		maxRetries: 3,
+		retryDelay: 1 * time.Second,
 	}
+}
+
+// SetMaxRetries sets maximum retry attempts
+func (p *LangChainLLMProvider) SetMaxRetries(maxRetries int) {
+	p.maxRetries = maxRetries
+}
+
+// SetRetryDelay sets retry delay duration
+func (p *LangChainLLMProvider) SetRetryDelay(delay time.Duration) {
+	p.retryDelay = delay
 }
 
 // handle429Retry handles 429 rate limit errors with retry logic
@@ -66,8 +80,6 @@ func (p *LangChainLLMProvider) Chat(messages []types.Message) (types.Message, er
 	// Convert message format
 	langChainMessages := p.convertToLangChainMessages(messages)
 
-	// Set maximum retry count
-	maxRetries := 3
 	retryCount := 0
 
 	for {
@@ -75,8 +87,9 @@ func (p *LangChainLLMProvider) Chat(messages []types.Message) (types.Message, er
 		response, err := p.model.GenerateContent(context.Background(), langChainMessages)
 		if err != nil {
 			// Handle 429 retry
-			if shouldRetry, _ := p.handle429Retry(err, retryCount, maxRetries); shouldRetry {
+			if shouldRetry, _ := p.handle429Retry(err, retryCount, p.maxRetries); shouldRetry {
 				retryCount++
+				time.Sleep(p.retryDelay)
 				continue
 			}
 
@@ -103,15 +116,13 @@ func (p *LangChainLLMProvider) ChatStream(messages []types.Message) (<-chan type
 	go func() {
 		defer close(outputChan)
 
-		// Set maximum retry count
-		maxRetries := 3
 		retryCount := 0
 
-		for retryCount <= maxRetries {
+		for retryCount <= p.maxRetries {
 			if retryCount > 0 {
 				outputChan <- types.StreamMessage{
 					Type:    "retry",
-					Content: fmt.Sprintf("Retrying after 429 error (attempt %d/%d)", retryCount, maxRetries),
+					Content: fmt.Sprintf("Retrying after 429 error (attempt %d/%d)", retryCount, p.maxRetries),
 				}
 			}
 
@@ -126,12 +137,13 @@ func (p *LangChainLLMProvider) ChatStream(messages []types.Message) (<-chan type
 
 			if err != nil {
 				// Handle 429 retry
-				if shouldRetry, waitTime := p.handle429Retry(err, retryCount, maxRetries); shouldRetry {
+				if shouldRetry, waitTime := p.handle429Retry(err, retryCount, p.maxRetries); shouldRetry {
 					outputChan <- types.StreamMessage{
 						Type:    "info",
 						Content: fmt.Sprintf("Received 429 error, waiting %d milliseconds before retry...", waitTime),
 					}
 					retryCount++
+					time.Sleep(p.retryDelay)
 					continue
 				}
 
@@ -160,8 +172,6 @@ func (p *LangChainLLMProvider) ChatWithTools(messages []types.Message, tools []t
 	// Convert tools
 	langChainTools := p.convertToLangChainTools(tools)
 
-	// Set maximum retry count
-	maxRetries := 3
 	retryCount := 0
 
 	for {
@@ -169,8 +179,9 @@ func (p *LangChainLLMProvider) ChatWithTools(messages []types.Message, tools []t
 		response, err := p.model.GenerateContent(context.Background(), langChainMessages, llms.WithTools(langChainTools))
 		if err != nil {
 			// Handle 429 retry
-			if shouldRetry, _ := p.handle429Retry(err, retryCount, maxRetries); shouldRetry {
+			if shouldRetry, _ := p.handle429Retry(err, retryCount, p.maxRetries); shouldRetry {
 				retryCount++
+				time.Sleep(p.retryDelay)
 				continue
 			}
 
@@ -200,55 +211,34 @@ func (p *LangChainLLMProvider) ChatWithToolsStream(messages []types.Message, too
 	go func() {
 		defer close(outputChan)
 
-		// Set maximum retry count
-		maxRetries := 3
 		retryCount := 0
 
-		for retryCount <= maxRetries {
+		for retryCount <= p.maxRetries {
 			if retryCount > 0 {
 				outputChan <- types.StreamMessage{
 					Type:    "retry",
-					Content: fmt.Sprintf("Retrying after 429 error (attempt %d/%d)", retryCount, maxRetries),
+					Content: fmt.Sprintf("Retrying after 429 error (attempt %d/%d)", retryCount, p.maxRetries),
 				}
 			}
 
-			var inToolCall bool
 			var fullResponse *llms.ContentResponse
+			var contentBuffer strings.Builder
 
 			// Streaming call
-			// Note: Tool call detection in streaming is approximate and used only for filtering
-			// The actual tool calls are extracted from the full response after streaming completes
+			// Note: We collect all content chunks and filter tool calls from the full response
+			// This is more reliable than trying to detect tool calls in streaming chunks
 			response, err := p.model.GenerateContent(context.Background(), langChainMessages,
 				llms.WithTools(langChainTools),
 				llms.WithStreamingFunc(func(ctx context.Context, chunk []byte) error {
 					chunkStr := string(chunk)
+					contentBuffer.WriteString(chunkStr)
 
-					// Approximate detection of tool call boundaries in streaming
-					// This is heuristic-based and may not be 100% accurate
-					if strings.Contains(chunkStr, `"function_call"`) || strings.Contains(chunkStr, `"tool_calls"`) {
-						inToolCall = true
-					}
-
-					// Only send content chunks that are not part of tool calls
-					if !inToolCall && chunkStr != "" {
+					// Send content chunks immediately for better user experience
+					// Tool calls will be filtered from the full response later
+					if chunkStr != "" {
 						outputChan <- types.StreamMessage{
 							Type:    "chunk",
 							Content: chunkStr,
-						}
-					}
-
-					// Approximate detection of tool call end
-					// This may not be perfect but helps filter most tool call content
-					if inToolCall {
-						// Check for balanced brackets as a heuristic for tool call completion
-						openBraces := strings.Count(chunkStr, "{")
-						closeBraces := strings.Count(chunkStr, "}")
-						openBrackets := strings.Count(chunkStr, "[")
-						closeBrackets := strings.Count(chunkStr, "]")
-
-						// If we see more closing brackets than opening, likely end of tool call
-						if (closeBraces > openBraces) || (closeBrackets > openBrackets) {
-							inToolCall = false
 						}
 					}
 
@@ -262,12 +252,14 @@ func (p *LangChainLLMProvider) ChatWithToolsStream(messages []types.Message, too
 
 			if err != nil {
 				// Handle 429 retry
-				if shouldRetry, waitTime := p.handle429Retry(err, retryCount, maxRetries); shouldRetry {
+				if shouldRetry, waitTime := p.handle429Retry(err, retryCount, p.maxRetries); shouldRetry {
 					outputChan <- types.StreamMessage{
 						Type:    "info",
 						Content: fmt.Sprintf("Received 429 error, waiting %d milliseconds before retry...", waitTime),
 					}
 					retryCount++
+					contentBuffer.Reset()
+					time.Sleep(p.retryDelay)
 					continue
 				}
 
