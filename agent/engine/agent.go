@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -279,6 +280,9 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 	}
 	ae.mu.RUnlock()
 
+	// Initialize finalResult to prevent nil pointer panic
+	finalResult = &AgentResult{Output: ""}
+
 	// Iterate until no tool calls or maximum iterations reached
 	for iteration < maxIterations {
 		ae.logger.LogExecution("Execute", iteration, fmt.Sprintf("Starting iteration %d/%d", iteration+1, maxIterations))
@@ -317,10 +321,14 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 	}
 
 	executionTime := time.Since(startTime)
+	outputLength := 0
+	if finalResult != nil {
+		outputLength = len(finalResult.Output)
+	}
 	ae.logger.LogExecution("Execute", 0, "Agent execution completed successfully",
 		slog.Duration("total_duration", executionTime),
 		slog.Int("total_iterations", iteration+1),
-		slog.Int("output_length", len(finalResult.Output)))
+		slog.Int("output_length", outputLength))
 
 	// Save to memory system
 	if ae.memory != nil && finalResult != nil {
@@ -1239,14 +1247,10 @@ func (ae *AgentEngine) sortToolCallsByDependencies(toolCalls []types.ToolCall) (
 		})
 	}
 
-	// Sort by priority (descending)
-	for i := 0; i < len(toolsWithPriority)-1; i++ {
-		for j := i + 1; j < len(toolsWithPriority); j++ {
-			if toolsWithPriority[i].priority < toolsWithPriority[j].priority {
-				toolsWithPriority[i], toolsWithPriority[j] = toolsWithPriority[j], toolsWithPriority[i]
-			}
-		}
-	}
+	// Sort by priority (descending) using efficient sort.Slice
+	sort.Slice(toolsWithPriority, func(i, j int) bool {
+		return toolsWithPriority[i].priority > toolsWithPriority[j].priority
+	})
 
 	// Visit tools in priority order
 	for _, twp := range toolsWithPriority {
