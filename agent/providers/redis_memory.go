@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/xichan96/cortex/agent/types"
@@ -10,6 +11,7 @@ import (
 )
 
 type RedisMemoryProvider struct {
+	mu                 sync.RWMutex
 	client             *redis.Client
 	sessionID          string
 	maxHistoryMessages int
@@ -35,22 +37,28 @@ func NewRedisMemoryProviderWithLimit(client *redis.Client, sessionID string, max
 }
 
 func (p *RedisMemoryProvider) SetMaxHistoryMessages(limit int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.maxHistoryMessages = limit
 }
 
 func (p *RedisMemoryProvider) SetKeyPrefix(prefix string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.keyPrefix = prefix
 }
 
 func (p *RedisMemoryProvider) getKey() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	return p.keyPrefix + ":" + p.sessionID
 }
 
 func (p *RedisMemoryProvider) AddMessage(ctx context.Context, message types.Message) error {
 	msgData := map[string]interface{}{
-		"role":      message.Role,
-		"content":   message.Content,
-		"name":      message.Name,
+		"role":       message.Role,
+		"content":    message.Content,
+		"name":       message.Name,
 		"created_at": time.Now().Unix(),
 	}
 
@@ -71,9 +79,13 @@ func (p *RedisMemoryProvider) AddMessage(ctx context.Context, message types.Mess
 }
 
 func (p *RedisMemoryProvider) GetMessages(ctx context.Context, limit int) ([]types.Message, error) {
+	p.mu.RLock()
+	maxHistoryMessages := p.maxHistoryMessages
+	p.mu.RUnlock()
+
 	queryLimit := limit
 	if queryLimit <= 0 {
-		queryLimit = p.maxHistoryMessages
+		queryLimit = maxHistoryMessages
 		if queryLimit <= 0 {
 			queryLimit = 1000
 		}
@@ -108,7 +120,10 @@ func (p *RedisMemoryProvider) GetMessages(ctx context.Context, limit int) ([]typ
 
 func (p *RedisMemoryProvider) LoadMemoryVariables() (map[string]interface{}, error) {
 	ctx := context.Background()
-	messages, err := p.GetMessages(ctx, p.maxHistoryMessages)
+	p.mu.RLock()
+	maxHistoryMessages := p.maxHistoryMessages
+	p.mu.RUnlock()
+	messages, err := p.GetMessages(ctx, maxHistoryMessages)
 	if err != nil {
 		return nil, err
 	}
@@ -146,15 +161,21 @@ func (p *RedisMemoryProvider) Clear() error {
 
 func (p *RedisMemoryProvider) GetChatHistory() ([]types.Message, error) {
 	ctx := context.Background()
-	return p.GetMessages(ctx, p.maxHistoryMessages)
+	p.mu.RLock()
+	maxHistoryMessages := p.maxHistoryMessages
+	p.mu.RUnlock()
+	return p.GetMessages(ctx, maxHistoryMessages)
 }
 
 func (p *RedisMemoryProvider) trimHistory(ctx context.Context) error {
-	if p.maxHistoryMessages <= 0 {
+	p.mu.RLock()
+	maxHistoryMessages := p.maxHistoryMessages
+	p.mu.RUnlock()
+
+	if maxHistoryMessages <= 0 {
 		return nil
 	}
 
 	key := p.getKey()
-	return p.client.LTrim(ctx, key, 0, int64(p.maxHistoryMessages-1)).Err()
+	return p.client.LTrim(ctx, key, 0, int64(maxHistoryMessages-1)).Err()
 }
-

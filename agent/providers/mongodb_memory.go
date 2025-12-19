@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/xichan96/cortex/agent/types"
@@ -20,6 +21,7 @@ type MessageDocument struct {
 }
 
 type MongoDBMemoryProvider struct {
+	mu                 sync.RWMutex
 	client             *mongodb.Client
 	sessionID          string
 	maxHistoryMessages int
@@ -45,20 +47,32 @@ func NewMongoDBMemoryProviderWithLimit(client *mongodb.Client, sessionID string,
 }
 
 func (p *MongoDBMemoryProvider) SetMaxHistoryMessages(limit int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.maxHistoryMessages = limit
 }
 
 func (p *MongoDBMemoryProvider) SetCollectionName(name string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.collectionName = name
 }
 
 func (p *MongoDBMemoryProvider) getCollection() *mongodb.Client {
-	return p.client.Collection(p.collectionName)
+	p.mu.RLock()
+	collectionName := p.collectionName
+	p.mu.RUnlock()
+	return p.client.Collection(collectionName)
 }
 
 func (p *MongoDBMemoryProvider) AddMessage(ctx context.Context, message types.Message) error {
+	p.mu.RLock()
+	sessionID := p.sessionID
+	maxHistoryMessages := p.maxHistoryMessages
+	p.mu.RUnlock()
+
 	doc := MessageDocument{
-		SessionID: p.sessionID,
+		SessionID: sessionID,
 		Role:      message.Role,
 		Content:   message.Content,
 		Name:      message.Name,
@@ -69,19 +83,24 @@ func (p *MongoDBMemoryProvider) AddMessage(ctx context.Context, message types.Me
 		return err
 	}
 
-	if p.maxHistoryMessages > 0 {
+	if maxHistoryMessages > 0 {
 		return p.trimHistory(ctx)
 	}
 	return nil
 }
 
 func (p *MongoDBMemoryProvider) GetMessages(ctx context.Context, limit int) ([]types.Message, error) {
-	filter := bson.M{"session_id": p.sessionID}
+	p.mu.RLock()
+	sessionID := p.sessionID
+	maxHistoryMessages := p.maxHistoryMessages
+	p.mu.RUnlock()
+
+	filter := bson.M{"session_id": sessionID}
 	var docs []MessageDocument
 
 	queryLimit := limit
 	if queryLimit <= 0 {
-		queryLimit = p.maxHistoryMessages
+		queryLimit = maxHistoryMessages
 		if queryLimit <= 0 {
 			queryLimit = 1000
 		}
@@ -107,7 +126,10 @@ func (p *MongoDBMemoryProvider) GetMessages(ctx context.Context, limit int) ([]t
 
 func (p *MongoDBMemoryProvider) LoadMemoryVariables() (map[string]interface{}, error) {
 	ctx := context.Background()
-	messages, err := p.GetMessages(ctx, p.maxHistoryMessages)
+	p.mu.RLock()
+	maxHistoryMessages := p.maxHistoryMessages
+	p.mu.RUnlock()
+	messages, err := p.GetMessages(ctx, maxHistoryMessages)
 	if err != nil {
 		return nil, err
 	}
@@ -145,30 +167,38 @@ func (p *MongoDBMemoryProvider) Clear() error {
 
 func (p *MongoDBMemoryProvider) GetChatHistory() ([]types.Message, error) {
 	ctx := context.Background()
-	return p.GetMessages(ctx, p.maxHistoryMessages)
+	p.mu.RLock()
+	maxHistoryMessages := p.maxHistoryMessages
+	p.mu.RUnlock()
+	return p.GetMessages(ctx, maxHistoryMessages)
 }
 
 func (p *MongoDBMemoryProvider) trimHistory(ctx context.Context) error {
-	if p.maxHistoryMessages <= 0 {
+	p.mu.RLock()
+	maxHistoryMessages := p.maxHistoryMessages
+	sessionID := p.sessionID
+	p.mu.RUnlock()
+
+	if maxHistoryMessages <= 0 {
 		return nil
 	}
 
-	filter := bson.M{"session_id": p.sessionID}
+	filter := bson.M{"session_id": sessionID}
 	sort := []string{"created_at"}
 	var docs []MessageDocument
-	totalCount, err := p.getCollection().QueryByPaging(ctx, filter, sort, 1, int64(p.maxHistoryMessages), &docs)
+	totalCount, err := p.getCollection().QueryByPaging(ctx, filter, sort, 1, int64(maxHistoryMessages), &docs)
 	if err != nil {
 		return err
 	}
 
-	if totalCount <= int64(p.maxHistoryMessages) {
+	if totalCount <= int64(maxHistoryMessages) {
 		return nil
 	}
 
 	if len(docs) > 0 {
 		oldestKeptDoc := docs[0]
 		deleteFilter := bson.M{
-			"session_id": p.sessionID,
+			"session_id": sessionID,
 			"created_at": bson.M{"$lt": oldestKeptDoc.CreatedAt},
 		}
 		return p.getCollection().DeleteAll(ctx, deleteFilter)
