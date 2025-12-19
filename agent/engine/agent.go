@@ -577,9 +577,19 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 			tool, exists := ae.toolsMap[toolCall.Function.Name]
 			ae.mu.RUnlock()
 			if !exists {
+				errMsg := fmt.Sprintf("tool '%s' not found in available tools", toolCall.Function.Name)
 				ae.logger.Info("Tool not found",
 					slog.String("tool_name", toolCall.Function.Name),
 					slog.Int("iteration", iteration+1))
+				intermediateSteps = append(intermediateSteps, types.ToolCallData{
+					Action: types.ToolActionStep{
+						Tool:       toolCall.Function.Name,
+						ToolInput:  toolCall.Function.Arguments,
+						ToolCallID: toolCall.ID,
+						Type:       toolCall.Type,
+					},
+					Observation: errMsg,
+				})
 				continue
 			}
 
@@ -594,7 +604,10 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 				duration := time.Since(toolStartTime)
 
 				if err != nil {
-					ae.logger.LogToolExecution(toolCall.Function.Name, false, duration, slog.String("error", err.Error()))
+					errMsg := fmt.Sprintf("Tool '%s' execution failed: %v", toolCall.Function.Name, err)
+					ae.logger.LogToolExecution(toolCall.Function.Name, false, duration,
+						slog.String("error", err.Error()),
+						slog.String("tool_input", fmt.Sprintf("%v", toolCall.Function.Arguments)))
 					intermediateSteps = append(intermediateSteps, types.ToolCallData{
 						Action: types.ToolActionStep{
 							Tool:       toolCall.Function.Name,
@@ -602,7 +615,7 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 							ToolCallID: toolCall.ID,
 							Type:       toolCall.Type,
 						},
-						Observation: fmt.Sprintf("Tool execution failed: %v", err),
+						Observation: errMsg,
 					})
 					continue
 				}
@@ -623,6 +636,14 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 				Type:       toolCall.Type,
 			})
 
+			// Format observation from tool result
+			var observation string
+			if toolResult == nil {
+				observation = "Tool executed successfully but returned no result"
+			} else {
+				observation = truncateString(fmt.Sprintf("%v", toolResult), MaxTruncationLength)
+			}
+
 			intermediateSteps = append(intermediateSteps, types.ToolCallData{
 				Action: types.ToolActionStep{
 					Tool:       toolCall.Function.Name,
@@ -630,7 +651,7 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 					ToolCallID: toolCall.ID,
 					Type:       toolCall.Type,
 				},
-				Observation: fmt.Sprintf("%v", toolResult),
+				Observation: observation,
 			})
 		}
 
@@ -698,7 +719,7 @@ func (ae *AgentEngine) buildNextMessages(previousMessages []types.Message, resul
 
 	// Build summary of tool execution results
 	var toolResults strings.Builder
-	if len(result.IntermediateSteps) > 0 {
+	if result != nil && len(result.IntermediateSteps) > 0 {
 		toolResults.WriteString("Based on previous tool execution results:\n")
 		for _, step := range result.IntermediateSteps {
 			toolResults.WriteString(fmt.Sprintf("- Tool %s returned: %s\n", step.Action.Tool, step.Observation))
@@ -945,8 +966,18 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 			tool, exists := ae.toolsMap[toolCall.Tool]
 			ae.mu.RUnlock()
 			if !exists {
-				ae.logger.LogError("executeStreamIteration", fmt.Errorf("tool not found"),
+				errMsg := fmt.Sprintf("tool '%s' not found in available tools", toolCall.Tool)
+				ae.logger.LogError("executeStreamIteration", fmt.Errorf("tool %q not found in available tools", toolCall.Tool),
 					slog.String("tool_name", toolCall.Tool))
+				intermediateSteps = append(intermediateSteps, types.ToolCallData{
+					Action: types.ToolActionStep{
+						Tool:       toolCall.Tool,
+						ToolInput:  toolCall.ToolInput,
+						ToolCallID: toolCall.ToolCallID,
+						Type:       toolCall.Type,
+					},
+					Observation: errMsg,
+				})
 				continue
 			}
 
@@ -961,9 +992,22 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 				duration := time.Since(toolStartTime)
 
 				if err != nil {
-					ae.logger.LogToolExecution(toolCall.Tool, false, duration, slog.String("error", err.Error()), slog.String("context", "streaming"))
+					errMsg := fmt.Sprintf("Tool '%s' execution failed: %v", toolCall.Tool, err)
+					ae.logger.LogToolExecution(toolCall.Tool, false, duration,
+						slog.String("error", err.Error()),
+						slog.String("tool_input", fmt.Sprintf("%v", toolCall.ToolInput)),
+						slog.String("context", "streaming"))
 					toolErrors = append(toolErrors, err)
 					toolResults = append(toolResults, nil)
+					intermediateSteps = append(intermediateSteps, types.ToolCallData{
+						Action: types.ToolActionStep{
+							Tool:       toolCall.Tool,
+							ToolInput:  toolCall.ToolInput,
+							ToolCallID: toolCall.ToolCallID,
+							Type:       toolCall.Type,
+						},
+						Observation: errMsg,
+					})
 					continue
 				}
 
@@ -972,13 +1016,17 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 				ae.logger.LogToolExecution(toolCall.Tool, true, duration, slog.Bool("cached", false), slog.String("context", "streaming"))
 			}
 
+			// At this point, tool execution succeeded (err == nil)
+			// If err != nil, we would have continued at line 1003
 			toolResults = append(toolResults, toolResult)
-			toolErrors = append(toolErrors, err)
+			toolErrors = append(toolErrors, nil) // err is nil here
 
-			// Use truncated result string
-			observation := truncateString(fmt.Sprintf("%v", toolResult), MaxTruncationLength)
-			if err != nil {
-				observation = fmt.Sprintf("Tool execution failed: %v", err)
+			// Format observation from tool result
+			var observation string
+			if toolResult == nil {
+				observation = "Tool executed successfully but returned no result"
+			} else {
+				observation = truncateString(fmt.Sprintf("%v", toolResult), MaxTruncationLength)
 			}
 
 			intermediateSteps = append(intermediateSteps, types.ToolCallData{
@@ -1009,6 +1057,8 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 
 // executeToolWithTimeout executes a tool with timeout control
 // Uses goroutine + channel to implement timeout without modifying Tool interface
+// Note: The goroutine will continue running after timeout, but will naturally complete
+// This is acceptable as the tool interface doesn't support context cancellation
 func (ae *AgentEngine) executeToolWithTimeout(tool types.Tool, args map[string]interface{}, timeout time.Duration) (interface{}, error) {
 	if timeout <= 0 {
 		// No timeout, execute directly
@@ -1021,15 +1071,35 @@ func (ae *AgentEngine) executeToolWithTimeout(tool types.Tool, args map[string]i
 	}
 
 	resultChan := make(chan result, 1)
+	// Use buffered channel to prevent goroutine leak if timeout occurs
 	go func() {
-		value, err := tool.Execute(args)
-		resultChan <- result{value: value, err: err}
+		var value interface{}
+		var err error
+
+		defer func() {
+			// Recover from any panic in tool execution
+			if r := recover(); r != nil {
+				err = fmt.Errorf("tool execution panic: %v", r)
+				value = nil
+			}
+			// Non-blocking send (buffered channel)
+			// This ensures we always try to send the result, even if timeout occurred
+			select {
+			case resultChan <- result{value: value, err: err}:
+			default:
+				// Channel already closed or receiver gone (timeout occurred), ignore
+			}
+		}()
+
+		value, err = tool.Execute(args)
 	}()
 
 	select {
 	case res := <-resultChan:
 		return res.value, res.err
 	case <-time.After(timeout):
+		// Timeout occurred, but goroutine will continue and complete naturally
+		// This is acceptable since tool interface doesn't support cancellation
 		return nil, errors.EC_TOOL_EXECUTION_TIMEOUT.Wrap(fmt.Errorf("tool execution timeout after %v", timeout))
 	}
 }
@@ -1038,6 +1108,7 @@ func (ae *AgentEngine) executeToolWithTimeout(tool types.Tool, args map[string]i
 
 // generateToolCacheKey generates a tool cache key
 // Generates a unique cache key based on tool name and parameters
+// Uses tool name prefix to reduce collision probability
 // Parameters:
 //   - toolName: tool name
 //   - args: tool parameters
@@ -1046,16 +1117,21 @@ func (ae *AgentEngine) executeToolWithTimeout(tool types.Tool, args map[string]i
 //   - cache key string
 func generateToolCacheKey(toolName string, args map[string]interface{}) string {
 	hasher := md5.New()
-	hasher.Write([]byte(toolName))
+	// Include tool name in hash to reduce collision probability
+	hasher.Write([]byte("tool:" + toolName + ":"))
 
 	if len(args) > 0 {
 		argsJSON, err := json.Marshal(args)
-		if err == nil {
+		if err != nil {
+			// If marshaling fails, use a fallback to ensure cache key uniqueness
+			// This prevents cache collisions when args contain non-marshalable types
+			hasher.Write([]byte(fmt.Sprintf("fallback:%v", args)))
+		} else {
 			hasher.Write(argsJSON)
 		}
 	}
 
-	return hex.EncodeToString(hasher.Sum(nil))
+	return toolName + ":" + hex.EncodeToString(hasher.Sum(nil))
 }
 
 // getCachedToolResult gets cached tool result
@@ -1069,23 +1145,20 @@ func generateToolCacheKey(toolName string, args map[string]interface{}) string {
 //   - execution error (if any)
 //   - whether cache was found
 func (ae *AgentEngine) getCachedToolResult(toolName string, args map[string]interface{}) (interface{}, error, bool) {
-	ae.mu.RLock()
-	enableToolRetry := false
-	if ae.config != nil {
-		enableToolRetry = ae.config.EnableToolRetry
-	}
-	ae.mu.RUnlock()
-	if !enableToolRetry {
-		return nil, nil, false
-	}
-
 	// Use read-write lock to improve concurrent performance
 	ae.toolCacheMu.RLock()
-	entry, exists := ae.toolCache[generateToolCacheKey(toolName, args)]
+	cacheKey := generateToolCacheKey(toolName, args)
+	entry, exists := ae.toolCache[cacheKey]
 	ae.toolCacheMu.RUnlock()
 
-	if exists && time.Since(entry.timestamp) < CacheExpirationTime {
-		return entry.result, entry.err, true
+	if exists {
+		if time.Since(entry.timestamp) < CacheExpirationTime {
+			return entry.result, entry.err, true
+		}
+		// Entry expired, remove it to free up cache space
+		ae.toolCacheMu.Lock()
+		delete(ae.toolCache, cacheKey)
+		ae.toolCacheMu.Unlock()
 	}
 	return nil, nil, false
 }
@@ -1098,16 +1171,6 @@ func (ae *AgentEngine) getCachedToolResult(toolName string, args map[string]inte
 //   - result: tool execution result
 //   - err: execution error (if any)
 func (ae *AgentEngine) setCachedToolResult(toolName string, args map[string]interface{}, result interface{}, err error) {
-	ae.mu.RLock()
-	enableToolRetry := false
-	if ae.config != nil {
-		enableToolRetry = ae.config.EnableToolRetry
-	}
-	ae.mu.RUnlock()
-	if !enableToolRetry {
-		return
-	}
-
 	cacheKey := generateToolCacheKey(toolName, args)
 
 	ae.toolCacheMu.Lock()
@@ -1116,20 +1179,14 @@ func (ae *AgentEngine) setCachedToolResult(toolName string, args map[string]inte
 	// Simple LRU strategy: if cache is full, remove expired entries first, then oldest entry
 	if len(ae.toolCache) >= ae.toolCacheSize {
 		now := time.Now()
-		expiredKeys := make([]string, 0, len(ae.toolCache)/4)
+		expiredKeys := make([]string, 0)
 		var oldestKey string
 		var oldestTime time.Time
-		removedCount := 0
-		maxRemovals := len(ae.toolCache) / 4
 
-		// First pass: collect expired entries and find oldest (limit iterations)
+		// First pass: collect all expired entries and find oldest non-expired entry
 		for key, entry := range ae.toolCache {
-			if removedCount >= maxRemovals {
-				break
-			}
 			if now.Sub(entry.timestamp) >= CacheExpirationTime {
 				expiredKeys = append(expiredKeys, key)
-				removedCount++
 			} else if oldestKey == "" || entry.timestamp.Before(oldestTime) {
 				oldestKey = key
 				oldestTime = entry.timestamp
@@ -1141,9 +1198,18 @@ func (ae *AgentEngine) setCachedToolResult(toolName string, args map[string]inte
 			delete(ae.toolCache, key)
 		}
 
-		// If still full after removing expired, remove oldest
-		if len(ae.toolCache) >= ae.toolCacheSize && oldestKey != "" {
+		// If still full after removing expired, remove oldest non-expired entry
+		// Continue removing until we have space for the new entry
+		for len(ae.toolCache) >= ae.toolCacheSize && oldestKey != "" {
 			delete(ae.toolCache, oldestKey)
+			// Find next oldest entry
+			oldestKey = ""
+			for key, entry := range ae.toolCache {
+				if oldestKey == "" || entry.timestamp.Before(oldestTime) {
+					oldestKey = key
+					oldestTime = entry.timestamp
+				}
+			}
 		}
 	}
 
