@@ -187,17 +187,38 @@ func (p *RedisMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages 
 		return fmt.Errorf("LLM provider is required for memory compression")
 	}
 
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	ctx := context.Background()
-	messages, err := p.GetChatHistory()
+	key := p.keyPrefix + ":" + p.sessionID
+	results, err := p.client.LRange(ctx, key, 0, 9999).Result()
 	if err != nil {
 		return err
+	}
+
+	messages := make([]types.Message, 0, len(results))
+	for i := len(results) - 1; i >= 0; i-- {
+		var msgData map[string]interface{}
+		if err := json.Unmarshal([]byte(results[i]), &msgData); err != nil {
+			continue
+		}
+
+		role, _ := msgData["role"].(string)
+		content, _ := msgData["content"].(string)
+		name, _ := msgData["name"].(string)
+
+		messages = append(messages, types.Message{
+			Role:    role,
+			Content: content,
+			Name:    name,
+		})
 	}
 
 	if len(messages) <= maxMessages {
 		return nil
 	}
 
-	// Keep system messages and recent messages
 	systemMessages := make([]types.Message, 0)
 	recentMessages := make([]types.Message, 0)
 	oldMessages := make([]types.Message, 0)
@@ -216,7 +237,6 @@ func (p *RedisMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages 
 		return nil
 	}
 
-	// Generate summary of old messages
 	summaryPrompt := "Please provide a concise summary of the following conversation history, preserving key information and context:\n\n"
 	for _, msg := range oldMessages {
 		summaryPrompt += fmt.Sprintf("%s: %s\n", msg.Role, msg.Content)
@@ -236,7 +256,6 @@ func (p *RedisMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages 
 		return fmt.Errorf("failed to generate memory summary: %w", err)
 	}
 
-	// Prepare compressed messages
 	compressedMessages := make([]types.Message, 0, len(systemMessages)+1+len(recentMessages))
 	compressedMessages = append(compressedMessages, systemMessages...)
 	compressedMessages = append(compressedMessages, types.Message{
@@ -245,11 +264,8 @@ func (p *RedisMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages 
 	})
 	compressedMessages = append(compressedMessages, recentMessages...)
 
-	// Use temporary key for atomic replacement
-	tempKey := p.getKey() + ":temp:" + fmt.Sprintf("%d", time.Now().UnixNano())
-	key := p.getKey()
+	tempKey := key + ":temp:" + fmt.Sprintf("%d", time.Now().UnixNano())
 
-	// Insert compressed messages to temporary key first
 	for i := len(compressedMessages) - 1; i >= 0; i-- {
 		msg := compressedMessages[i]
 		msgData := map[string]interface{}{
@@ -260,37 +276,28 @@ func (p *RedisMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages 
 		}
 		msgJSON, err := json.Marshal(msgData)
 		if err != nil {
-			// Clean up temp key on error
 			p.client.Del(ctx, tempKey)
 			return fmt.Errorf("failed to marshal message: %w", err)
 		}
 		if err := p.client.LPush(ctx, tempKey, msgJSON).Err(); err != nil {
-			// Clean up temp key on error
 			p.client.Del(ctx, tempKey)
 			return fmt.Errorf("failed to insert compressed message to temp key: %w", err)
 		}
 	}
 
-	// Verify temp key has correct number of messages
 	tempCount, err := p.client.LLen(ctx, tempKey).Result()
 	if err != nil || tempCount != int64(len(compressedMessages)) {
-		// Clean up temp key on verification failure
 		p.client.Del(ctx, tempKey)
 		return fmt.Errorf("failed to verify compressed messages in temp key")
 	}
 
-	// Atomically replace old key with temp key using RENAME
-	// This is atomic in Redis - either succeeds or fails, no partial state
 	if err := p.client.Rename(ctx, tempKey, key).Err(); err != nil {
-		// If rename fails, clean up temp key
 		p.client.Del(ctx, tempKey)
 		return fmt.Errorf("failed to atomically replace messages: %w", err)
 	}
 
-	// Apply max history limit if needed
 	if p.maxHistoryMessages > 0 {
-		if err := p.trimHistory(ctx); err != nil {
-			// Log but don't fail - data is already compressed
+		if err := p.client.LTrim(ctx, key, 0, int64(p.maxHistoryMessages-1)).Err(); err != nil {
 			return fmt.Errorf("failed to trim history after compression: %w", err)
 		}
 	}
