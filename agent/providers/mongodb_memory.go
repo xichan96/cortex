@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -202,6 +203,91 @@ func (p *MongoDBMemoryProvider) trimHistory(ctx context.Context) error {
 			"created_at": bson.M{"$lt": oldestKeptDoc.CreatedAt},
 		}
 		return p.getCollection().DeleteAll(ctx, deleteFilter)
+	}
+
+	return nil
+}
+
+// CompressMemory compresses old messages into a summary (implements MemoryProvider interface)
+func (p *MongoDBMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages int) error {
+	if llm == nil {
+		return fmt.Errorf("LLM provider is required for memory compression")
+	}
+
+	ctx := context.Background()
+	messages, err := p.GetChatHistory()
+	if err != nil {
+		return err
+	}
+
+	if len(messages) <= maxMessages {
+		return nil
+	}
+
+	// Keep system messages and recent messages
+	systemMessages := make([]types.Message, 0)
+	recentMessages := make([]types.Message, 0)
+	oldMessages := make([]types.Message, 0)
+
+	for i, msg := range messages {
+		if msg.Role == "system" {
+			systemMessages = append(systemMessages, msg)
+		} else if i < len(messages)-maxMessages {
+			oldMessages = append(oldMessages, msg)
+		} else {
+			recentMessages = append(recentMessages, msg)
+		}
+	}
+
+	if len(oldMessages) == 0 {
+		return nil
+	}
+
+	// Generate summary of old messages
+	summaryPrompt := "Please provide a concise summary of the following conversation history, preserving key information and context:\n\n"
+	for _, msg := range oldMessages {
+		summaryPrompt += fmt.Sprintf("%s: %s\n", msg.Role, msg.Content)
+	}
+
+	summaryMsg, err := llm.Chat([]types.Message{
+		{
+			Role:    "system",
+			Content: "You are a helpful assistant that summarizes conversation history while preserving important context and key information.",
+		},
+		{
+			Role:    "user",
+			Content: summaryPrompt,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to generate memory summary: %w", err)
+	}
+
+	// Clear and reinsert compressed messages
+	if err := p.Clear(); err != nil {
+		return err
+	}
+
+	// Reinsert system messages and summary
+	for _, msg := range systemMessages {
+		if err := p.AddMessage(ctx, msg); err != nil {
+			return err
+		}
+	}
+
+	// Add summary as system message
+	if err := p.AddMessage(ctx, types.Message{
+		Role:    "system",
+		Content: fmt.Sprintf("Previous conversation summary: %s", summaryMsg.Content),
+	}); err != nil {
+		return err
+	}
+
+	// Reinsert recent messages
+	for _, msg := range recentMessages {
+		if err := p.AddMessage(ctx, msg); err != nil {
+			return err
+		}
 	}
 
 	return nil

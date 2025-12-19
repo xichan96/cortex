@@ -96,6 +96,9 @@ type MemoryProvider interface {
 
 	// Get chat history
 	GetChatHistory() ([]Message, error)
+
+	// Compress memory (optional, for memory compression)
+	CompressMemory(llm LLMProvider, maxMessages int) error
 }
 
 // OutputParser output parser interface

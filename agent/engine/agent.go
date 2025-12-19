@@ -319,6 +319,30 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 		if err := ae.memory.SaveContext(inputMap, outputMap); err != nil {
 			ae.logger.LogError("Execute", err, slog.String("phase", "save_context"))
 			// Do not interrupt execution as main flow is complete
+		} else {
+			// Check if memory compression is needed
+			ae.mu.RLock()
+			enableCompress := ae.config.EnableMemoryCompress
+			compressThreshold := ae.config.MemoryCompressThreshold
+			ae.mu.RUnlock()
+
+			if enableCompress && compressThreshold > 0 {
+				history, err := ae.memory.GetChatHistory()
+				if err == nil && len(history) > compressThreshold {
+					ae.mu.RLock()
+					llm := ae.model
+					ae.mu.RUnlock()
+					if llm != nil {
+						if err := ae.memory.CompressMemory(llm, compressThreshold); err != nil {
+							ae.logger.LogError("Execute", err, slog.String("phase", "compress_memory"))
+						} else {
+							ae.logger.Info("Memory compressed successfully",
+								slog.Int("original_count", len(history)),
+								slog.Int("threshold", compressThreshold))
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -731,6 +755,30 @@ func (ae *AgentEngine) executeStreamWithIterations(initialMessages []types.Messa
 		if err := ae.memory.SaveContext(input, output); err != nil {
 			ae.logger.LogError("executeStreamWithIterations", err, slog.String("phase", "save_context"))
 			// Do not interrupt execution as main flow is complete
+		} else {
+			// Check if memory compression is needed
+			ae.mu.RLock()
+			enableCompress := ae.config.EnableMemoryCompress
+			compressThreshold := ae.config.MemoryCompressThreshold
+			ae.mu.RUnlock()
+
+			if enableCompress && compressThreshold > 0 {
+				history, err := ae.memory.GetChatHistory()
+				if err == nil && len(history) > compressThreshold {
+					ae.mu.RLock()
+					llm := ae.model
+					ae.mu.RUnlock()
+					if llm != nil {
+						if err := ae.memory.CompressMemory(llm, compressThreshold); err != nil {
+							ae.logger.LogError("executeStreamWithIterations", err, slog.String("phase", "compress_memory"))
+						} else {
+							ae.logger.Info("Memory compressed successfully",
+								slog.Int("original_count", len(history)),
+								slog.Int("threshold", compressThreshold))
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -1054,8 +1102,8 @@ func (ae *AgentEngine) sortToolCallsByDependencies(toolCalls []types.ToolCall) (
 	ae.mu.RUnlock()
 
 	// Build dependency graph and priority map
-	dependencyGraph := make(map[string][]string) // tool -> dependencies
-	priorityMap := make(map[string]int)         // tool -> priority
+	dependencyGraph := make(map[string][]string)   // tool -> dependencies
+	priorityMap := make(map[string]int)            // tool -> priority
 	toolCallMap := make(map[string]types.ToolCall) // tool name -> tool call
 
 	for _, tc := range toolCalls {
