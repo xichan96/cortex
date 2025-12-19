@@ -32,7 +32,7 @@ CORTEX 实现的功能类似于 n8n 的 AI Agent，但采用了轻量级设计�
 ## 特性与状态
 
 - **智能代理引擎**：用于创建具有高级工具调用能力的 AI 代理的核心功能。
-- **LLM 集成**：无缝支持 OpenAI、DeepSeek 和自定义 LLM 提供商。
+- **LLM 集成**：无缝支持 OpenAI、DeepSeek、Volce（火山引擎）和自定义 LLM 提供商。
 - **多模态支持**：轻松处理文本、图像和其他媒体格式。
 - **工具生态系统**：可扩展的工具系统，内置 MCP 和 HTTP 客户端。
 - **流式传输支持**：为交互式应用程序提供实时响应流式传输。
@@ -83,7 +83,6 @@ go get github.com/xichan96/cortex
 package main
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -177,7 +176,7 @@ Agent 模块是 Cortex 框架的核心，提供智能和工具集成功能。
 
 ### LLM 提供商集成
 
-Cortex 支持 OpenAI、DeepSeek 和自定义 LLM 提供商，具有灵活的配置选项：
+Cortex 支持 OpenAI、DeepSeek、Volce（火山引擎）和自定义 LLM 提供商，具有灵活的配置选项：
 
 ```go
 // OpenAI 默认配置
@@ -187,7 +186,13 @@ llmProvider, err := llm.OpenAIClient("your-api-key", "gpt-4o-mini")
 llmProvider, err := llm.OpenAIClientWithBaseURL("your-api-key", "https://custom-api.example.com", "custom-model")
 
 // DeepSeek 集成
-llmProvider, err := llm.DeepSeekClient("your-api-key", "deepseek-chat")
+llmProvider, err := llm.QuickDeepSeekProvider("your-api-key", "deepseek-chat")
+
+// Volce（火山引擎）集成
+llmProvider, err := llm.VolceClient("your-api-key", "doubao-seed-1-6-251015")
+
+// Volce 自定义基础 URL
+llmProvider, err := llm.VolceClientWithBaseURL("your-api-key", "https://ark.cn-beijing.volces.com/api/v3", "doubao-seed-1-6-251015")
 
 // 使用 OpenAI 的高级选项
 opts := llm.OpenAIOptions{
@@ -205,6 +210,14 @@ opts := llm.DeepSeekOptions{
 	Model:   "deepseek-chat",
 }
 llmProvider, err := llm.NewDeepSeekClient(opts)
+
+// 使用 Volce 的高级选项
+opts := llm.VolceOptions{
+	APIKey:  "your-api-key",
+	BaseURL: "https://ark.cn-beijing.volces.com/api/v3",
+	Model:   "doubao-seed-1-6-251015",
+}
+llmProvider, err := llm.NewVolceClient(opts)
 ```
 
 ### Agent 配置
@@ -278,25 +291,8 @@ for chunk := range stream {
 	fmt.Printf("%s", chunk.Content)
 }
 
-// 使用多模态输入执行（例如，文本 + 图像）
-messages := []types.Message{
-	{
-		Role: types.RoleUser,
-		Content: []types.ContentPart{
-			{
-				Type: "text",
-				Text: "这张图片里有什么？",
-			},
-			{
-				Type: "image_url",
-				ImageURL: map[string]interface{}{
-					"url": "https://example.com/image.jpg",
-				},
-			},
-		},
-	},
-}
-result, err := agentEngine.ExecuteWithMessages(messages, nil)
+// 注意：当前版本 Execute 方法仅支持文本输入
+// 多模态输入（如图像）功能正在开发中
 ```
 
 ### 内置工具集成
@@ -306,7 +302,7 @@ result, err := agentEngine.ExecuteWithMessages(messages, nil)
 利用对 MCP（模型控制协议）工具的内置支持：
 
 ```go
-import "github.com/xichan96/cortex/agent/tools/mcp"
+import "github.com/xichan96/cortex/pkg/mcp"
 
 // 创建 MCP 客户端
 mcpClient := mcp.NewClient("https://api.example.com/mcp/sse", "http", map[string]string{
@@ -325,21 +321,6 @@ agentEngine.AddTools(mcpTools)
 
 // 完成后不要忘记断开连接
 defer mcpClient.Disconnect(ctx)
-```
-
-#### HTTP 客户端工具
-
-使用集成的 HTTP 客户端工具发出 API 请求：
-
-```go
-import "github.com/xichan96/cortex/agent/tools/http"
-
-// 创建 HTTP 客户端
-httpClient := http.NewClient()
-
-// 将 HTTP 工具添加到代理
-httpTools := httpClient.GetTools()
-agentEngine.AddTools(httpTools)
 ```
 
 #### 内建工具
@@ -426,6 +407,74 @@ agentEngine.AddTool(emailTool)
 - `subject`: 邮件主题（必需）
 - `type`: 内容类型，支持 `text/html`、`text/plain`、`text/markdown`（必需）
 - `message`: 邮件内容（必需）
+
+##### 命令工具
+
+在本地执行 shell 命令并返回输出，支持超时配置：
+
+```go
+import "github.com/xichan96/cortex/agent/tools/builtin"
+
+// 创建命令工具
+commandTool := builtin.NewCommandTool()
+agentEngine.AddTool(commandTool)
+```
+
+命令工具支持以下参数：
+- `command`: 要执行的命令（必需）
+- `timeout`: 命令执行超时时间（秒，默认：30）
+
+##### 数学计算工具
+
+执行数学计算，支持基本运算、高级运算和三角函数：
+
+```go
+import "github.com/xichan96/cortex/agent/tools/builtin"
+
+// 创建数学工具
+mathTool := builtin.NewMathTool()
+agentEngine.AddTool(mathTool)
+```
+
+数学工具支持以下参数：
+- `expression`: 数学表达式（必需），支持：
+  - 基本运算：`+`, `-`, `*`, `/`, `%`
+  - 高级运算：`^`（幂运算）, `√` 或 `sqrt`（开方）, `!`（阶乘）
+  - 三角函数：`sin`, `cos`, `tan`, `asin`/`arcsin`, `acos`/`arccos`, `atan`/`arctan`
+  - 对数函数：`ln`, `log`/`log10`, `exp`
+  - 其他函数：`abs`, `floor`, `ceil`, `round`
+- `use_degrees`: 是否使用角度制（默认：false，使用弧度制）
+
+##### 时间工具
+
+获取指定时区的当前时间：
+
+```go
+import "github.com/xichan96/cortex/agent/tools/builtin"
+
+// 创建时间工具
+timeTool := builtin.NewTimeTool()
+agentEngine.AddTool(timeTool)
+```
+
+时间工具支持以下参数：
+- `timezone`: 时区名称（可选，默认：`Asia/Hong_Kong`），例如：`Asia/Hong_Kong`、`America/New_York`、`UTC`
+
+##### 网络检查工具
+
+检查到远程主机的网络连通性：
+
+```go
+import "github.com/xichan96/cortex/agent/tools/builtin"
+
+// 创建网络检查工具
+pingTool := builtin.NewPingTool()
+agentEngine.AddTool(pingTool)
+```
+
+网络检查工具支持以下参数：
+- `address`: 目标地址，格式为 `host:port`（必需），例如：`example.com:80` 或 `192.168.1.1:22`
+- `timeout`: 连接超时时间（秒，默认：5）
 
 ### 触发器模块
 
