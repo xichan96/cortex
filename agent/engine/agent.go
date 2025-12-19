@@ -77,12 +77,16 @@ type AgentEngine struct {
 // NewAgentEngine creates a new agent engine
 // Parameters:
 //   - model: LLM model provider
-//   - config: agent configuration
+//   - config: agent configuration (if nil, uses default configuration)
 //
 // Returns:
 //   - initialized AgentEngine instance
 func NewAgentEngine(model types.LLMProvider, config *types.AgentConfig) *AgentEngine {
 	ctx, cancel := context.WithCancel(context.Background())
+
+	if config == nil {
+		config = types.NewAgentConfig()
+	}
 
 	return &AgentEngine{
 		model:         model,
@@ -128,6 +132,9 @@ func (ae *AgentEngine) SetOutputParser(parser types.OutputParser) {
 func (ae *AgentEngine) setConfigValue(updateFunc func()) {
 	ae.mu.Lock()
 	defer ae.mu.Unlock()
+	if ae.config == nil {
+		ae.config = types.NewAgentConfig()
+	}
 	updateFunc()
 }
 
@@ -266,7 +273,10 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 	var finalResult *AgentResult
 	iteration := 0
 	ae.mu.RLock()
-	maxIterations := ae.config.MaxIterations
+	maxIterations := 10
+	if ae.config != nil {
+		maxIterations = ae.config.MaxIterations
+	}
 	ae.mu.RUnlock()
 
 	// Iterate until no tool calls or maximum iterations reached
@@ -322,8 +332,12 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 		} else {
 			// Check if memory compression is needed
 			ae.mu.RLock()
-			enableCompress := ae.config.EnableMemoryCompress
-			compressThreshold := ae.config.MemoryCompressThreshold
+			enableCompress := false
+			compressThreshold := 0
+			if ae.config != nil {
+				enableCompress = ae.config.EnableMemoryCompress
+				compressThreshold = ae.config.MemoryCompressThreshold
+			}
 			ae.mu.RUnlock()
 
 			if enableCompress && compressThreshold > 0 {
@@ -488,23 +502,22 @@ func (ae *AgentEngine) buildContextFromPreviousRequests(requests []types.ToolCal
 //   - error information
 func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int) (*AgentResult, bool, error) {
 	ae.mu.RLock()
-	maxIterations := ae.config.MaxIterations
-	ae.mu.RUnlock()
-	startTime := time.Now()
-	ae.logger.LogExecution("executeIteration", iteration, fmt.Sprintf("Starting iteration %d/%d", iteration+1, maxIterations))
-
-	ae.mu.RLock()
+	maxIterations := 10
+	timeout := time.Duration(0)
+	if ae.config != nil {
+		maxIterations = ae.config.MaxIterations
+		timeout = ae.config.Timeout
+	}
 	tools := ae.tools
 	ctx := ae.ctx
 	ae.mu.RUnlock()
+	startTime := time.Now()
+	ae.logger.LogExecution("executeIteration", iteration, fmt.Sprintf("Starting iteration %d/%d", iteration+1, maxIterations))
 
 	// Create context with timeout if configured
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ae.mu.RLock()
-	timeout := ae.config.Timeout
-	ae.mu.RUnlock()
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -703,7 +716,10 @@ func (ae *AgentEngine) executeStreamWithIterations(initialMessages []types.Messa
 	finalResult := &AgentResult{}
 
 	ae.mu.RLock()
-	maxIterations := ae.config.MaxIterations
+	maxIterations := 10
+	if ae.config != nil {
+		maxIterations = ae.config.MaxIterations
+	}
 	ae.mu.RUnlock()
 
 	estimatedToolCalls := maxIterations * 3
@@ -758,8 +774,12 @@ func (ae *AgentEngine) executeStreamWithIterations(initialMessages []types.Messa
 		} else {
 			// Check if memory compression is needed
 			ae.mu.RLock()
-			enableCompress := ae.config.EnableMemoryCompress
-			compressThreshold := ae.config.MemoryCompressThreshold
+			enableCompress := false
+			compressThreshold := 0
+			if ae.config != nil {
+				enableCompress = ae.config.EnableMemoryCompress
+				compressThreshold = ae.config.MemoryCompressThreshold
+			}
 			ae.mu.RUnlock()
 
 			if enableCompress && compressThreshold > 0 {
@@ -812,7 +832,12 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 
 	ae.mu.RLock()
 	tools := ae.tools
-	maxIterations := ae.config.MaxIterations
+	maxIterations := 10
+	timeout := time.Duration(0)
+	if ae.config != nil {
+		maxIterations = ae.config.MaxIterations
+		timeout = ae.config.Timeout
+	}
 	ctx := ae.ctx
 	ae.mu.RUnlock()
 
@@ -820,9 +845,6 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ae.mu.RLock()
-	timeout := ae.config.Timeout
-	ae.mu.RUnlock()
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -1007,7 +1029,10 @@ func generateToolCacheKey(toolName string, args map[string]interface{}) string {
 //   - whether cache was found
 func (ae *AgentEngine) getCachedToolResult(toolName string, args map[string]interface{}) (interface{}, error, bool) {
 	ae.mu.RLock()
-	enableToolRetry := ae.config.EnableToolRetry
+	enableToolRetry := false
+	if ae.config != nil {
+		enableToolRetry = ae.config.EnableToolRetry
+	}
 	ae.mu.RUnlock()
 	if !enableToolRetry {
 		return nil, nil, false
@@ -1033,7 +1058,10 @@ func (ae *AgentEngine) getCachedToolResult(toolName string, args map[string]inte
 //   - err: execution error (if any)
 func (ae *AgentEngine) setCachedToolResult(toolName string, args map[string]interface{}, result interface{}, err error) {
 	ae.mu.RLock()
-	enableToolRetry := ae.config.EnableToolRetry
+	enableToolRetry := false
+	if ae.config != nil {
+		enableToolRetry = ae.config.EnableToolRetry
+	}
 	ae.mu.RUnlock()
 	if !enableToolRetry {
 		return
