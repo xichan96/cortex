@@ -1,6 +1,8 @@
 package app
 
 import (
+	"log/slog"
+
 	"github.com/xichan96/cortex/agent/providers"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/mongodb"
@@ -38,6 +40,9 @@ func (a *agent) initRedisMemory(sessionID string, maxHistory int) types.MemoryPr
 
 	client, err := redis.NewClient(redisCfg)
 	if err != nil {
+		a.logger.LogError("initRedisMemory", err,
+			slog.String("fallback", "simple_memory"),
+			slog.String("session_id", sessionID))
 		return providers.NewSimpleMemoryProviderWithLimit(maxHistory)
 	}
 
@@ -69,6 +74,9 @@ func (a *agent) initMongoDBMemory(sessionID string, maxHistory int) types.Memory
 
 	client, err := mongodb.NewClient(opts...)
 	if err != nil {
+		a.logger.LogError("initMongoDBMemory", err,
+			slog.String("fallback", "simple_memory"),
+			slog.String("session_id", sessionID))
 		return providers.NewSimpleMemoryProviderWithLimit(maxHistory)
 	}
 
