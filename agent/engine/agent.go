@@ -213,7 +213,11 @@ func (ae *AgentEngine) SetEnableToolRetry(enable bool) {
 func (ae *AgentEngine) SetConfig(config *types.AgentConfig) {
 	ae.mu.Lock()
 	defer ae.mu.Unlock()
-	ae.config = config
+	if config == nil {
+		ae.config = types.NewAgentConfig()
+	} else {
+		ae.config = config
+	}
 }
 
 // AddTool adds a tool
@@ -534,6 +538,10 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 		defer cancel()
 	}
 
+	if ae.model == nil {
+		return nil, false, errors.NewError(errors.EC_LLM_CALL_FAILED.Code, "LLM model provider is nil")
+	}
+
 	response, err := ae.model.ChatWithTools(messages, tools)
 	if err != nil {
 		ae.logger.LogError("executeIteration", err, slog.Int("iteration", iteration))
@@ -598,6 +606,22 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 			toolResult, err, cached := ae.getCachedToolResult(toolCall.Function.Name, toolCall.Function.Arguments)
 			if cached {
 				ae.logger.LogToolExecution(toolCall.Function.Name, true, 0, slog.Bool("cached", true))
+				if err != nil {
+					errMsg := fmt.Sprintf("Tool '%s' execution failed (cached error): %v", toolCall.Function.Name, err)
+					ae.logger.LogToolExecution(toolCall.Function.Name, false, 0,
+						slog.String("error", err.Error()),
+						slog.Bool("cached", true))
+					intermediateSteps = append(intermediateSteps, types.ToolCallData{
+						Action: types.ToolActionStep{
+							Tool:       toolCall.Function.Name,
+							ToolInput:  toolCall.Function.Arguments,
+							ToolCallID: toolCall.ID,
+							Type:       toolCall.Type,
+						},
+						Observation: errMsg,
+					})
+					continue
+				}
 			} else {
 				// Execute tool with timeout
 				toolResult, err = ae.executeToolWithTimeout(tool, toolCall.Function.Arguments, toolExecutionTimeout)
@@ -880,6 +904,10 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 		defer cancel()
 	}
 
+	if ae.model == nil {
+		return nil, false, errors.NewError(errors.EC_STREAM_CHAT_FAILED.Code, "LLM model provider is nil")
+	}
+
 	stream, err := ae.model.ChatWithToolsStream(messages, tools)
 	if err != nil {
 		return nil, false, errors.NewError(errors.EC_STREAM_CHAT_FAILED.Code, "failed to chat with tools stream").Wrap(err)
@@ -950,10 +978,6 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 			})
 		}
 
-		// Pre-allocate result slices
-		toolResults := make([]interface{}, 0, len(sortedToolCallRequests))
-		toolErrors := make([]error, 0, len(sortedToolCallRequests))
-
 		for _, toolCall := range sortedToolCallRequests {
 			ae.logger.LogExecution("executeStreamIteration", iteration, "Executing tool",
 				slog.String("tool_name", toolCall.Tool))
@@ -982,6 +1006,23 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 			toolResult, err, cached := ae.getCachedToolResult(toolCall.Tool, toolCall.ToolInput)
 			if cached {
 				ae.logger.LogToolExecution(toolCall.Tool, true, 0, slog.Bool("cached", true), slog.String("context", "streaming"))
+				if err != nil {
+					errMsg := fmt.Sprintf("Tool '%s' execution failed (cached error): %v", toolCall.Tool, err)
+					ae.logger.LogToolExecution(toolCall.Tool, false, 0,
+						slog.String("error", err.Error()),
+						slog.Bool("cached", true),
+						slog.String("context", "streaming"))
+					intermediateSteps = append(intermediateSteps, types.ToolCallData{
+						Action: types.ToolActionStep{
+							Tool:       toolCall.Tool,
+							ToolInput:  toolCall.ToolInput,
+							ToolCallID: toolCall.ToolCallID,
+							Type:       toolCall.Type,
+						},
+						Observation: errMsg,
+					})
+					continue
+				}
 			} else {
 				// Execute tool with timeout
 				toolResult, err = ae.executeToolWithTimeout(tool, toolCall.ToolInput, toolExecutionTimeout)
@@ -993,8 +1034,6 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 						slog.String("error", err.Error()),
 						slog.String("tool_input", fmt.Sprintf("%v", toolCall.ToolInput)),
 						slog.String("context", "streaming"))
-					toolErrors = append(toolErrors, err)
-					toolResults = append(toolResults, nil)
 					intermediateSteps = append(intermediateSteps, types.ToolCallData{
 						Action: types.ToolActionStep{
 							Tool:       toolCall.Tool,
@@ -1011,11 +1050,6 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 				ae.setCachedToolResult(toolCall.Tool, toolCall.ToolInput, toolResult, err)
 				ae.logger.LogToolExecution(toolCall.Tool, true, duration, slog.Bool("cached", false), slog.String("context", "streaming"))
 			}
-
-			// At this point, tool execution succeeded (err == nil)
-			// If err != nil, we would have continued at line 1003
-			toolResults = append(toolResults, toolResult)
-			toolErrors = append(toolErrors, nil) // err is nil here
 
 			// Format observation from tool result
 			truncationLength := ae.getToolTruncationLength(toolCall.Tool)
@@ -1036,7 +1070,7 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 
 		ae.logger.LogExecution("executeStreamIteration", iteration, "Tool execution completed",
 			slog.Int("executed_tools", len(result.ToolCalls)),
-			slog.Int("failed_tools", len(toolErrors)))
+			slog.Int("intermediate_steps", len(intermediateSteps)))
 
 		return result, len(result.ToolCalls) > 0, nil
 	}
@@ -1217,6 +1251,7 @@ func (ae *AgentEngine) setCachedToolResult(toolName string, args map[string]inte
 			delete(ae.toolCache, oldestKey)
 			// Find next oldest entry
 			oldestKey = ""
+			var oldestTime time.Time
 			for key, entry := range ae.toolCache {
 				if oldestKey == "" || entry.timestamp.Before(oldestTime) {
 					oldestKey = key
