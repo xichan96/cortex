@@ -510,10 +510,18 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 			return result, false, nil
 		}
 
-		toolCalls := make([]types.ToolCallRequest, 0, len(response.ToolCalls))
-		intermediateSteps := make([]types.ToolCallData, 0, len(response.ToolCalls))
+		// Sort tool calls by priority and dependencies
+		sortedToolCalls, err := ae.sortToolCallsByDependencies(response.ToolCalls)
+		if err != nil {
+			ae.logger.LogError("executeIteration", err, slog.String("phase", "sort_tool_calls"))
+			// Continue with original order if sorting fails
+			sortedToolCalls = response.ToolCalls
+		}
 
-		for _, toolCall := range response.ToolCalls {
+		toolCalls := make([]types.ToolCallRequest, 0, len(sortedToolCalls))
+		intermediateSteps := make([]types.ToolCallData, 0, len(sortedToolCalls))
+
+		for _, toolCall := range sortedToolCalls {
 			ae.logger.Info("Executing tool",
 				slog.String("tool_name", toolCall.Function.Name),
 				slog.Int("iteration", iteration+1))
@@ -635,8 +643,8 @@ func (ae *AgentEngine) buildNextMessages(previousMessages []types.Message, resul
 			})
 		}
 		messages = append(messages, types.Message{
-			Role:     "assistant",
-			Content:  result.Output,
+			Role:      "assistant",
+			Content:   result.Output,
 			ToolCalls: toolCalls,
 		})
 	}
@@ -811,11 +819,43 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 			return result, false, nil
 		}
 
-		// Pre-allocate result slices
-		toolResults := make([]interface{}, 0, len(result.ToolCalls))
-		toolErrors := make([]error, 0, len(result.ToolCalls))
+		// Convert ToolCallRequest to ToolCall for sorting
+		toolCallsForSorting := make([]types.ToolCall, 0, len(result.ToolCalls))
+		for _, tc := range result.ToolCalls {
+			toolCallsForSorting = append(toolCallsForSorting, types.ToolCall{
+				ID:   tc.ToolCallID,
+				Type: tc.Type,
+				Function: types.ToolFunction{
+					Name:      tc.Tool,
+					Arguments: tc.ToolInput,
+				},
+			})
+		}
 
-		for _, toolCall := range result.ToolCalls {
+		// Sort tool calls by priority and dependencies
+		sortedToolCalls, err := ae.sortToolCallsByDependencies(toolCallsForSorting)
+		if err != nil {
+			ae.logger.LogError("executeStreamIteration", err, slog.String("phase", "sort_tool_calls"))
+			// Continue with original order if sorting fails
+			sortedToolCalls = toolCallsForSorting
+		}
+
+		// Convert back to ToolCallRequest
+		sortedToolCallRequests := make([]types.ToolCallRequest, 0, len(sortedToolCalls))
+		for _, tc := range sortedToolCalls {
+			sortedToolCallRequests = append(sortedToolCallRequests, types.ToolCallRequest{
+				Tool:       tc.Function.Name,
+				ToolInput:  tc.Function.Arguments,
+				ToolCallID: tc.ID,
+				Type:       tc.Type,
+			})
+		}
+
+		// Pre-allocate result slices
+		toolResults := make([]interface{}, 0, len(sortedToolCallRequests))
+		toolErrors := make([]error, 0, len(sortedToolCallRequests))
+
+		for _, toolCall := range sortedToolCallRequests {
 			ae.logger.LogExecution("executeStreamIteration", iteration, "Executing tool",
 				slog.String("tool_name", toolCall.Tool))
 
@@ -995,6 +1035,155 @@ func (ae *AgentEngine) setCachedToolResult(toolName string, args map[string]inte
 		err:       err,
 		timestamp: time.Now(),
 	}
+}
+
+// ==================== Tool Dependency Management Methods ====================
+
+// sortToolCallsByDependencies sorts tool calls by priority and dependencies using topological sort
+// Returns sorted tool calls and error if circular dependency is detected
+func (ae *AgentEngine) sortToolCallsByDependencies(toolCalls []types.ToolCall) ([]types.ToolCall, error) {
+	if len(toolCalls) <= 1 {
+		return toolCalls, nil
+	}
+
+	ae.mu.RLock()
+	toolsMap := make(map[string]types.Tool, len(ae.toolsMap))
+	for k, v := range ae.toolsMap {
+		toolsMap[k] = v
+	}
+	ae.mu.RUnlock()
+
+	// Build dependency graph and priority map
+	dependencyGraph := make(map[string][]string) // tool -> dependencies
+	priorityMap := make(map[string]int)         // tool -> priority
+	toolCallMap := make(map[string]types.ToolCall) // tool name -> tool call
+
+	for _, tc := range toolCalls {
+		toolName := tc.Function.Name
+		toolCallMap[toolName] = tc
+
+		// Get tool metadata
+		if tool, exists := toolsMap[toolName]; exists {
+			metadata := tool.Metadata()
+			priorityMap[toolName] = metadata.Priority
+			if len(metadata.Dependencies) > 0 {
+				dependencyGraph[toolName] = metadata.Dependencies
+			}
+		} else {
+			priorityMap[toolName] = 0
+		}
+	}
+
+	// Detect circular dependencies
+	if err := ae.detectCircularDependencies(dependencyGraph); err != nil {
+		return nil, err
+	}
+
+	// Topological sort with priority
+	sorted := make([]types.ToolCall, 0, len(toolCalls))
+	visited := make(map[string]bool)
+	inProgress := make(map[string]bool)
+
+	var visit func(string) error
+	visit = func(toolName string) error {
+		if inProgress[toolName] {
+			return fmt.Errorf("circular dependency detected involving tool: %s", toolName)
+		}
+		if visited[toolName] {
+			return nil
+		}
+
+		inProgress[toolName] = true
+
+		// Visit dependencies first
+		if deps, hasDeps := dependencyGraph[toolName]; hasDeps {
+			for _, dep := range deps {
+				if _, exists := toolCallMap[dep]; exists {
+					if err := visit(dep); err != nil {
+						return err
+					}
+				}
+			}
+		}
+
+		inProgress[toolName] = false
+		visited[toolName] = true
+
+		// Add to sorted list
+		if tc, exists := toolCallMap[toolName]; exists {
+			sorted = append(sorted, tc)
+		}
+
+		return nil
+	}
+
+	// Sort by priority first, then visit
+	type toolWithPriority struct {
+		toolCall types.ToolCall
+		priority int
+	}
+	toolsWithPriority := make([]toolWithPriority, 0, len(toolCalls))
+	for _, tc := range toolCalls {
+		toolsWithPriority = append(toolsWithPriority, toolWithPriority{
+			toolCall: tc,
+			priority: priorityMap[tc.Function.Name],
+		})
+	}
+
+	// Sort by priority (descending)
+	for i := 0; i < len(toolsWithPriority)-1; i++ {
+		for j := i + 1; j < len(toolsWithPriority); j++ {
+			if toolsWithPriority[i].priority < toolsWithPriority[j].priority {
+				toolsWithPriority[i], toolsWithPriority[j] = toolsWithPriority[j], toolsWithPriority[i]
+			}
+		}
+	}
+
+	// Visit tools in priority order
+	for _, twp := range toolsWithPriority {
+		if err := visit(twp.toolCall.Function.Name); err != nil {
+			return nil, err
+		}
+	}
+
+	return sorted, nil
+}
+
+// detectCircularDependencies detects circular dependencies in the dependency graph
+func (ae *AgentEngine) detectCircularDependencies(graph map[string][]string) error {
+	visited := make(map[string]bool)
+	recStack := make(map[string]bool)
+
+	var hasCycle func(string) bool
+	hasCycle = func(toolName string) bool {
+		visited[toolName] = true
+		recStack[toolName] = true
+
+		if deps, exists := graph[toolName]; exists {
+			for _, dep := range deps {
+				if !visited[dep] {
+					if hasCycle(dep) {
+						return true
+					}
+				} else if recStack[dep] {
+					return true
+				}
+			}
+		}
+
+		recStack[toolName] = false
+		return false
+	}
+
+	for toolName := range graph {
+		if !visited[toolName] {
+			if hasCycle(toolName) {
+				return fmt.Errorf("circular dependency detected in tool dependencies")
+			}
+		}
+	}
+
+	return nil
 }
 
 // ==================== Lifecycle Management Methods ====================

@@ -21,6 +21,8 @@ type ToolMetadata struct {
 	SourceNodeName string                 `json:"sourceNodeName"`
 	IsFromToolkit  bool                   `json:"isFromToolkit"`
 	ToolType       string                 `json:"toolType"` // "mcp","http","builtin"
+	Priority       int                    `json:"priority,omitempty"`       // 优先级，数字越大优先级越高
+	Dependencies   []string               `json:"dependencies,omitempty"`   // 依赖的工具名称列表
 	Extra          map[string]interface{} `json:"extra,omitempty"`
 }
 
@@ -99,11 +101,12 @@ type AgentConfig struct {
 	FrequencyPenalty   float32       `json:"frequencyPenalty"`   // 频率惩罚
 	PresencePenalty    float32       `json:"presencePenalty"`    // 存在惩罚
 	StopSequences      []string      `json:"stopSequences"`      // 停止序列
-	Timeout            time.Duration `json:"timeout"`            // 超时时间
-	RetryAttempts      int           `json:"retryAttempts"`      // 重试次数
-	RetryDelay         time.Duration `json:"retryDelay"`         // 重试延迟
-	EnableToolRetry    bool          `json:"enableToolRetry"`    // 启用工具重试
-	MaxHistoryMessages int           `json:"maxHistoryMessages"` // 最大历史消息数
+	Timeout              time.Duration `json:"timeout"`              // 超时时间
+	ToolExecutionTimeout time.Duration `json:"toolExecutionTimeout"` // 工具执行超时时间
+	RetryAttempts        int           `json:"retryAttempts"`        // 重试次数
+	RetryDelay           time.Duration `json:"retryDelay"`           // 重试延迟
+	EnableToolRetry      bool          `json:"enableToolRetry"`      // 启用工具重试
+	MaxHistoryMessages   int           `json:"maxHistoryMessages"`   // 最大历史消息数
 }
 
 // NewAgentConfig creates a new agent configuration with reasonable defaults
@@ -117,11 +120,12 @@ func NewAgentConfig() *AgentConfig {
 		FrequencyPenalty:   0.0,
 		PresencePenalty:    0.0,
 		StopSequences:      []string{},
-		Timeout:            30 * time.Second,
-		RetryAttempts:      3,
-		RetryDelay:         1 * time.Second,
-		EnableToolRetry:    true,
-		MaxHistoryMessages: 100,
+		Timeout:              30 * time.Second,
+		ToolExecutionTimeout: 60 * time.Second,
+		RetryAttempts:        3,
+		RetryDelay:           1 * time.Second,
+		EnableToolRetry:      true,
+		MaxHistoryMessages:   100,
 	}
 }
 
