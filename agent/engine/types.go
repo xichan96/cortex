@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -14,9 +16,9 @@ const (
 	CacheExpirationTime = 5 * time.Minute // cache expiration time
 
 	// Execution-related constants
-	DefaultChannelBuffer = 50  // default channel buffer size
-	MaxTruncationLength  = 500 // maximum truncation length
-	MinChannelBuffer     = 10  // minimum channel buffer size
+	DefaultChannelBuffer = 50   // default channel buffer size
+	MaxTruncationLength  = 2000 // maximum truncation length
+	MinChannelBuffer     = 10   // minimum channel buffer size
 
 	// Performance-related constants
 	DefaultBufferPoolSize = 1024                   // default buffer pool size (1KB)
@@ -60,4 +62,20 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// formatToolResult formats tool execution result to string
+// Uses JSON marshaling for better representation of complex data structures
+func formatToolResult(result interface{}) string {
+	if result == nil {
+		return "Tool executed successfully but returned no result"
+	}
+
+	// Try JSON marshaling first for better formatting
+	if jsonBytes, err := json.MarshalIndent(result, "", "  "); err == nil {
+		return string(jsonBytes)
+	}
+
+	// Fallback to string representation if JSON marshaling fails
+	return fmt.Sprintf("%v", result)
 }
