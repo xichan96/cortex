@@ -31,7 +31,7 @@ CORTEX implements functionality similar to n8n's AI Agent but adopts a lightweig
 ## Feature & Status
 
 - **Intelligent Agent Engine**: Core functionality for creating AI agents with advanced tool calling capabilities.
-- **LLM Integration**: Seamless support for OpenAI, DeepSeek, and custom LLM providers.
+- **LLM Integration**: Seamless support for OpenAI, DeepSeek, Volce, and custom LLM providers.
 - **Multi-Modal Support**: Process text, images, and other media formats effortlessly.
 - **Tool Ecosystem**: Extensible tool system with built-in MCP and HTTP clients.
 - **Streaming Support**: Real-time response streaming for interactive applications.
@@ -82,7 +82,6 @@ Here's a simple example of how to use Cortex to create an AI agent:
 package main
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -176,7 +175,7 @@ The agent module is the core of the Cortex framework, providing the intelligence
 
 ### LLM Provider Integration
 
-Cortex supports OpenAI, DeepSeek, and custom LLM providers with flexible configuration options:
+Cortex supports OpenAI, DeepSeek, Volce, and custom LLM providers with flexible configuration options:
 
 ```go
 // OpenAI with default configuration
@@ -186,7 +185,13 @@ llmProvider, err := llm.OpenAIClient("your-api-key", "gpt-4o-mini")
 llmProvider, err := llm.OpenAIClientWithBaseURL("your-api-key", "https://custom-api.example.com", "custom-model")
 
 // DeepSeek integration
-llmProvider, err := llm.DeepSeekClient("your-api-key", "deepseek-chat")
+llmProvider, err := llm.QuickDeepSeekProvider("your-api-key", "deepseek-chat")
+
+// Volce integration
+llmProvider, err := llm.VolceClient("your-api-key", "doubao-seed-1-6-251015")
+
+// Volce with custom base URL
+llmProvider, err := llm.VolceClientWithBaseURL("your-api-key", "https://ark.cn-beijing.volces.com/api/v3", "doubao-seed-1-6-251015")
 
 // With advanced options for OpenAI
 opts := llm.OpenAIOptions{
@@ -204,6 +209,14 @@ opts := llm.DeepSeekOptions{
 	Model:   "deepseek-chat",
 }
 llmProvider, err := llm.NewDeepSeekClient(opts)
+
+// With advanced options for Volce
+opts := llm.VolceOptions{
+	APIKey:  "your-api-key",
+	BaseURL: "https://ark.cn-beijing.volces.com/api/v3",
+	Model:   "doubao-seed-1-6-251015",
+}
+llmProvider, err := llm.NewVolceClient(opts)
 ```
 
 ### Agent Configuration
@@ -277,25 +290,8 @@ for chunk := range stream {
 	fmt.Printf("%s", chunk.Content)
 }
 
-// Execute with multi-modal input (e.g., text + image)
-messages := []types.Message{
-	{
-		Role: types.RoleUser,
-		Content: []types.ContentPart{
-			{
-				Type: "text",
-				Text: "What's in this image?",
-			},
-			{
-				Type: "image_url",
-				ImageURL: map[string]interface{}{
-					"url": "https://example.com/image.jpg",
-				},
-			},
-		},
-	},
-}
-result, err := agentEngine.ExecuteWithMessages(messages, nil)
+// Note: Current version of Execute method only supports text input
+// Multi-modal input (e.g., images) support is under development
 ```
 
 ### Built-in Tool Integrations
@@ -305,7 +301,7 @@ result, err := agentEngine.ExecuteWithMessages(messages, nil)
 Leverage MCP (Model Control Protocol) tools with built-in support:
 
 ```go
-import "github.com/xichan96/cortex/agent/tools/mcp"
+import "github.com/xichan96/cortex/pkg/mcp"
 
 // Create MCP client
 mcpClient := mcp.NewClient("https://api.example.com/mcp/sse", "http", map[string]string{
@@ -324,21 +320,6 @@ agentEngine.AddTools(mcpTools)
 
 // Don't forget to disconnect when done
 defer mcpClient.Disconnect(ctx)
-```
-
-#### HTTP Client Tool
-
-Make API requests with the integrated HTTP client tools:
-
-```go
-import "github.com/xichan96/cortex/agent/tools/http"
-
-// Create HTTP client
-httpClient := http.NewClient()
-
-// Add HTTP tools to agent
-httpTools := httpClient.GetTools()
-agentEngine.AddTools(httpTools)
 ```
 
 #### Built-in Tools
@@ -425,6 +406,74 @@ The email tool supports the following parameters:
 - `subject`: Email subject line (required)
 - `type`: Content type, supports `text/html`, `text/plain`, `text/markdown` (required)
 - `message`: Email message content (required)
+
+##### Command Tool
+
+Execute shell commands locally and return the output, with timeout configuration support:
+
+```go
+import "github.com/xichan96/cortex/agent/tools/builtin"
+
+// Create command tool
+commandTool := builtin.NewCommandTool()
+agentEngine.AddTool(commandTool)
+```
+
+The command tool supports the following parameters:
+- `command`: Command to execute (required)
+- `timeout`: Command execution timeout in seconds (default: 30)
+
+##### Math Tool
+
+Perform mathematical calculations with support for basic operations, advanced operations, and trigonometric functions:
+
+```go
+import "github.com/xichan96/cortex/agent/tools/builtin"
+
+// Create math tool
+mathTool := builtin.NewMathTool()
+agentEngine.AddTool(mathTool)
+```
+
+The math tool supports the following parameters:
+- `expression`: Mathematical expression to evaluate (required), supports:
+  - Basic operations: `+`, `-`, `*`, `/`, `%`
+  - Advanced operations: `^` (power), `√` or `sqrt` (square root), `!` (factorial)
+  - Trigonometric functions: `sin`, `cos`, `tan`, `asin`/`arcsin`, `acos`/`arccos`, `atan`/`arctan`
+  - Logarithmic functions: `ln`, `log`/`log10`, `exp`
+  - Other functions: `abs`, `floor`, `ceil`, `round`
+- `use_degrees`: Use degrees for trigonometric functions (default: false, uses radians)
+
+##### Time Tool
+
+Get current time in specified timezone:
+
+```go
+import "github.com/xichan96/cortex/agent/tools/builtin"
+
+// Create time tool
+timeTool := builtin.NewTimeTool()
+agentEngine.AddTool(timeTool)
+```
+
+The time tool supports the following parameters:
+- `timezone`: Timezone name (optional, default: `Asia/Hong_Kong`), e.g., `Asia/Hong_Kong`, `America/New_York`, `UTC`
+
+##### Network Check Tool
+
+Check network connectivity to a remote host:
+
+```go
+import "github.com/xichan96/cortex/agent/tools/builtin"
+
+// Create network check tool
+pingTool := builtin.NewPingTool()
+agentEngine.AddTool(pingTool)
+```
+
+The network check tool supports the following parameters:
+- `address`: Target address in format `host:port` (required), e.g., `example.com:80` or `192.168.1.1:22`
+- `timeout`: Connection timeout in seconds (default: 5)
 
 ### Trigger Modules
 

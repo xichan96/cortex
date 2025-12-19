@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/xichan96/cortex/agent/tools/builtin"
 	"github.com/xichan96/cortex/agent/types"
@@ -10,7 +11,7 @@ import (
 	"github.com/xichan96/cortex/pkg/mcp"
 )
 
-func (a *agent) setupTools() []types.Tool {
+func (a *agent) setupTools() ([]types.Tool, error) {
 	var tools []types.Tool
 
 	toolsCfg := a.config.Tools
@@ -21,12 +22,15 @@ func (a *agent) setupTools() []types.Tool {
 
 	for _, mcpCfg := range toolsCfg.MCP {
 		if mcpCfg.Enabled {
-			mcpTools := a.initMCPTools(mcpCfg)
+			mcpTools, err := a.initMCPTools(mcpCfg)
+			if err != nil {
+				return nil, fmt.Errorf("failed to initialize MCP tools: %w", err)
+			}
 			tools = append(tools, mcpTools...)
 		}
 	}
 
-	return tools
+	return tools, nil
 }
 
 func (a *agent) initBuiltinTools() []types.Tool {
@@ -71,17 +75,18 @@ func (a *agent) initBuiltinTools() []types.Tool {
 	return tools
 }
 
-func (a *agent) initMCPTools(cfg config.MCPConfig) []types.Tool {
+func (a *agent) initMCPTools(cfg config.MCPConfig) ([]types.Tool, error) {
 	if cfg.URL == "" {
-		return nil
+		return nil, fmt.Errorf("MCP URL is required")
 	}
 
 	mcpClient := mcp.NewClient(cfg.URL, cfg.Transport, cfg.Headers)
 
 	ctx := context.Background()
 	if err := mcpClient.Connect(ctx); err != nil {
-		return nil
+		return nil, fmt.Errorf("failed to connect to MCP server: %w", err)
 	}
 
-	return mcpClient.GetTools()
+	tools := mcpClient.GetTools()
+	return tools, nil
 }

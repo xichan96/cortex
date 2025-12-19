@@ -18,12 +18,13 @@ type Tool interface {
 
 // ToolMetadata tool metadata
 type ToolMetadata struct {
-	SourceNodeName string                 `json:"sourceNodeName"`
-	IsFromToolkit  bool                   `json:"isFromToolkit"`
-	ToolType       string                 `json:"toolType"`               // "mcp","http","builtin"
-	Priority       int                    `json:"priority,omitempty"`     // 优先级，数字越大优先级越高
-	Dependencies   []string               `json:"dependencies,omitempty"` // 依赖的工具名称列表
-	Extra          map[string]interface{} `json:"extra,omitempty"`
+	SourceNodeName      string                 `json:"sourceNodeName"`
+	IsFromToolkit       bool                   `json:"isFromToolkit"`
+	ToolType            string                 `json:"toolType"`                      // "mcp","http","builtin"
+	Priority            int                    `json:"priority,omitempty"`            // 优先级，数字越大优先级越高
+	Dependencies        []string               `json:"dependencies,omitempty"`        // 依赖的工具名称列表
+	MaxTruncationLength int                    `json:"maxTruncationLength,omitempty"` // 工具结果截断长度，0表示使用默认值
+	Extra               map[string]interface{} `json:"extra,omitempty"`
 }
 
 // ToolCallRequest tool call request
