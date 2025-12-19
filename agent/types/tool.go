@@ -93,45 +93,45 @@ type ToolActionStep struct {
 
 // AgentConfig agent configuration
 type AgentConfig struct {
-	MaxIterations        int           `json:"maxIterations"`
-	SystemMessage        string        `json:"systemMessage"`
-	Temperature          float32       `json:"temperature"`          // 温度参数 (0.0-1.0)
-	MaxTokens            int           `json:"maxTokens"`            // 最大token数
-	TopP                 float32       `json:"topP"`                 // Top P采样
-	FrequencyPenalty     float32       `json:"frequencyPenalty"`     // 频率惩罚
-	PresencePenalty      float32       `json:"presencePenalty"`      // 存在惩罚
-	StopSequences        []string      `json:"stopSequences"`        // 停止序列
-	Timeout              time.Duration `json:"timeout"`              // 超时时间
-	ToolExecutionTimeout time.Duration `json:"toolExecutionTimeout"` // 工具执行超时时间
-	RetryAttempts        int           `json:"retryAttempts"`        // 重试次数
-	RetryDelay           time.Duration `json:"retryDelay"`           // 重试延迟
-	EnableToolRetry      bool          `json:"enableToolRetry"`      // 启用工具重试
-	MaxHistoryMessages   int           `json:"maxHistoryMessages"`   // 最大历史消息数
-	EnableMemoryCompress bool          `json:"enableMemoryCompress"` // 启用记忆压缩
-	MemoryCompressThreshold int        `json:"memoryCompressThreshold"` // 记忆压缩阈值（消息数量）
-	MemoryCompressRatio  float32       `json:"memoryCompressRatio"`    // 记忆压缩比例（0.0-1.0）
+	MaxIterations           int           `json:"maxIterations"`
+	SystemMessage           string        `json:"systemMessage"`
+	Temperature             float32       `json:"temperature"`             // 温度参数 (0.0-1.0)
+	MaxTokens               int           `json:"maxTokens"`               // 最大token数
+	TopP                    float32       `json:"topP"`                    // Top P采样
+	FrequencyPenalty        float32       `json:"frequencyPenalty"`        // 频率惩罚
+	PresencePenalty         float32       `json:"presencePenalty"`         // 存在惩罚
+	StopSequences           []string      `json:"stopSequences"`           // 停止序列
+	Timeout                 time.Duration `json:"timeout"`                 // 超时时间
+	ToolExecutionTimeout    time.Duration `json:"toolExecutionTimeout"`    // 工具执行超时时间
+	RetryAttempts           int           `json:"retryAttempts"`           // 重试次数
+	RetryDelay              time.Duration `json:"retryDelay"`              // 重试延迟
+	EnableToolRetry         bool          `json:"enableToolRetry"`         // 启用工具重试
+	MaxHistoryMessages      int           `json:"maxHistoryMessages"`      // 最大历史消息数
+	EnableMemoryCompress    bool          `json:"enableMemoryCompress"`    // 启用记忆压缩
+	MemoryCompressThreshold int           `json:"memoryCompressThreshold"` // 记忆压缩阈值（消息数量）
+	MemoryCompressRatio     float32       `json:"memoryCompressRatio"`     // 记忆压缩比例（0.0-1.0）
 }
 
 // NewAgentConfig creates a new agent configuration with reasonable defaults
 func NewAgentConfig() *AgentConfig {
 	return &AgentConfig{
-		MaxIterations:        10,
-		SystemMessage:        "",
-		Temperature:          0.7,
-		MaxTokens:            4096,
-		TopP:                 1.0,
-		FrequencyPenalty:     0.0,
-		PresencePenalty:      0.0,
-		StopSequences:        []string{},
-		Timeout:                30 * time.Second,
-		ToolExecutionTimeout:   60 * time.Second,
-		RetryAttempts:          3,
-		RetryDelay:             1 * time.Second,
-		EnableToolRetry:        true,
-		MaxHistoryMessages:     100,
-		EnableMemoryCompress:   false,
+		MaxIterations:           10,
+		SystemMessage:           "",
+		Temperature:             0.7,
+		MaxTokens:               4096,
+		TopP:                    1.0,
+		FrequencyPenalty:        0.0,
+		PresencePenalty:         0.0,
+		StopSequences:           []string{},
+		Timeout:                 30 * time.Second,
+		ToolExecutionTimeout:    60 * time.Second,
+		RetryAttempts:           3,
+		RetryDelay:              1 * time.Second,
+		EnableToolRetry:         true,
+		MaxHistoryMessages:      100,
+		EnableMemoryCompress:    false,
 		MemoryCompressThreshold: 50,
-		MemoryCompressRatio:    0.5,
+		MemoryCompressRatio:     0.5,
 	}
 }
 
