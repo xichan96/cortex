@@ -352,7 +352,12 @@ func (p *LangChainLLMProvider) convertToLangChainMessages(messages []types.Messa
 			for _, part := range msg.Parts {
 				switch p := part.(type) {
 				case types.TextPart:
-					parts = append(parts, llms.TextPart(p.Text))
+					// Ensure text is never empty - use empty string if not provided
+					text := p.Text
+					if text == "" {
+						text = ""
+					}
+					parts = append(parts, llms.TextPart(text))
 				case types.ImageURLPart:
 					if p.Detail != "" {
 						parts = append(parts, llms.ImageURLWithDetailPart(p.URL, p.Detail))
@@ -366,6 +371,9 @@ func (p *LangChainLLMProvider) convertToLangChainMessages(messages []types.Messa
 		} else if msg.Content != "" {
 			// Backward compatibility: use traditional Content field
 			parts = []llms.ContentPart{llms.TextPart(msg.Content)}
+		} else if msg.Content == "" && len(msg.ToolCalls) > 0 {
+			// For assistant messages with tool calls but no content, use empty string
+			parts = []llms.ContentPart{llms.TextPart("")}
 		}
 
 		// Ensure content is never null - provide empty string if no content exists
@@ -373,10 +381,15 @@ func (p *LangChainLLMProvider) convertToLangChainMessages(messages []types.Messa
 		if len(parts) == 0 {
 			// For tool messages, use ToolCallResponse if ToolCallID is present
 			if msg.Role == "tool" && msg.ToolCallID != "" {
+				// Ensure Content is never null - use empty string if not provided
+				content := msg.Content
+				if content == "" {
+					content = "{}"
+				}
 				parts = []llms.ContentPart{llms.ToolCallResponse{
 					ToolCallID: msg.ToolCallID,
 					Name:       msg.Name,
-					Content:    msg.Content,
+					Content:    content,
 				}}
 			} else {
 				// For other messages, use empty text part
@@ -410,6 +423,7 @@ func (p *LangChainLLMProvider) convertToLangChainTools(tools []types.Tool) []llm
 
 // convertMessageFromLangChain converts message from LangChain
 func (p *LangChainLLMProvider) convertMessageFromLangChain(choice *llms.ContentChoice) types.Message {
+	// Content will be empty string if not provided (Go zero value), which is acceptable
 	msg := types.Message{
 		Content: choice.Content,
 	}

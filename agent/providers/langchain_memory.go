@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/xichan96/cortex/agent/types"
@@ -130,4 +131,70 @@ func (p *SimpleMemoryProvider) GetChatHistory() ([]types.Message, error) {
 		messages = messages[len(messages)-maxHistoryMessages:]
 	}
 	return messages, nil
+}
+
+// CompressMemory compresses old messages into a summary (implements MemoryProvider interface)
+func (p *SimpleMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages int) error {
+	if llm == nil {
+		return fmt.Errorf("LLM provider is required for memory compression")
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if len(p.messages) <= maxMessages {
+		return nil
+	}
+
+	// Keep system messages and recent messages
+	systemMessages := make([]types.Message, 0)
+	recentMessages := make([]types.Message, 0)
+	oldMessages := make([]types.Message, 0)
+
+	for i, msg := range p.messages {
+		if msg.Role == "system" {
+			systemMessages = append(systemMessages, msg)
+		} else if i < len(p.messages)-maxMessages {
+			oldMessages = append(oldMessages, msg)
+		} else {
+			recentMessages = append(recentMessages, msg)
+		}
+	}
+
+	if len(oldMessages) == 0 {
+		return nil
+	}
+
+	// Generate summary of old messages
+	summaryPrompt := "Please provide a concise summary of the following conversation history, preserving key information and context:\n\n"
+	for _, msg := range oldMessages {
+		summaryPrompt += fmt.Sprintf("%s: %s\n", msg.Role, msg.Content)
+	}
+
+	summaryMsg, err := llm.Chat([]types.Message{
+		{
+			Role:    "system",
+			Content: "You are a helpful assistant that summarizes conversation history while preserving important context and key information.",
+		},
+		{
+			Role:    "user",
+			Content: summaryPrompt,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to generate memory summary: %w", err)
+	}
+
+	// Replace old messages with summary
+	compressedMessages := make([]types.Message, 0, len(systemMessages)+1+len(recentMessages))
+	compressedMessages = append(compressedMessages, systemMessages...)
+	compressedMessages = append(compressedMessages, types.Message{
+		Role:    "system",
+		Content: fmt.Sprintf("Previous conversation summary: %s", summaryMsg.Content),
+	})
+	compressedMessages = append(compressedMessages, recentMessages...)
+
+	p.messages = compressedMessages
+
+	return nil
 }
