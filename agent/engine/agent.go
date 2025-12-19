@@ -637,7 +637,8 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 			})
 
 			// Format observation from tool result
-			observation := truncateString(formatToolResult(toolResult), MaxTruncationLength)
+			truncationLength := ae.getToolTruncationLength(toolCall.Function.Name)
+			observation := truncateString(formatToolResult(toolResult), truncationLength)
 
 			intermediateSteps = append(intermediateSteps, types.ToolCallData{
 				Action: types.ToolActionStep{
@@ -1017,7 +1018,8 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 			toolErrors = append(toolErrors, nil) // err is nil here
 
 			// Format observation from tool result
-			observation := truncateString(formatToolResult(toolResult), MaxTruncationLength)
+			truncationLength := ae.getToolTruncationLength(toolCall.Tool)
+			observation := truncateString(formatToolResult(toolResult), truncationLength)
 
 			intermediateSteps = append(intermediateSteps, types.ToolCallData{
 				Action: types.ToolActionStep{
@@ -1122,6 +1124,27 @@ func generateToolCacheKey(toolName string, args map[string]interface{}) string {
 	}
 
 	return toolName + ":" + hex.EncodeToString(hasher.Sum(nil))
+}
+
+// getToolTruncationLength gets truncation length for a tool
+// Returns tool-specific truncation length from metadata, or default if not set
+// Parameters:
+//   - toolName: tool name
+//
+// Returns:
+//   - truncation length
+func (ae *AgentEngine) getToolTruncationLength(toolName string) int {
+	ae.mu.RLock()
+	tool, exists := ae.toolsMap[toolName]
+	ae.mu.RUnlock()
+
+	if exists {
+		metadata := tool.Metadata()
+		if metadata.MaxTruncationLength > 0 {
+			return metadata.MaxTruncationLength
+		}
+	}
+	return MaxTruncationLength
 }
 
 // getCachedToolResult gets cached tool result

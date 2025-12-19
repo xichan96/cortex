@@ -17,7 +17,7 @@ const (
 
 	// Execution-related constants
 	DefaultChannelBuffer = 50   // default channel buffer size
-	MaxTruncationLength  = 2000 // maximum truncation length
+	MaxTruncationLength  = 2048 // maximum truncation length
 	MinChannelBuffer     = 10   // minimum channel buffer size
 
 	// Performance-related constants
