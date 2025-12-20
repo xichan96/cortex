@@ -267,15 +267,13 @@ func SetReadConcern(level string) ClientOptionFunc {
 // SetWriteConcern is 设置写关注等级
 func SetWriteConcern(level interface{}) ClientOptionFunc {
 	return func(c *Client) {
-		switch level.(type) {
+		switch level := level.(type) {
 		case int:
-			levelInt := level.(int)
-			if levelInt == 0 || levelInt == 1 {
-				c.Config.writeConcern = writeconcern.New(writeconcern.W(levelInt))
+			if level == 0 || level == 1 {
+				c.Config.writeConcern = writeconcern.New(writeconcern.W(level))
 			}
 		case string:
-			levelStr := level.(string)
-			if levelStr == "majority" {
+			if level == "majority" {
 				c.Config.writeConcern = writeconcern.New(writeconcern.WMajority())
 			}
 		}

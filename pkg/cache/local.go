@@ -2,6 +2,8 @@ package cache
 
 import (
 	"context"
+	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -71,10 +73,26 @@ func (c *LocalCache) Get(key string, result interface{}) error {
 	if data.Expire > 0 && time.Now().Unix() >= data.Expire {
 		return ec.NoFound
 	}
-	// copy data to result
-	if ptr, ok := result.(*interface{}); ok {
-		*ptr = data.Data
+	// copy data to result using reflection
+	if result == nil {
+		return fmt.Errorf("result cannot be nil")
 	}
+	val := reflect.ValueOf(result)
+	if val.Kind() != reflect.Ptr {
+		return fmt.Errorf("result must be a pointer")
+	}
+	if val.IsNil() {
+		return fmt.Errorf("result pointer is nil")
+	}
+	elem := val.Elem()
+	dataVal := reflect.ValueOf(data.Data)
+	if !dataVal.IsValid() {
+		return fmt.Errorf("cached data is invalid")
+	}
+	if !dataVal.Type().AssignableTo(elem.Type()) {
+		return fmt.Errorf("cannot assign %s to %s", dataVal.Type(), elem.Type())
+	}
+	elem.Set(dataVal)
 	return nil
 }
 
@@ -127,11 +145,14 @@ func (c *LocalCache) background(ctx context.Context) {
 			log.Error().Msgf("panic in background: %v", r)
 		}
 	}()
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		default:
+		case <-ticker.C:
 		}
 		func() {
 			c.lock.Lock()
@@ -146,6 +167,5 @@ func (c *LocalCache) background(ctx context.Context) {
 				}
 			}
 		}()
-		time.Sleep(1 * time.Second)
 	}
 }
