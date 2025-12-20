@@ -70,9 +70,11 @@ type AgentEngine struct {
 	cancel    context.CancelFunc // Cancel function
 
 	// Performance optimization
-	toolCache     map[string]toolCacheEntry // Tool execution result cache
-	toolCacheMu   sync.RWMutex              // Cache read-write lock
-	toolCacheSize int                       // Cache size limit
+	toolCache     map[string]*toolCacheEntry // Tool execution result cache
+	toolCacheMu   sync.RWMutex               // Cache read-write lock
+	toolCacheSize int                        // Cache size limit
+	toolCacheHead *toolCacheEntry            // LRU list head (most recently used)
+	toolCacheTail *toolCacheEntry            // LRU list tail (least recently used)
 }
 
 // NewAgentEngine creates a new agent engine
@@ -94,7 +96,7 @@ func NewAgentEngine(model types.LLMProvider, config *types.AgentConfig) *AgentEn
 		config:        config,
 		tools:         make([]types.Tool, 0),
 		toolsMap:      make(map[string]types.Tool),
-		toolCache:     make(map[string]toolCacheEntry),
+		toolCache:     make(map[string]*toolCacheEntry),
 		toolCacheSize: DefaultCacheSize, // Using constant-defined cache size
 		logger:        logger.NewLogger(),
 		ctx:           ctx,
@@ -213,7 +215,11 @@ func (ae *AgentEngine) SetEnableToolRetry(enable bool) {
 func (ae *AgentEngine) SetConfig(config *types.AgentConfig) {
 	ae.mu.Lock()
 	defer ae.mu.Unlock()
-	ae.config = config
+	if config == nil {
+		ae.config = types.NewAgentConfig()
+	} else {
+		ae.config = config
+	}
 }
 
 // AddTool adds a tool
@@ -404,7 +410,7 @@ func (ae *AgentEngine) ExecuteStream(input string, previousRequests []types.Tool
 			}
 		}()
 
-		// 准备初始消息
+		// Prepare initial messages
 		messages, err := ae.prepareMessages(input, previousRequests)
 		if err != nil {
 			ae.logger.LogError("ExecuteStream", err, slog.String("phase", "prepare_messages"))
@@ -534,6 +540,10 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 		defer cancel()
 	}
 
+	if ae.model == nil {
+		return nil, false, errors.NewError(errors.EC_LLM_CALL_FAILED.Code, "LLM model provider is nil")
+	}
+
 	response, err := ae.model.ChatWithTools(messages, tools)
 	if err != nil {
 		ae.logger.LogError("executeIteration", err, slog.Int("iteration", iteration))
@@ -598,6 +608,22 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 			toolResult, err, cached := ae.getCachedToolResult(toolCall.Function.Name, toolCall.Function.Arguments)
 			if cached {
 				ae.logger.LogToolExecution(toolCall.Function.Name, true, 0, slog.Bool("cached", true))
+				if err != nil {
+					errMsg := fmt.Sprintf("Tool '%s' execution failed (cached error): %v", toolCall.Function.Name, err)
+					ae.logger.LogToolExecution(toolCall.Function.Name, false, 0,
+						slog.String("error", err.Error()),
+						slog.Bool("cached", true))
+					intermediateSteps = append(intermediateSteps, types.ToolCallData{
+						Action: types.ToolActionStep{
+							Tool:       toolCall.Function.Name,
+							ToolInput:  toolCall.Function.Arguments,
+							ToolCallID: toolCall.ID,
+							Type:       toolCall.Type,
+						},
+						Observation: errMsg,
+					})
+					continue
+				}
 			} else {
 				// Execute tool with timeout
 				toolResult, err = ae.executeToolWithTimeout(tool, toolCall.Function.Arguments, toolExecutionTimeout)
@@ -880,6 +906,10 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 		defer cancel()
 	}
 
+	if ae.model == nil {
+		return nil, false, errors.NewError(errors.EC_STREAM_CHAT_FAILED.Code, "LLM model provider is nil")
+	}
+
 	stream, err := ae.model.ChatWithToolsStream(messages, tools)
 	if err != nil {
 		return nil, false, errors.NewError(errors.EC_STREAM_CHAT_FAILED.Code, "failed to chat with tools stream").Wrap(err)
@@ -950,10 +980,6 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 			})
 		}
 
-		// Pre-allocate result slices
-		toolResults := make([]interface{}, 0, len(sortedToolCallRequests))
-		toolErrors := make([]error, 0, len(sortedToolCallRequests))
-
 		for _, toolCall := range sortedToolCallRequests {
 			ae.logger.LogExecution("executeStreamIteration", iteration, "Executing tool",
 				slog.String("tool_name", toolCall.Tool))
@@ -982,6 +1008,23 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 			toolResult, err, cached := ae.getCachedToolResult(toolCall.Tool, toolCall.ToolInput)
 			if cached {
 				ae.logger.LogToolExecution(toolCall.Tool, true, 0, slog.Bool("cached", true), slog.String("context", "streaming"))
+				if err != nil {
+					errMsg := fmt.Sprintf("Tool '%s' execution failed (cached error): %v", toolCall.Tool, err)
+					ae.logger.LogToolExecution(toolCall.Tool, false, 0,
+						slog.String("error", err.Error()),
+						slog.Bool("cached", true),
+						slog.String("context", "streaming"))
+					intermediateSteps = append(intermediateSteps, types.ToolCallData{
+						Action: types.ToolActionStep{
+							Tool:       toolCall.Tool,
+							ToolInput:  toolCall.ToolInput,
+							ToolCallID: toolCall.ToolCallID,
+							Type:       toolCall.Type,
+						},
+						Observation: errMsg,
+					})
+					continue
+				}
 			} else {
 				// Execute tool with timeout
 				toolResult, err = ae.executeToolWithTimeout(tool, toolCall.ToolInput, toolExecutionTimeout)
@@ -993,8 +1036,6 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 						slog.String("error", err.Error()),
 						slog.String("tool_input", fmt.Sprintf("%v", toolCall.ToolInput)),
 						slog.String("context", "streaming"))
-					toolErrors = append(toolErrors, err)
-					toolResults = append(toolResults, nil)
 					intermediateSteps = append(intermediateSteps, types.ToolCallData{
 						Action: types.ToolActionStep{
 							Tool:       toolCall.Tool,
@@ -1011,11 +1052,6 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 				ae.setCachedToolResult(toolCall.Tool, toolCall.ToolInput, toolResult, err)
 				ae.logger.LogToolExecution(toolCall.Tool, true, duration, slog.Bool("cached", false), slog.String("context", "streaming"))
 			}
-
-			// At this point, tool execution succeeded (err == nil)
-			// If err != nil, we would have continued at line 1003
-			toolResults = append(toolResults, toolResult)
-			toolErrors = append(toolErrors, nil) // err is nil here
 
 			// Format observation from tool result
 			truncationLength := ae.getToolTruncationLength(toolCall.Tool)
@@ -1036,7 +1072,7 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 
 		ae.logger.LogExecution("executeStreamIteration", iteration, "Tool execution completed",
 			slog.Int("executed_tools", len(result.ToolCalls)),
-			slog.Int("failed_tools", len(toolErrors)))
+			slog.Int("intermediate_steps", len(intermediateSteps)))
 
 		return result, len(result.ToolCalls) > 0, nil
 	}
@@ -1049,8 +1085,9 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 
 // executeToolWithTimeout executes a tool with timeout control
 // Uses goroutine + channel to implement timeout without modifying Tool interface
-// Note: The goroutine will continue running after timeout, but will naturally complete
-// This is acceptable as the tool interface doesn't support context cancellation
+// Note: The goroutine will continue running after timeout, but will naturally complete.
+// This is an acceptable trade-off since the Tool interface doesn't support context cancellation.
+// The goroutine will finish and clean up resources automatically, preventing leaks.
 func (ae *AgentEngine) executeToolWithTimeout(tool types.Tool, args map[string]interface{}, timeout time.Duration) (interface{}, error) {
 	if timeout <= 0 {
 		// No timeout, execute directly
@@ -1149,6 +1186,7 @@ func (ae *AgentEngine) getToolTruncationLength(toolName string) int {
 
 // getCachedToolResult gets cached tool result
 // Retrieves tool execution result from cache to avoid repeated execution
+// Updates LRU order on cache hit
 // Parameters:
 //   - toolName: tool name
 //   - args: tool parameters
@@ -1158,26 +1196,30 @@ func (ae *AgentEngine) getToolTruncationLength(toolName string) int {
 //   - execution error (if any)
 //   - whether cache was found
 func (ae *AgentEngine) getCachedToolResult(toolName string, args map[string]interface{}) (interface{}, error, bool) {
-	// Use read-write lock to improve concurrent performance
-	ae.toolCacheMu.RLock()
 	cacheKey := generateToolCacheKey(toolName, args)
-	entry, exists := ae.toolCache[cacheKey]
-	ae.toolCacheMu.RUnlock()
 
-	if exists {
-		if time.Since(entry.timestamp) < CacheExpirationTime {
-			return entry.result, entry.err, true
-		}
-		// Entry expired, remove it to free up cache space
-		ae.toolCacheMu.Lock()
-		delete(ae.toolCache, cacheKey)
-		ae.toolCacheMu.Unlock()
+	ae.toolCacheMu.Lock()
+	defer ae.toolCacheMu.Unlock()
+
+	entry, exists := ae.toolCache[cacheKey]
+	if !exists {
+		return nil, nil, false
 	}
-	return nil, nil, false
+
+	// Check expiration
+	if time.Since(entry.timestamp) >= CacheExpirationTime {
+		ae.removeCacheEntry(entry)
+		return nil, nil, false
+	}
+
+	// Move to head (most recently used)
+	ae.moveToHead(entry)
+	return entry.result, entry.err, true
 }
 
 // setCachedToolResult sets tool result cache
 // Caches tool execution result to avoid repeated execution of the same tool call
+// Uses LRU eviction strategy: removes expired entries first, then least recently used entries
 // Parameters:
 //   - toolName: tool name
 //   - args: tool parameters
@@ -1189,48 +1231,107 @@ func (ae *AgentEngine) setCachedToolResult(toolName string, args map[string]inte
 	ae.toolCacheMu.Lock()
 	defer ae.toolCacheMu.Unlock()
 
-	// Simple LRU strategy: if cache is full, remove expired entries first, then oldest entry
-	if len(ae.toolCache) >= ae.toolCacheSize {
-		now := time.Now()
-		expiredKeys := make([]string, 0)
-		var oldestKey string
-		var oldestTime time.Time
-
-		// First pass: collect all expired entries and find oldest non-expired entry
-		for key, entry := range ae.toolCache {
-			if now.Sub(entry.timestamp) >= CacheExpirationTime {
-				expiredKeys = append(expiredKeys, key)
-			} else if oldestKey == "" || entry.timestamp.Before(oldestTime) {
-				oldestKey = key
-				oldestTime = entry.timestamp
-			}
-		}
-
-		// Remove expired entries first
-		for _, key := range expiredKeys {
-			delete(ae.toolCache, key)
-		}
-
-		// If still full after removing expired, remove oldest non-expired entry
-		// Continue removing until we have space for the new entry
-		for len(ae.toolCache) >= ae.toolCacheSize && oldestKey != "" {
-			delete(ae.toolCache, oldestKey)
-			// Find next oldest entry
-			oldestKey = ""
-			for key, entry := range ae.toolCache {
-				if oldestKey == "" || entry.timestamp.Before(oldestTime) {
-					oldestKey = key
-					oldestTime = entry.timestamp
-				}
-			}
-		}
+	// Check if entry already exists (update existing entry)
+	if existing, exists := ae.toolCache[cacheKey]; exists {
+		existing.result = result
+		existing.err = err
+		existing.timestamp = time.Now()
+		ae.moveToHead(existing)
+		return
 	}
 
-	ae.toolCache[cacheKey] = toolCacheEntry{
+	// Remove expired entries first
+	ae.removeExpiredEntries()
+
+	// If cache is still full, remove least recently used entries (from tail)
+	for len(ae.toolCache) >= ae.toolCacheSize && ae.toolCacheTail != nil {
+		ae.removeCacheEntry(ae.toolCacheTail)
+	}
+
+	// Create new entry and add to head
+	entry := &toolCacheEntry{
 		result:    result,
 		err:       err,
 		timestamp: time.Now(),
+		key:       cacheKey,
 	}
+	ae.toolCache[cacheKey] = entry
+	ae.addToHead(entry)
+}
+
+// removeExpiredEntries removes all expired cache entries
+func (ae *AgentEngine) removeExpiredEntries() {
+	now := time.Now()
+	current := ae.toolCacheTail
+	for current != nil {
+		next := current.prev
+		if now.Sub(current.timestamp) >= CacheExpirationTime {
+			ae.removeCacheEntry(current)
+		}
+		current = next
+	}
+}
+
+// addToHead adds an entry to the head of LRU list
+func (ae *AgentEngine) addToHead(entry *toolCacheEntry) {
+	entry.prev = nil
+	entry.next = ae.toolCacheHead
+
+	if ae.toolCacheHead != nil {
+		ae.toolCacheHead.prev = entry
+	} else {
+		ae.toolCacheTail = entry
+	}
+	ae.toolCacheHead = entry
+}
+
+// moveToHead moves an existing entry to the head of LRU list
+func (ae *AgentEngine) moveToHead(entry *toolCacheEntry) {
+	if entry == ae.toolCacheHead {
+		return
+	}
+
+	// Remove from current position
+	if entry.prev != nil {
+		entry.prev.next = entry.next
+	}
+	if entry.next != nil {
+		entry.next.prev = entry.prev
+	} else {
+		ae.toolCacheTail = entry.prev
+	}
+
+	// Add to head
+	entry.prev = nil
+	entry.next = ae.toolCacheHead
+	if ae.toolCacheHead != nil {
+		ae.toolCacheHead.prev = entry
+	}
+	ae.toolCacheHead = entry
+}
+
+// removeCacheEntry removes an entry from cache and LRU list
+func (ae *AgentEngine) removeCacheEntry(entry *toolCacheEntry) {
+	if entry == nil {
+		return
+	}
+
+	delete(ae.toolCache, entry.key)
+
+	if entry.prev != nil {
+		entry.prev.next = entry.next
+	} else {
+		ae.toolCacheHead = entry.next
+	}
+
+	if entry.next != nil {
+		entry.next.prev = entry.prev
+	} else {
+		ae.toolCacheTail = entry.prev
+	}
+
+	entry.prev = nil
+	entry.next = nil
 }
 
 // ==================== Tool Dependency Management Methods ====================

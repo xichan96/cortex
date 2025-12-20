@@ -89,6 +89,10 @@ func (e *LangChainAgentEngine) ExecuteSimple(input string) (string, error) {
 	copy(memory, e.memory)
 	e.mu.Unlock()
 
+	if e.llm == nil {
+		return "", errors.NewError(errors.EC_LLM_CALL_FAILED.Code, "LLM provider is nil")
+	}
+
 	if len(tools) > 0 {
 		response, err := e.llm.ChatWithTools(memory, tools)
 		if err != nil {
@@ -130,6 +134,13 @@ func (e *LangChainAgentEngine) ExecuteStreamSimple(input string) (<-chan string,
 	memory := make([]types.Message, len(e.memory))
 	copy(memory, e.memory)
 	e.mu.Unlock()
+
+	if e.llm == nil {
+		outputChan := make(chan string, 1)
+		outputChan <- "Error: LLM provider is nil"
+		close(outputChan)
+		return outputChan, nil
+	}
 
 	outputChan := make(chan string, 100)
 
@@ -288,6 +299,9 @@ func (e *LangChainAgentEngine) SetEnableToolRetry(enable bool) {
 
 // SetConfig sets complete configuration
 func (e *LangChainAgentEngine) SetConfig(config *types.AgentConfig) {
+	if config == nil {
+		return
+	}
 	e.SetTemperature(config.Temperature)
 	e.SetMaxTokens(config.MaxTokens)
 	e.SetTopP(config.TopP)

@@ -134,38 +134,47 @@ func (p *SimpleMemoryProvider) GetChatHistory() ([]types.Message, error) {
 }
 
 // CompressMemory compresses old messages into a summary (implements MemoryProvider interface)
+// Optimized to avoid holding lock during LLM call to prevent blocking other operations
 func (p *SimpleMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages int) error {
 	if llm == nil {
 		return fmt.Errorf("LLM provider is required for memory compression")
 	}
 
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	// Copy data while holding lock, then release lock before LLM call
+	var systemMessages, recentMessages, oldMessages []types.Message
+	var shouldCompress bool
 
-	if len(p.messages) <= maxMessages {
-		return nil
-	}
+	func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
 
-	// Keep system messages and recent messages
-	systemMessages := make([]types.Message, 0)
-	recentMessages := make([]types.Message, 0)
-	oldMessages := make([]types.Message, 0)
-
-	for i, msg := range p.messages {
-		if msg.Role == "system" {
-			systemMessages = append(systemMessages, msg)
-		} else if i < len(p.messages)-maxMessages {
-			oldMessages = append(oldMessages, msg)
-		} else {
-			recentMessages = append(recentMessages, msg)
+		if len(p.messages) <= maxMessages {
+			return
 		}
-	}
 
-	if len(oldMessages) == 0 {
+		shouldCompress = true
+
+		// Keep system messages and recent messages
+		systemMessages = make([]types.Message, 0)
+		recentMessages = make([]types.Message, 0)
+		oldMessages = make([]types.Message, 0)
+
+		for i, msg := range p.messages {
+			if msg.Role == "system" {
+				systemMessages = append(systemMessages, msg)
+			} else if i < len(p.messages)-maxMessages {
+				oldMessages = append(oldMessages, msg)
+			} else {
+				recentMessages = append(recentMessages, msg)
+			}
+		}
+	}()
+
+	if !shouldCompress || len(oldMessages) == 0 {
 		return nil
 	}
 
-	// Generate summary of old messages
+	// Generate summary of old messages (lock is released, won't block other operations)
 	summaryPrompt := "Please provide a concise summary of the following conversation history, preserving key information and context:\n\n"
 	for _, msg := range oldMessages {
 		summaryPrompt += fmt.Sprintf("%s: %s\n", msg.Role, msg.Content)
@@ -183,6 +192,15 @@ func (p *SimpleMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages
 	})
 	if err != nil {
 		return fmt.Errorf("failed to generate memory summary: %w", err)
+	}
+
+	// Re-acquire lock to update messages
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// Double-check messages haven't changed significantly (another goroutine might have modified)
+	if len(p.messages) <= maxMessages {
+		return nil
 	}
 
 	// Replace old messages with summary

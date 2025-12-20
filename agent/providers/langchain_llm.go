@@ -97,7 +97,6 @@ func (p *LangChainLLMProvider) Chat(messages []types.Message) (types.Message, er
 			return types.Message{}, err
 		}
 
-		//
 		if len(response.Choices) > 0 {
 			return p.convertMessageFromLangChain(response.Choices[0]), nil
 		}
@@ -352,12 +351,7 @@ func (p *LangChainLLMProvider) convertToLangChainMessages(messages []types.Messa
 			for _, part := range msg.Parts {
 				switch p := part.(type) {
 				case types.TextPart:
-					// Ensure text is never empty - use empty string if not provided
-					text := p.Text
-					if text == "" {
-						text = ""
-					}
-					parts = append(parts, llms.TextPart(text))
+					parts = append(parts, llms.TextPart(p.Text))
 				case types.ImageURLPart:
 					if p.Detail != "" {
 						parts = append(parts, llms.ImageURLWithDetailPart(p.URL, p.Detail))

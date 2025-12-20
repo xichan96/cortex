@@ -41,11 +41,14 @@ type AgentResult struct {
 	IntermediateSteps []types.ToolCallData    `json:"intermediate_steps"`
 }
 
-// toolCacheEntry tool cache entry
+// toolCacheEntry tool cache entry with LRU support
 type toolCacheEntry struct {
 	result    interface{}
 	err       error
 	timestamp time.Time
+	prev      *toolCacheEntry
+	next      *toolCacheEntry
+	key       string
 }
 
 // StreamResult streaming result
