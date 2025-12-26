@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/xichan96/cortex/agent/ratelimit"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
 	"github.com/xichan96/cortex/pkg/logger"
@@ -34,6 +35,7 @@ type Agent interface {
 	SetRetryDelay(delay time.Duration)
 	SetEnableToolRetry(enable bool)
 	SetConfig(config *types.AgentConfig)
+	SetRateLimiter(limiter ratelimit.RateLimiter)
 
 	// Tool management methods
 	AddTool(tool types.Tool)
@@ -75,6 +77,9 @@ type AgentEngine struct {
 	toolCacheSize int                        // Cache size limit
 	toolCacheHead *toolCacheEntry            // LRU list head (most recently used)
 	toolCacheTail *toolCacheEntry            // LRU list tail (least recently used)
+
+	// Rate limiting
+	rateLimiter ratelimit.RateLimiter // Rate limiter for request throttling
 }
 
 // NewAgentEngine creates a new agent engine
@@ -101,6 +106,7 @@ func NewAgentEngine(model types.LLMProvider, config *types.AgentConfig) *AgentEn
 		logger:        logger.NewLogger(),
 		ctx:           ctx,
 		cancel:        cancel,
+		rateLimiter:   ratelimit.NewTokenBucketLimiter(10, 10), // 10 req/s default
 	}
 }
 
@@ -222,6 +228,13 @@ func (ae *AgentEngine) SetConfig(config *types.AgentConfig) {
 	}
 }
 
+// SetRateLimiter sets the rate limiter
+func (ae *AgentEngine) SetRateLimiter(limiter ratelimit.RateLimiter) {
+	ae.mu.Lock()
+	defer ae.mu.Unlock()
+	ae.rateLimiter = limiter
+}
+
 // AddTool adds a tool
 func (ae *AgentEngine) AddTool(tool types.Tool) {
 	ae.mu.Lock()
@@ -269,6 +282,23 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 	ae.logger.LogExecution("Execute", 0, "Starting agent execution",
 		slog.String("input", truncateString(input, 100)),
 		slog.Int("previousRequests", len(previousRequests)))
+
+	ae.mu.RLock()
+	limiter := ae.rateLimiter
+	ctx := ae.ctx
+	ae.mu.RUnlock()
+
+	if limiter != nil {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if err := limiter.Wait(ctx); err != nil {
+			ae.logger.LogError("Execute", err, slog.String("phase", "rate_limit"))
+			return nil, errors.NewError(errors.EC_SYSTEM_OVERLOAD.Code, "rate limit exceeded").Wrap(err)
+		}
+	}
 
 	// Pre-allocate slice capacity to reduce memory reallocations
 	messages, err := ae.prepareMessages(input, previousRequests)
@@ -400,6 +430,27 @@ func (ae *AgentEngine) ExecuteStream(input string, previousRequests []types.Tool
 		startTime := time.Now()
 		ae.logger.LogExecution("ExecuteStream", 0, "Starting stream execution", slog.String("input", truncateString(input, 100)), slog.Int("previousRequests", len(previousRequests)))
 
+		ae.mu.RLock()
+		limiter := ae.rateLimiter
+		ctx := ae.ctx
+		ae.mu.RUnlock()
+
+		if limiter != nil {
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			if err := limiter.Wait(ctx); err != nil {
+				ae.logger.LogError("ExecuteStream", err, slog.String("phase", "rate_limit"))
+				resultChan <- StreamResult{
+					Type:  "error",
+					Error: errors.NewError(errors.EC_SYSTEM_OVERLOAD.Code, "rate limit exceeded").Wrap(err),
+				}
+				return
+			}
+		}
+
 		defer func() {
 			if r := recover(); r != nil {
 				ae.logger.LogError("ExecuteStream", fmt.Errorf("panic recovered: %v", r))
@@ -496,12 +547,14 @@ func (ae *AgentEngine) prepareMessages(input string, previousRequests []types.To
 
 // buildContextFromPreviousRequests builds context from previous requests
 func (ae *AgentEngine) buildContextFromPreviousRequests(requests []types.ToolCallData) string {
-	context := "Previous tool calls:\n"
+	var builder strings.Builder
+	builder.Grow(256 * len(requests))
+	builder.WriteString("Previous tool calls:\n")
 	for _, req := range requests {
-		context += fmt.Sprintf("Tool: %s, Input: %v, Result: %s\n",
-			req.Action.Tool, req.Action.ToolInput, req.Observation)
+		builder.WriteString(fmt.Sprintf("Tool: %s, Input: %v, Result: %s\n",
+			req.Action.Tool, req.Action.ToolInput, req.Observation))
 	}
-	return context
+	return builder.String()
 }
 
 // executeIteration executes a single iteration
@@ -916,11 +969,13 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 	}
 
 	intermediateSteps := []types.ToolCallData{}
+	var outputBuilder strings.Builder
+	outputBuilder.Grow(2048)
 
 	for msg := range stream {
 		switch msg.Type {
 		case "chunk":
-			result.Output += msg.Content
+			outputBuilder.WriteString(msg.Content)
 			resultChan <- StreamResult{
 				Type:    "chunk",
 				Content: msg.Content,
@@ -938,6 +993,8 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 			return nil, false, errors.NewError(errors.EC_STREAM_ERROR.Code, "stream error occurred").Wrap(fmt.Errorf("%s", msg.Error))
 		}
 	}
+
+	result.Output = outputBuilder.String()
 
 	if len(result.ToolCalls) > 0 {
 		ae.logger.LogExecution("executeStreamIteration", iteration, "Processing tool calls",

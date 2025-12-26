@@ -28,11 +28,13 @@ func NewDeepSeekClient(opts DeepSeekOptions) (types.LLMProvider, error) {
 		opts.BaseURL = "https://api.deepseek.com"
 	}
 
-	// Using OpenAI compatible mode since DeepSeek supports OpenAI API format
+	pooledClient := providers.GetPooledHTTPClient()
+
 	client, err := openai.New(
 		openai.WithToken(opts.APIKey),
 		openai.WithBaseURL(opts.BaseURL),
 		openai.WithModel(opts.Model),
+		openai.WithHTTPClient(pooledClient),
 	)
 	if err != nil {
 		return nil, errors.NewError(errors.EC_LLM_CLIENT_CREATE_FAILED.Code, errors.EC_LLM_CLIENT_CREATE_FAILED.Message).Wrap(err)

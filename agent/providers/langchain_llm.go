@@ -47,30 +47,39 @@ func (p *LangChainLLMProvider) SetRetryDelay(delay time.Duration) {
 }
 
 // handle429Retry handles 429 rate limit errors with retry logic
-func (p *LangChainLLMProvider) handle429Retry(err error, retryCount, maxRetries int) (shouldRetry bool, waitTime int) {
+func (p *LangChainLLMProvider) handle429Retry(err error, retryCount, maxRetries int) (shouldRetry bool, waitTime time.Duration) {
 	if retryCount >= maxRetries {
 		return false, 0
 	}
 
-	errMsg := err.Error()
-	if !strings.Contains(errMsg, "429") {
+	errMsg := strings.ToLower(err.Error())
+	if !strings.Contains(errMsg, "429") && !strings.Contains(errMsg, "rate limit") && !strings.Contains(errMsg, "rate_limit") && !strings.Contains(errMsg, "too many requests") {
 		return false, 0
 	}
 
-	retryAfterRegex := regexp.MustCompile(`Please retry after (\d+) milliseconds`)
-	matches := retryAfterRegex.FindStringSubmatch(errMsg)
-	waitTime = 5000
-	if len(matches) > 1 {
+	retryAfterRegex := regexp.MustCompile(`(?i)(?:retry|wait|after)[\s:]+(\d+)[\s]*?(milliseconds?|ms|seconds?|s|minutes?|m)`)
+	matches := retryAfterRegex.FindStringSubmatch(err.Error())
+	waitTime = p.retryDelay
+	if len(matches) >= 3 {
 		if parsedTime, parseErr := strconv.Atoi(matches[1]); parseErr == nil {
-			waitTime = parsedTime
+			unit := strings.ToLower(strings.TrimSpace(matches[2]))
+			switch {
+			case strings.HasPrefix(unit, "milli") || unit == "ms":
+				waitTime = time.Duration(parsedTime) * time.Millisecond
+			case strings.HasPrefix(unit, "second") || unit == "s":
+				waitTime = time.Duration(parsedTime) * time.Second
+			case strings.HasPrefix(unit, "minute") || unit == "m":
+				waitTime = time.Duration(parsedTime) * time.Minute
+			default:
+				waitTime = time.Duration(parsedTime) * time.Millisecond
+			}
 		}
 	}
 
-	p.logger.Info("Received 429 error, waiting before retry",
-		slog.Int("wait_time_ms", waitTime),
+	p.logger.Info("Received 429 error, will retry after wait",
+		slog.Duration("wait_time", waitTime),
 		slog.Int("attempt", retryCount+1),
 		slog.Int("max_retries", maxRetries))
-	time.Sleep(time.Duration(waitTime) * time.Millisecond)
 
 	return true, waitTime
 }
@@ -87,9 +96,9 @@ func (p *LangChainLLMProvider) Chat(messages []types.Message) (types.Message, er
 		response, err := p.model.GenerateContent(context.Background(), langChainMessages)
 		if err != nil {
 			// Handle 429 retry
-			if shouldRetry, _ := p.handle429Retry(err, retryCount, p.maxRetries); shouldRetry {
+			if shouldRetry, waitTime := p.handle429Retry(err, retryCount, p.maxRetries); shouldRetry {
 				retryCount++
-				time.Sleep(p.retryDelay)
+				time.Sleep(waitTime)
 				continue
 			}
 
@@ -117,7 +126,7 @@ func (p *LangChainLLMProvider) ChatStream(messages []types.Message) (<-chan type
 
 		retryCount := 0
 
-		for retryCount <= p.maxRetries {
+		for {
 			if retryCount > 0 {
 				outputChan <- types.StreamMessage{
 					Type:    "retry",
@@ -139,10 +148,10 @@ func (p *LangChainLLMProvider) ChatStream(messages []types.Message) (<-chan type
 				if shouldRetry, waitTime := p.handle429Retry(err, retryCount, p.maxRetries); shouldRetry {
 					outputChan <- types.StreamMessage{
 						Type:    "info",
-						Content: fmt.Sprintf("Received 429 error, waiting %d milliseconds before retry...", waitTime),
+						Content: fmt.Sprintf("Received 429 error, waiting %v before retry...", waitTime),
 					}
 					retryCount++
-					time.Sleep(p.retryDelay)
+					time.Sleep(waitTime)
 					continue
 				}
 
@@ -178,9 +187,9 @@ func (p *LangChainLLMProvider) ChatWithTools(messages []types.Message, tools []t
 		response, err := p.model.GenerateContent(context.Background(), langChainMessages, llms.WithTools(langChainTools))
 		if err != nil {
 			// Handle 429 retry
-			if shouldRetry, _ := p.handle429Retry(err, retryCount, p.maxRetries); shouldRetry {
+			if shouldRetry, waitTime := p.handle429Retry(err, retryCount, p.maxRetries); shouldRetry {
 				retryCount++
-				time.Sleep(p.retryDelay)
+				time.Sleep(waitTime)
 				continue
 			}
 
@@ -212,7 +221,7 @@ func (p *LangChainLLMProvider) ChatWithToolsStream(messages []types.Message, too
 
 		retryCount := 0
 
-		for retryCount <= p.maxRetries {
+		for {
 			if retryCount > 0 {
 				outputChan <- types.StreamMessage{
 					Type:    "retry",
@@ -222,6 +231,7 @@ func (p *LangChainLLMProvider) ChatWithToolsStream(messages []types.Message, too
 
 			var fullResponse *llms.ContentResponse
 			var contentBuffer strings.Builder
+			contentBuffer.Grow(2048)
 
 			// Streaming call
 			// Note: We collect all content chunks and filter tool calls from the full response
@@ -254,11 +264,11 @@ func (p *LangChainLLMProvider) ChatWithToolsStream(messages []types.Message, too
 				if shouldRetry, waitTime := p.handle429Retry(err, retryCount, p.maxRetries); shouldRetry {
 					outputChan <- types.StreamMessage{
 						Type:    "info",
-						Content: fmt.Sprintf("Received 429 error, waiting %d milliseconds before retry...", waitTime),
+						Content: fmt.Sprintf("Received 429 error, waiting %v before retry...", waitTime),
 					}
 					retryCount++
 					contentBuffer.Reset()
-					time.Sleep(p.retryDelay)
+					time.Sleep(waitTime)
 					continue
 				}
 
@@ -345,6 +355,11 @@ func (p *LangChainLLMProvider) convertToLangChainMessages(messages []types.Messa
 
 		// Build content parts
 		var parts []llms.ContentPart
+		if len(msg.Parts) > 0 {
+			parts = make([]llms.ContentPart, 0, len(msg.Parts))
+		} else {
+			parts = make([]llms.ContentPart, 0, 1)
+		}
 
 		// If there are multimodal parts, use Parts, otherwise use traditional Content field
 		if len(msg.Parts) > 0 {
@@ -364,10 +379,10 @@ func (p *LangChainLLMProvider) convertToLangChainMessages(messages []types.Messa
 			}
 		} else if msg.Content != "" {
 			// Backward compatibility: use traditional Content field
-			parts = []llms.ContentPart{llms.TextPart(msg.Content)}
+			parts = append(parts, llms.TextPart(msg.Content))
 		} else if msg.Content == "" && len(msg.ToolCalls) > 0 {
 			// For assistant messages with tool calls but no content, use empty string
-			parts = []llms.ContentPart{llms.TextPart("")}
+			parts = append(parts, llms.TextPart(""))
 		}
 
 		// Ensure content is never null - provide empty string if no content exists
@@ -380,14 +395,14 @@ func (p *LangChainLLMProvider) convertToLangChainMessages(messages []types.Messa
 				if content == "" {
 					content = "{}"
 				}
-				parts = []llms.ContentPart{llms.ToolCallResponse{
+				parts = append(parts, llms.ToolCallResponse{
 					ToolCallID: msg.ToolCallID,
 					Name:       msg.Name,
 					Content:    content,
-				}}
+				})
 			} else {
 				// For other messages, use empty text part
-				parts = []llms.ContentPart{llms.TextPart("")}
+				parts = append(parts, llms.TextPart(""))
 			}
 		}
 

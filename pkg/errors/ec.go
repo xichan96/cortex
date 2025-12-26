@@ -54,6 +54,7 @@ var (
 	EC_NOT_IMPLEMENTED    = NewError(7003, "not implemented")    // 7003
 	EC_UNKNOWN_ERROR      = NewError(7004, "unknown error")      // 7004
 	EC_SYSTEM_OVERLOAD    = NewError(7005, "system overload")    // 7005
+	ErrRateLimitExceeded  = NewError(7006, "rate limit exceeded")
 
 	// Data errors (8xxx)
 	EC_DATA_CORRUPTION     = NewError(8001, "data corruption")     // 8001
