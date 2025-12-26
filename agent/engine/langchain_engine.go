@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xichan96/cortex/agent/ratelimit"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
 	"github.com/xichan96/cortex/pkg/logger"
@@ -315,6 +316,11 @@ func (e *LangChainAgentEngine) SetConfig(config *types.AgentConfig) {
 	e.maxHistoryMessages = config.MaxHistoryMessages
 	e.limitMemoryLocked()
 	e.mu.Unlock()
+}
+
+// SetRateLimiter sets the rate limiter (not implemented for LangChain engine)
+func (e *LangChainAgentEngine) SetRateLimiter(limiter ratelimit.RateLimiter) {
+	// LangChain engine does not implement rate limiting
 }
 
 // limitMemory limits memory size based on maxHistoryMessages
