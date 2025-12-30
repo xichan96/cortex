@@ -2,13 +2,13 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"gitlab.gz.cvte.cn/research_engineer/kit/ec"
 )
 
 // LocalCacheIer local cache interface
@@ -67,11 +67,11 @@ func (c *LocalCache) Get(key string, result interface{}) error {
 	defer c.lock.RUnlock()
 	data, ok := c.db[key]
 	if !ok {
-		return ec.NoFound
+		return errors.New("not found")
 	}
 	// check if data is expired
 	if data.Expire > 0 && time.Now().Unix() >= data.Expire {
-		return ec.NoFound
+		return errors.New("not found")
 	}
 	// copy data to result using reflection
 	if result == nil {
@@ -102,11 +102,11 @@ func (c *LocalCache) GetValue(key string) (value any, err error) {
 	defer c.lock.RUnlock()
 	data, ok := c.db[key]
 	if !ok {
-		return value, ec.NoFound
+		return value, errors.New("not found")
 	}
 	// check if data is expired
 	if data.Expire > 0 && time.Now().Unix() >= data.Expire {
-		return value, ec.NoFound
+		return value, errors.New("not found")
 	}
 	return data.Data, nil
 }
@@ -116,7 +116,7 @@ func (c *LocalCache) Del(key string) error {
 	defer c.lock.Unlock()
 	_, ok := c.db[key]
 	if !ok {
-		return ec.NoFound
+		return errors.New("not found")
 	}
 	delete(c.db, key)
 	return nil
@@ -127,7 +127,7 @@ func (c *LocalCache) TTL(key string) (expire int64, err error) {
 	defer c.lock.RUnlock()
 	data, ok := c.db[key]
 	if !ok {
-		return 0, ec.NoFound
+		return 0, errors.New("not found")
 	}
 	return data.Expire, nil
 }
