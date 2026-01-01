@@ -155,6 +155,125 @@ go run cortex.go -config /path/to/cortex.yaml
 
 默认服务端口为 `:5678`，可通过配置文件进行修改。
 
+### API 接口文档
+
+#### POST /chat
+
+标准聊天接口，返回完整的对话结果。
+
+**请求体：**
+```json
+{
+  "session_id": "string",  // 会话ID，用于区分不同的对话会话
+  "message": "string"       // 用户消息内容
+}
+```
+
+**响应：**
+```json
+{
+  "output": "string",                    // AI 代理的回复内容
+  "tool_calls": [                        // 工具调用列表（如果有）
+    {
+      "tool": "string",                  // 工具名称
+      "tool_input": {},                  // 工具输入参数
+      "tool_call_id": "string",          // 工具调用ID
+      "type": "string"                   // 工具调用类型
+    }
+  ],
+  "intermediate_steps": []               // 中间步骤（如果启用）
+}
+```
+
+**示例：**
+```bash
+curl -X POST http://localhost:5678/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "user-123",
+    "message": "今天北京的天气怎么样？"
+  }'
+```
+
+#### POST /chat/stream
+
+流式聊天接口，使用 Server-Sent Events (SSE) 实时返回响应。
+
+**请求体：**
+```json
+{
+  "session_id": "string",  // 会话ID，用于区分不同的对话会话
+  "message": "string"       // 用户消息内容
+}
+```
+
+**响应格式（SSE）：**
+
+响应使用 `text/event-stream` 格式，包含以下事件类型：
+
+1. **chunk 事件** - 内容片段
+```
+data: {"type":"chunk","content":"今天"}
+```
+
+2. **error 事件** - 错误信息
+```
+data: {"type":"error","error":"错误描述"}
+```
+
+3. **end 事件** - 结束标记
+```
+data: {"type":"end","end":true,"data":{"output":"完整回复","tool_calls":[],"intermediate_steps":[]}}
+```
+
+**示例：**
+```bash
+curl -X POST http://localhost:5678/chat/stream \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "user-123",
+    "message": "给我讲一个故事"
+  }'
+```
+
+**JavaScript 示例：**
+```javascript
+const eventSource = new EventSource('http://localhost:5678/chat/stream', {
+  method: 'POST',
+  body: JSON.stringify({
+    session_id: 'user-123',
+    message: '给我讲一个故事'
+  })
+});
+
+eventSource.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  if (data.type === 'chunk') {
+    console.log(data.content);
+  } else if (data.type === 'end') {
+    eventSource.close();
+  }
+};
+```
+
+#### ANY /mcp
+
+MCP（Model Context Protocol）协议接口，支持 MCP 客户端连接。
+
+该接口遵循 MCP 协议规范，自动注册以下工具：
+- `ping`: 健康检查工具
+- 可配置的聊天工具（名称和描述通过配置文件设置）
+
+**使用方式：**
+
+通过 MCP 客户端连接到 `http://localhost:5678/mcp`，即可使用注册的工具。
+
+**示例（使用 MCP 客户端）：**
+```bash
+# MCP 客户端连接示例
+mcp-client connect http://localhost:5678/mcp
+```
+
 ### Docker 部署
 
 使用 Docker 快速部署 Cortex 服务：
