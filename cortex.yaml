@@ -20,7 +20,7 @@ llm:
 
 tools:
   mcp:
-    - enabled: true
+    - enabled: false
       url: ""
       transport: "http"
       headers:
@@ -92,5 +92,5 @@ agent:
       version: "0.1.0"
     tool:
       name: "chat"
-      description: "a task self-check assistant: Users may send you task_id or links. You need to: 1. Collect information as needed. If previous information is insufficient to analyze the problem, continue collecting (task details, logs, workflow, task monitoring statistics, etc.) 2. Comprehensive analysis of problems or evaluation of resource utilization of training tasks based on the collected information"
+      description: "assistant"
 

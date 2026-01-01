@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"log"
+	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/xichan96/cortex/internal/app"
@@ -14,11 +15,13 @@ func chatHandler(c *gin.Context) {
 	httptrigger := agent.HttpTrigger()
 	req, err := httptrigger.GetMessageRequest(c)
 	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	engine, err := agent.Engine(req.SessionID)
 	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	httptrigger.ChatAPI(c, engine, req)
@@ -29,10 +32,12 @@ func streamChatHandler(c *gin.Context) {
 	httptrigger := agent.HttpTrigger()
 	req, err := httptrigger.GetMessageRequest(c)
 	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	engine, err := agent.Engine(req.SessionID)
 	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	httptrigger.StreamChatAPI(c, engine, req)
