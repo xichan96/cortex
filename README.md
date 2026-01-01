@@ -154,6 +154,125 @@ The main program provides the following HTTP endpoints:
 
 The default service port is `:5678`, which can be modified via the configuration file.
 
+### API Documentation
+
+#### POST /chat
+
+Standard chat endpoint that returns complete conversation results.
+
+**Request Body:**
+```json
+{
+  "session_id": "string",  // Session ID to distinguish different conversation sessions
+  "message": "string"       // User message content
+}
+```
+
+**Response:**
+```json
+{
+  "output": "string",                    // AI agent's reply content
+  "tool_calls": [                        // List of tool calls (if any)
+    {
+      "tool": "string",                  // Tool name
+      "tool_input": {},                  // Tool input parameters
+      "tool_call_id": "string",          // Tool call ID
+      "type": "string"                   // Tool call type
+    }
+  ],
+  "intermediate_steps": []               // Intermediate steps (if enabled)
+}
+```
+
+**Example:**
+```bash
+curl -X POST http://localhost:5678/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "user-123",
+    "message": "What is the weather in Beijing today?"
+  }'
+```
+
+#### POST /chat/stream
+
+Streaming chat endpoint using Server-Sent Events (SSE) for real-time responses.
+
+**Request Body:**
+```json
+{
+  "session_id": "string",  // Session ID to distinguish different conversation sessions
+  "message": "string"       // User message content
+}
+```
+
+**Response Format (SSE):**
+
+The response uses `text/event-stream` format with the following event types:
+
+1. **chunk event** - Content chunk
+```
+data: {"type":"chunk","content":"Today"}
+```
+
+2. **error event** - Error message
+```
+data: {"type":"error","error":"Error description"}
+```
+
+3. **end event** - End marker
+```
+data: {"type":"end","end":true,"data":{"output":"Complete reply","tool_calls":[],"intermediate_steps":[]}}
+```
+
+**Example:**
+```bash
+curl -X POST http://localhost:5678/chat/stream \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "user-123",
+    "message": "Tell me a story"
+  }'
+```
+
+**JavaScript Example:**
+```javascript
+const eventSource = new EventSource('http://localhost:5678/chat/stream', {
+  method: 'POST',
+  body: JSON.stringify({
+    session_id: 'user-123',
+    message: 'Tell me a story'
+  })
+});
+
+eventSource.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  if (data.type === 'chunk') {
+    console.log(data.content);
+  } else if (data.type === 'end') {
+    eventSource.close();
+  }
+};
+```
+
+#### ANY /mcp
+
+MCP (Model Context Protocol) protocol endpoint that supports MCP client connections.
+
+This endpoint follows the MCP protocol specification and automatically registers the following tools:
+- `ping`: Health check tool
+- Configurable chat tool (name and description set via configuration file)
+
+**Usage:**
+
+Connect to `http://localhost:5678/mcp` via an MCP client to use the registered tools.
+
+**Example (using MCP client):**
+```bash
+# MCP client connection example
+mcp-client connect http://localhost:5678/mcp
+```
+
 ### Docker Deployment
 
 Quickly deploy Cortex service using Docker:
