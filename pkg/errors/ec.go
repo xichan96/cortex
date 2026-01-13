@@ -106,4 +106,11 @@ var (
 
 	// Cache errors (14xxx)
 	EC_CACHE_NO_FOUND = NewError(14001, "cache not found") // 14001
+
+	// SQL/database errors (15xxx)
+	EC_SQL_NOT_FOUND      = NewError(15001, "record not found")        // 15001
+	EC_SQL_DUPLICATE_KEY  = NewError(15002, "duplicate key error")    // 15002
+	EC_SQL_DB_KEY_ERROR   = NewError(15003, "ctx dbkey type error")   // 15003
+	EC_SQL_DEFAULT_DB_ERROR = NewError(15004, "empty default db")     // 15004
+	EC_SQL_ERROR          = NewError(15005, "SQL error")              // 15005
 )

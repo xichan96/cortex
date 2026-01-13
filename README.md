@@ -35,7 +35,7 @@ CORTEX implements functionality similar to n8n's AI Agent but adopts a lightweig
 - **Multi-Modal Support**: Process text, images, and other media formats effortlessly.
 - **Tool Ecosystem**: Extensible tool system with built-in MCP and HTTP clients.
 - **Streaming Support**: Real-time response streaming for interactive applications.
-- **Memory Management**: Context-aware memory system for preserving conversation history with support for LangChain, MongoDB, and Redis storage backends.
+- **Memory Management**: Context-aware memory system for preserving conversation history with support for LangChain, MongoDB, Redis, MySQL, and SQLite storage backends.
 - **Configuration Flexibility**: Comprehensive options for fine-tuning agent behavior.
 - **Parallel Tool Calls**: Efficient execution of multiple tools simultaneously.
 - **Robust Error Handling**: Comprehensive error management and retry mechanisms.
@@ -794,6 +794,74 @@ memoryProvider.SetMaxHistoryMessages(100)
 
 // Optional: Set key prefix (default: "chat_messages")
 memoryProvider.SetKeyPrefix("chat_messages")
+
+// Set memory provider
+agentEngine.SetMemory(memoryProvider)
+```
+
+#### MySQL Memory
+
+Use MySQL as persistent storage:
+
+```go
+import (
+	"github.com/xichan96/cortex/agent/providers"
+	"github.com/xichan96/cortex/pkg/sql/mysql"
+)
+
+// Create MySQL client
+mysqlCfg := &mysql.Config{
+	Host:     "localhost",
+	Port:     3306,
+	User:     "root",
+	Password: "password",
+	Database: "cortex",
+}
+mysqlClient, err := mysql.NewClient(mysqlCfg)
+if err != nil {
+	// Handle error
+}
+
+// Create MySQL memory provider
+memoryProvider := providers.NewMySQLMemoryProvider(mysqlClient, "session-id")
+
+// Optional: Set maximum history messages
+memoryProvider.SetMaxHistoryMessages(100)
+
+// Optional: Set table name (default: "chat_messages")
+memoryProvider.SetTableName("chat_messages")
+
+// Set memory provider
+agentEngine.SetMemory(memoryProvider)
+```
+
+#### SQLite Memory
+
+Use SQLite as persistent storage:
+
+```go
+import (
+	"github.com/xichan96/cortex/agent/providers"
+	"github.com/xichan96/cortex/pkg/sql/sqlite"
+)
+
+// Create SQLite client
+sqliteCfg := &sqlite.Config{
+	Path: "cortex.db",
+}
+sqliteClient, err := sqlite.NewClient(sqliteCfg)
+if err != nil {
+	// Handle error
+}
+
+// Create SQLite memory provider
+memoryProvider := providers.NewSQLiteMemoryProvider(sqliteClient, "session-id")
+
+// Optional: Set maximum history messages
+memoryProvider.SetMaxHistoryMessages(100)
+
+// Optional: Set table name (default: "chat_messages")
+memoryProvider.SetTableName("chat_messages")
 
 // Set memory provider
 agentEngine.SetMemory(memoryProvider)
