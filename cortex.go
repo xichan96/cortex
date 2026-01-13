@@ -12,8 +12,8 @@ import (
 
 func chatHandler(c *gin.Context) {
 	agent := app.NewAgent()
-	httptrigger := agent.HttpTrigger()
-	req, err := httptrigger.GetMessageRequest(c)
+	httpTrigger := agent.HttpTrigger()
+	req, err := httpTrigger.GetMessageRequest(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -24,13 +24,13 @@ func chatHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	httptrigger.ChatAPI(c, engine, req)
+	httpTrigger.ChatAPI(c, engine, req)
 }
 
 func streamChatHandler(c *gin.Context) {
 	agent := app.NewAgent()
-	httptrigger := agent.HttpTrigger()
-	req, err := httptrigger.GetMessageRequest(c)
+	httpTrigger := agent.HttpTrigger()
+	req, err := httpTrigger.GetMessageRequest(c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -40,16 +40,16 @@ func streamChatHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	httptrigger.StreamChatAPI(c, engine, req)
+	httpTrigger.StreamChatAPI(c, engine, req)
 }
 
 func mcpHandler(c *gin.Context) {
 	agent := app.NewAgent()
-	mcptrigger, err := agent.McpTrigger()
+	mcpTrigger, err := agent.McpTrigger()
 	if err != nil {
 		return
 	}
-	mcptrigger.Agent()(c)
+	mcpTrigger.Agent()(c)
 }
 
 func router(r *gin.Engine) {
