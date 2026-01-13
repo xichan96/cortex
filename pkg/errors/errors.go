@@ -42,3 +42,12 @@ func NewError(code int, message string) *Error {
 		Message: message,
 	}
 }
+
+// WrapWithSkip wraps an error with a generic SQL error, skipping skip frames
+// This is a compatibility function for existing code that uses WrapWithSkip
+func WrapWithSkip(skip int, err error) error {
+	if err == nil {
+		return nil
+	}
+	return EC_SQL_ERROR.Wrap(err)
+}

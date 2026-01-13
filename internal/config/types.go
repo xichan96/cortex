@@ -87,6 +87,8 @@ type MemoryConfig struct {
 	MaxHistoryMessages int           `yaml:"max_history_messages"`
 	Redis              RedisConfig   `yaml:"redis"`
 	MongoDB            MongoDBConfig `yaml:"mongodb"`
+	MySQL              MySQLConfig   `yaml:"mysql"`
+	SQLite             SQLiteConfig  `yaml:"sqlite"`
 }
 
 type RedisConfig struct {
@@ -108,14 +110,36 @@ type MongoDBConfig struct {
 	MinPoolSize int    `yaml:"min_pool_size"`
 }
 
+type MySQLConfig struct {
+	Host             string `yaml:"host"`
+	Port             int    `yaml:"port"`
+	User             string `yaml:"user"`
+	Password         string `yaml:"password"`
+	Database         string `yaml:"database"`
+	Table            string `yaml:"table"`
+	MaxOpenConn      int    `yaml:"max_open_conn,omitempty"`
+	MaxIdleConn      int    `yaml:"max_idle_conn,omitempty"`
+	MaxIdleTimeSec   int    `yaml:"max_idle_time_sec,omitempty"`
+	DisableErrorHook bool   `yaml:"disable_error_hook,omitempty"`
+}
+
+type SQLiteConfig struct {
+	Path             string `yaml:"path"`
+	Table            string `yaml:"table"`
+	MaxOpenConn      int    `yaml:"max_open_conn,omitempty"`
+	MaxIdleConn      int    `yaml:"max_idle_conn,omitempty"`
+	MaxIdleTimeSec   int    `yaml:"max_idle_time_sec,omitempty"`
+	DisableErrorHook bool   `yaml:"disable_error_hook,omitempty"`
+}
+
 type AgentConfig struct {
-	MaxIterations      int        `yaml:"max_iterations"`
-	SystemMessage      string     `yaml:"system_message"`
-	Temperature        float64    `yaml:"temperature"`
+	MaxIterations      int         `yaml:"max_iterations"`
+	SystemMessage      string      `yaml:"system_message"`
+	Temperature        float64     `yaml:"temperature"`
 	MaxTokens          int         `yaml:"max_tokens"`
 	TopP               float64     `yaml:"top_p"`
-	FrequencyPenalty   float64    `yaml:"frequency_penalty"`
-	PresencePenalty    float64    `yaml:"presence_penalty"`
+	FrequencyPenalty   float64     `yaml:"frequency_penalty"`
+	PresencePenalty    float64     `yaml:"presence_penalty"`
 	Timeout            string      `yaml:"timeout"`
 	RetryAttempts      int         `yaml:"retry_attempts"`
 	EnableToolRetry    bool        `yaml:"enable_tool_retry"`

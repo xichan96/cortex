@@ -53,7 +53,7 @@ tools:
       enabled: true
 
 memory:
-  provider: "mongodb"
+  provider: "sqlite"
   session_id: ""
   max_history_messages: 100
   
@@ -73,6 +73,26 @@ memory:
     collection: "chat_messages"
     max_pool_size: 100
     min_pool_size: 0
+  
+  mysql:
+    host: "localhost"
+    port: 3306
+    user: "root"
+    password: ""
+    database: "cortex"
+    table: "chat_messages"
+    max_open_conn: 10
+    max_idle_conn: 3
+    max_idle_time_sec: 120
+    disable_error_hook: false
+  
+  sqlite:
+    path: "cortex.db"
+    table: "chat_messages"
+    max_open_conn: 10
+    max_idle_conn: 3
+    max_idle_time_sec: 120
+    disable_error_hook: false
 
 agent:
   max_iterations: 5
