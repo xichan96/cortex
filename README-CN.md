@@ -34,6 +34,7 @@ CORTEX 实现的功能类似于 n8n 的 AI Agent，但采用了轻量级设计�
 - **智能代理引擎**：用于创建具有高级工具调用能力的 AI 代理的核心功能。
 - **LLM 集成**：无缝支持 OpenAI、DeepSeek、Volce（火山引擎）和自定义 LLM 提供商。
 - **多模态支持**：轻松处理文本、图像和其他媒体格式。
+- **Agent Skills**：支持通过文件系统动态加载和管理代理技能，支持 Lazy Load 模式。
 - **工具生态系统**：可扩展的工具系统，内置 MCP 和 HTTP 客户端。
 - **流式传输支持**：为交互式应用程序提供实时响应流式传输。
 - **记忆体**：用于保存对话历史的上下文感知内存系统，支持 LangChain、MongoDB、Redis、MySQL 和 SQLite 存储。
@@ -414,6 +415,73 @@ for chunk := range stream {
 // 多模态输入（如图像）功能正在开发中
 ```
 
+### Agent Skills
+
+Cortex 支持从指定目录加载技能定义，这允许您以模块化的方式扩展 Agent 的能力。
+
+#### 1. 配置
+
+在 `cortex.yaml` 中配置技能目录：
+
+```yaml
+skills:
+  paths:
+    - "./skills"
+    - "/path/to/other/skills"
+```
+
+#### 2. 技能定义 (SKILL.md)
+
+在技能目录中创建 `SKILL.md` 文件。文件包含 YAML Frontmatter 元数据和 Markdown 内容：
+
+```markdown
+---
+name: "WeatherSkill"
+description: "查询天气的技能"
+version: "1.0"
+---
+
+# 天气查询技能
+
+当用户询问天气时，你应该...
+```
+
+#### 3. 工作原理 (Lazy Load)
+
+1. **加载**：Cortex 启动时扫描配置的目录，解析 `SKILL.md` 的 Frontmatter。
+2. **注入**：技能的名称和描述会被注入到 Agent 的 System Prompt 中。
+3. **调用**：当 Agent 认为需要使用某个技能时，它会使用 `read_file` 工具读取该技能的完整内容（需要启用 `file` 工具）。
+4. **执行**：Agent 根据读取到的技能说明执行任务。
+
+#### 4. 代码中使用
+
+如果您将 Cortex 作为库集成到您的代码中，可以手动加载和注入技能：
+
+```go
+import (
+	"github.com/xichan96/cortex/agent/skills"
+	"github.com/xichan96/cortex/agent/tools/builtin"
+)
+
+// ... 初始化 agentConfig ...
+
+// 1. 加载技能
+loadedSkills, err := skills.LoadSkillsFromDirs([]string{"./skills"})
+if err != nil {
+	// 处理错误
+}
+
+// 2. 注入提示词
+skillsPrompt := skills.BuildSystemPromptInjection(loadedSkills)
+if skillsPrompt != "" {
+	agentConfig.SystemMessage += "\n" + skillsPrompt
+}
+
+// 3. 创建引擎并确保启用了文件读取工具（用于 Lazy Load）
+agentEngine := engine.NewAgentEngine(llmProvider, agentConfig)
+agentEngine.AddTool(builtin.NewFileTool()) // 必须启用文件工具
+```
+
 ### 内置工具集成
 
 #### MCP 工具集成
@@ -684,6 +752,15 @@ MCP 触发器自动注册：
 ```go
 // 请参阅 examples/mcp-server/main.go 获取完整示例
 ```
+
+### Agent Skills 示例
+
+`examples/agent-skills` 目录包含一个示例，演示如何加载和使用 Agent Skills。
+
+```go
+// 请参阅 examples/agent-skills/main.go 获取完整示例
+```
+
 ## 高级用法
 
 ### 自定义工具
