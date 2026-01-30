@@ -33,6 +33,7 @@ CORTEX implements functionality similar to n8n's AI Agent but adopts a lightweig
 - **Intelligent Agent Engine**: Core functionality for creating AI agents with advanced tool calling capabilities.
 - **LLM Integration**: Seamless support for OpenAI, DeepSeek, Volce, and custom LLM providers.
 - **Multi-Modal Support**: Process text, images, and other media formats effortlessly.
+- **Agent Skills**: Dynamic skill loading and management via file system, supporting Lazy Load pattern.
 - **Tool Ecosystem**: Extensible tool system with built-in MCP and HTTP clients.
 - **Streaming Support**: Real-time response streaming for interactive applications.
 - **Memory Management**: Context-aware memory system for preserving conversation history with support for LangChain, MongoDB, Redis, MySQL, and SQLite storage backends.
@@ -413,6 +414,73 @@ for chunk := range stream {
 // Multi-modal input (e.g., images) support is under development
 ```
 
+### Agent Skills
+
+Cortex supports loading skill definitions from specified directories, allowing you to extend Agent capabilities in a modular way.
+
+#### 1. Configuration
+
+Configure skill directories in `cortex.yaml`:
+
+```yaml
+skills:
+  paths:
+    - "./skills"
+    - "/path/to/other/skills"
+```
+
+#### 2. Skill Definition (SKILL.md)
+
+Create a `SKILL.md` file in the skill directory. The file contains YAML Frontmatter metadata and Markdown content:
+
+```markdown
+---
+name: "WeatherSkill"
+description: "Skill for querying weather"
+version: "1.0"
+---
+
+# Weather Query Skill
+
+When the user asks about the weather, you should...
+```
+
+#### 3. How it Works (Lazy Load)
+
+1. **Load**: Cortex scans configured directories on startup and parses the Frontmatter of `SKILL.md`.
+2. **Inject**: The skill's name and description are injected into the Agent's System Prompt.
+3. **Invoke**: When the Agent decides a skill is needed, it uses the `read_file` tool to read the full content of the skill (requires `file` tool to be enabled).
+4. **Execute**: The Agent executes tasks based on the read skill instructions.
+
+#### 4. Programmatic Usage
+
+If you are using Cortex as a library in your code, you can manually load and inject skills:
+
+```go
+import (
+	"github.com/xichan96/cortex/agent/skills"
+	"github.com/xichan96/cortex/agent/tools/builtin"
+)
+
+// ... initialize agentConfig ...
+
+// 1. Load skills
+loadedSkills, err := skills.LoadSkillsFromDirs([]string{"./skills"})
+if err != nil {
+	// Handle error
+}
+
+// 2. Inject prompt
+skillsPrompt := skills.BuildSystemPromptInjection(loadedSkills)
+if skillsPrompt != "" {
+	agentConfig.SystemMessage += "\n" + skillsPrompt
+}
+
+// 3. Create engine and ensure file tool is enabled (for Lazy Load)
+agentEngine := engine.NewAgentEngine(llmProvider, agentConfig)
+agentEngine.AddTool(builtin.NewFileTool()) // Must enable file tool
+```
+
 ### Built-in Tool Integrations
 
 #### MCP Tool Integration
@@ -681,8 +749,17 @@ The `examples/chat-web` directory contains a web-based chat application using Co
 The `examples/mcp-server` directory contains an example demonstrating how to expose your agent as an MCP server.
 
 ```go
-// See examples/mcp-server/main.go for a complete example
+// See examples/mcp-server/main.go for the full example
 ```
+
+### Agent Skills Example
+
+The `examples/agent-skills` directory contains an example demonstrating how to load and use Agent Skills.
+
+```go
+// See examples/agent-skills/main.go for the full example
+```
+
 ## Advanced Usage
 
 ### Custom Tools

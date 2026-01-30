@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jinzhu/copier"
 	"github.com/xichan96/cortex/agent/engine"
+	"github.com/xichan96/cortex/agent/skills"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/internal/config"
 	"github.com/xichan96/cortex/pkg/cache"
@@ -63,6 +64,19 @@ func (a *agent) build(sessionID string) (*engine.AgentEngine, error) {
 	agentConfig := types.NewAgentConfig()
 	if err := copier.Copy(agentConfig, a.config.Agent); err != nil {
 		return nil, fmt.Errorf("failed to copy agent config: %w", err)
+	}
+
+	// Load skills if configured
+	if len(a.config.Skills.Paths) > 0 {
+		loadedSkills, err := skills.LoadSkillsFromDirs(a.config.Skills.Paths)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load skills: %w", err)
+		}
+		skillsPrompt := skills.BuildSystemPromptInjection(loadedSkills)
+		if skillsPrompt != "" {
+			agentConfig.SystemMessage += "\n" + skillsPrompt
+			a.logger.Info("Skills loaded and injected into system prompt", slog.Int("count", len(loadedSkills)))
+		}
 	}
 
 	if a.config.Agent.Timeout != "" {

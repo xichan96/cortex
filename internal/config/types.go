@@ -6,7 +6,12 @@ type Config struct {
 	LLM    LLMConfig    `yaml:"llm"`
 	Tools  ToolsConfig  `yaml:"tools"`
 	Memory MemoryConfig `yaml:"memory"`
+	Skills SkillsConfig `yaml:"skills"`
 	Agent  AgentConfig  `yaml:"agent"`
+}
+
+type SkillsConfig struct {
+	Paths []string `yaml:"paths"`
 }
 
 type LLMConfig struct {

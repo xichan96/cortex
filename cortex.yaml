@@ -52,6 +52,10 @@ tools:
     time:
       enabled: true
 
+skills:
+  paths:
+    - "./skills"
+
 memory:
   provider: "sqlite"
   session_id: ""
