@@ -21,6 +21,15 @@ type MessageDocument struct {
 	CreatedAt time.Time          `bson:"created_at"`
 }
 
+type SummaryDocument struct {
+	ID                      primitive.ObjectID `bson:"_id,omitempty"`
+	SessionID               string             `bson:"session_id"`
+	Content                 string             `bson:"content"`
+	LastSummarizedMessageID primitive.ObjectID `bson:"last_summarized_message_id"`
+	CreatedAt               time.Time          `bson:"created_at"`
+	UpdatedAt               time.Time          `bson:"updated_at"`
+}
+
 type MongoDBMemoryProvider struct {
 	mu                 sync.RWMutex
 	client             *mongodb.Client
@@ -69,7 +78,6 @@ func (p *MongoDBMemoryProvider) getCollection() *mongodb.Client {
 func (p *MongoDBMemoryProvider) AddMessage(ctx context.Context, message types.Message) error {
 	p.mu.RLock()
 	sessionID := p.sessionID
-	maxHistoryMessages := p.maxHistoryMessages
 	p.mu.RUnlock()
 
 	doc := MessageDocument{
@@ -84,9 +92,6 @@ func (p *MongoDBMemoryProvider) AddMessage(ctx context.Context, message types.Me
 		return err
 	}
 
-	if maxHistoryMessages > 0 {
-		return p.trimHistory(ctx)
-	}
 	return nil
 }
 
@@ -96,9 +101,13 @@ func (p *MongoDBMemoryProvider) GetMessages(ctx context.Context, limit int) ([]t
 	maxHistoryMessages := p.maxHistoryMessages
 	p.mu.RUnlock()
 
-	filter := bson.M{"session_id": sessionID}
-	var docs []MessageDocument
+	// 1. Fetch summary
+	var summaryDoc SummaryDocument
+	summaryCollection := p.client.Collection("chat_summaries")
+	err := summaryCollection.FindOne(ctx, bson.M{"session_id": sessionID}, &summaryDoc)
+	hasSummary := err == nil && summaryDoc.Content != ""
 
+	// 2. Fetch recent messages
 	queryLimit := limit
 	if queryLimit <= 0 {
 		queryLimit = maxHistoryMessages
@@ -107,14 +116,29 @@ func (p *MongoDBMemoryProvider) GetMessages(ctx context.Context, limit int) ([]t
 		}
 	}
 
-	sort := []string{"created_at"}
-	_, err := p.getCollection().QueryByPaging(ctx, filter, sort, 1, int64(queryLimit), &docs)
+	filter := bson.M{"session_id": sessionID}
+	var docs []MessageDocument
+
+	// Sort by created_at DESC to get the most recent messages
+	sort := []string{"-created_at"}
+	_, err = p.getCollection().QueryByPaging(ctx, filter, sort, 1, int64(queryLimit), &docs)
 	if err != nil {
 		return nil, err
 	}
 
-	messages := make([]types.Message, 0, len(docs))
-	for _, doc := range docs {
+	messages := make([]types.Message, 0, len(docs)+1)
+
+	// Add summary if exists
+	if hasSummary {
+		messages = append(messages, types.Message{
+			Role:    "system",
+			Content: fmt.Sprintf("Previous conversation summary: %s", summaryDoc.Content),
+		})
+	}
+
+	// Reverse docs to get chronological order (Oldest -> Newest)
+	for i := len(docs) - 1; i >= 0; i-- {
+		doc := docs[i]
 		messages = append(messages, types.Message{
 			Role:    doc.Role,
 			Content: doc.Content,
@@ -169,64 +193,16 @@ func (p *MongoDBMemoryProvider) Clear() error {
 func (p *MongoDBMemoryProvider) GetChatHistory() ([]types.Message, error) {
 	ctx := context.Background()
 	p.mu.RLock()
-	maxHistoryMessages := p.maxHistoryMessages
-	p.mu.RUnlock()
-	return p.GetMessages(ctx, maxHistoryMessages)
-}
-
-func (p *MongoDBMemoryProvider) trimHistory(ctx context.Context) error {
-	p.mu.RLock()
-	maxHistoryMessages := p.maxHistoryMessages
 	sessionID := p.sessionID
 	p.mu.RUnlock()
 
-	if maxHistoryMessages <= 0 {
-		return nil
-	}
-
-	filter := bson.M{"session_id": sessionID}
-	sort := []string{"created_at"}
-	var docs []MessageDocument
-	totalCount, err := p.getCollection().QueryByPaging(ctx, filter, sort, 1, int64(maxHistoryMessages), &docs)
-	if err != nil {
-		return err
-	}
-
-	if totalCount <= int64(maxHistoryMessages) {
-		return nil
-	}
-
-	if len(docs) > 0 {
-		oldestKeptDoc := docs[0]
-		deleteFilter := bson.M{
-			"session_id": sessionID,
-			"created_at": bson.M{"$lt": oldestKeptDoc.CreatedAt},
-		}
-		return p.getCollection().DeleteAll(ctx, deleteFilter)
-	}
-
-	return nil
-}
-
-// CompressMemory compresses old messages into a summary (implements MemoryProvider interface)
-func (p *MongoDBMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages int) error {
-	if llm == nil {
-		return fmt.Errorf("LLM provider is required for memory compression")
-	}
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	ctx := context.Background()
-	sessionID := p.sessionID
-	collectionName := p.collectionName
-	collection := p.client.Collection(collectionName)
 	filter := bson.M{"session_id": sessionID}
 	var docs []MessageDocument
+	// Get all messages, sorted by created_at ASC
 	sort := []string{"created_at"}
-	_, err := collection.QueryByPaging(ctx, filter, sort, 1, 10000, &docs)
+	_, err := p.getCollection().QueryByPaging(ctx, filter, sort, 1, 100000, &docs) // High limit to get all
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	messages := make([]types.Message, 0, len(docs))
@@ -237,104 +213,128 @@ func (p *MongoDBMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessage
 			Name:    doc.Name,
 		})
 	}
+	return messages, nil
+}
 
-	if len(messages) <= maxMessages {
-		return nil
+// CompressMemory compresses old messages into a summary (implements MemoryProvider interface)
+func (p *MongoDBMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages int) error {
+	if llm == nil {
+		return fmt.Errorf("LLM provider is required for memory compression")
 	}
 
-	systemMessages := make([]types.Message, 0)
-	recentMessages := make([]types.Message, 0)
-	oldMessages := make([]types.Message, 0)
+	p.mu.Lock()
 
-	for i, msg := range messages {
-		if msg.Role == "system" {
-			systemMessages = append(systemMessages, msg)
-		} else if i < len(messages)-maxMessages {
-			oldMessages = append(oldMessages, msg)
-		} else {
-			recentMessages = append(recentMessages, msg)
+	ctx := context.Background()
+	sessionID := p.sessionID
+
+	// 1. Get current summary state
+	var summaryDoc SummaryDocument
+	summaryCollection := p.client.Collection("chat_summaries")
+	err := summaryCollection.FindOne(ctx, bson.M{"session_id": sessionID}, &summaryDoc)
+
+	var currentSummary string
+
+	if err == nil {
+		// lastSummarizedTime = summaryDoc.CreatedAt
+	}
+
+	var lastSummarizedTimestamp time.Time
+	if !summaryDoc.LastSummarizedMessageID.IsZero() {
+		var lastMsg MessageDocument
+		if err := p.getCollection().FindOne(ctx, bson.M{"_id": summaryDoc.LastSummarizedMessageID}, &lastMsg); err == nil {
+			lastSummarizedTimestamp = lastMsg.CreatedAt
 		}
 	}
 
-	if len(oldMessages) == 0 {
-		return nil
+	if err == nil {
+		currentSummary = summaryDoc.Content
 	}
 
-	summaryPrompt := "Please provide a concise summary of the following conversation history, preserving key information and context:\n\n"
-	for _, msg := range oldMessages {
-		summaryPrompt += fmt.Sprintf("%s: %s\n", msg.Role, msg.Content)
+	// 2. Get unsummarized messages
+	// Filter: session_id AND created_at > lastSummarizedTimestamp
+	filter := bson.M{
+		"session_id": sessionID,
+		"created_at": bson.M{"$gt": lastSummarizedTimestamp},
+	}
+	sort := []string{"created_at"}
+	var unsummarizedDocs []MessageDocument
+	// Fetch all potential unsummarized messages
+	_, err = p.getCollection().QueryByPaging(ctx, filter, sort, 1, 10000, &unsummarizedDocs)
+	if err != nil {
+		p.mu.Unlock()
+		return err
+	}
+
+	if len(unsummarizedDocs) <= maxMessages {
+		p.mu.Unlock()
+		return nil // Nothing to summarize, all fit in recent window
+	}
+
+	// We have more messages than maxMessages.
+	// We want to keep the last `maxMessages` as raw.
+	// So we summarize the first `len - maxMessages`.
+	numToSummarize := len(unsummarizedDocs) - maxMessages
+	docsToSummarize := unsummarizedDocs[:numToSummarize]
+
+	// 3. Generate summary
+	newContent := ""
+	for _, doc := range docsToSummarize {
+		newContent += fmt.Sprintf("%s: %s\n", doc.Role, doc.Content)
+	}
+	p.mu.Unlock()
+
+	prompt := fmt.Sprintf(`Current summary of conversation:
+%s
+
+New lines of conversation:
+%s
+
+Please update the summary to include the new information, keeping it concise but preserving key details.`, currentSummary, newContent)
+
+	if currentSummary == "" {
+		prompt = fmt.Sprintf(`Please provide a concise summary of the following conversation history:
+%s`, newContent)
 	}
 
 	summaryMsg, err := llm.Chat([]types.Message{
 		{
 			Role:    "system",
-			Content: "You are a helpful assistant that summarizes conversation history while preserving important context and key information.",
+			Content: "You are a helpful assistant that summarizes conversation history.",
 		},
 		{
 			Role:    "user",
-			Content: summaryPrompt,
+			Content: prompt,
 		},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to generate memory summary: %w", err)
 	}
 
-	compressedMessages := make([]MessageDocument, 0, len(systemMessages)+1+len(recentMessages))
-	now := time.Now()
+	// 4. Save summary
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	lastDoc := docsToSummarize[len(docsToSummarize)-1]
 
-	for _, msg := range systemMessages {
-		compressedMessages = append(compressedMessages, MessageDocument{
-			SessionID: p.sessionID,
-			Role:      msg.Role,
-			Content:   msg.Content,
-			Name:      msg.Name,
-			CreatedAt: now,
+	newSummaryDoc := SummaryDocument{
+		SessionID:               sessionID,
+		Content:                 summaryMsg.Content,
+		LastSummarizedMessageID: lastDoc.ID,
+		UpdatedAt:               time.Now(),
+		CreatedAt:               time.Now(), // Only for new doc
+	}
+
+	if summaryDoc.ID.IsZero() {
+		// Insert new
+		_, err = summaryCollection.InsertOne(ctx, newSummaryDoc)
+	} else {
+		// Update existing
+		newSummaryDoc.CreatedAt = summaryDoc.CreatedAt // Preserve original creation time
+		err = summaryCollection.Update(ctx, bson.M{"_id": summaryDoc.ID}, bson.M{
+			"content":                    summaryMsg.Content,
+			"last_summarized_message_id": lastDoc.ID,
+			"updated_at":                 time.Now(),
 		})
 	}
 
-	compressedMessages = append(compressedMessages, MessageDocument{
-		SessionID: p.sessionID,
-		Role:      "system",
-		Content:   fmt.Sprintf("Previous conversation summary: %s", summaryMsg.Content),
-		CreatedAt: now,
-	})
-
-	for _, msg := range recentMessages {
-		compressedMessages = append(compressedMessages, MessageDocument{
-			SessionID: p.sessionID,
-			Role:      msg.Role,
-			Content:   msg.Content,
-			Name:      msg.Name,
-			CreatedAt: now,
-		})
-	}
-
-	insertData := make([]interface{}, len(compressedMessages))
-	for i := range compressedMessages {
-		insertData[i] = compressedMessages[i]
-	}
-
-	if err := collection.Insert(ctx, insertData); err != nil {
-		return fmt.Errorf("failed to insert compressed messages: %w", err)
-	}
-
-	var insertedDocs []MessageDocument
-	countFilter := bson.M{"session_id": p.sessionID, "created_at": now}
-	_, err = collection.QueryByPaging(ctx, countFilter, []string{"created_at"}, 1, int64(len(compressedMessages)), &insertedDocs)
-	if err != nil || len(insertedDocs) < len(compressedMessages) {
-		collection.DeleteAll(ctx, bson.M{"session_id": p.sessionID, "created_at": now})
-		return fmt.Errorf("failed to verify compressed messages insertion, rolled back")
-	}
-
-	deleteFilter := bson.M{
-		"session_id": p.sessionID,
-		"created_at": bson.M{"$lt": now},
-	}
-
-	if err := collection.DeleteAll(ctx, deleteFilter); err != nil {
-		collection.DeleteAll(ctx, bson.M{"session_id": p.sessionID, "created_at": now})
-		return fmt.Errorf("failed to delete old messages after compression, rolled back: %w", err)
-	}
-
-	return nil
+	return err
 }

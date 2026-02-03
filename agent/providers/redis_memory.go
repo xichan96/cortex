@@ -7,19 +7,20 @@ import (
 	"sync"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/xichan96/cortex/agent/types"
-	"github.com/xichan96/cortex/pkg/redis"
+	credis "github.com/xichan96/cortex/pkg/redis"
 )
 
 type RedisMemoryProvider struct {
 	mu                 sync.RWMutex
-	client             *redis.Client
+	client             *credis.Client
 	sessionID          string
 	maxHistoryMessages int
 	keyPrefix          string
 }
 
-func NewRedisMemoryProvider(client *redis.Client, sessionID string) *RedisMemoryProvider {
+func NewRedisMemoryProvider(client *credis.Client, sessionID string) *RedisMemoryProvider {
 	return &RedisMemoryProvider{
 		client:             client,
 		sessionID:          sessionID,
@@ -28,7 +29,7 @@ func NewRedisMemoryProvider(client *redis.Client, sessionID string) *RedisMemory
 	}
 }
 
-func NewRedisMemoryProviderWithLimit(client *redis.Client, sessionID string, maxHistoryMessages int) *RedisMemoryProvider {
+func NewRedisMemoryProviderWithLimit(client *credis.Client, sessionID string, maxHistoryMessages int) *RedisMemoryProvider {
 	return &RedisMemoryProvider{
 		client:             client,
 		sessionID:          sessionID,
@@ -73,9 +74,6 @@ func (p *RedisMemoryProvider) AddMessage(ctx context.Context, message types.Mess
 		return err
 	}
 
-	if p.maxHistoryMessages > 0 {
-		return p.trimHistory(ctx)
-	}
 	return nil
 }
 
@@ -93,12 +91,33 @@ func (p *RedisMemoryProvider) GetMessages(ctx context.Context, limit int) ([]typ
 	}
 
 	key := p.getKey()
+	// Fetch recent messages (LRange 0 is newest)
 	results, err := p.client.LRange(ctx, key, 0, int64(queryLimit-1)).Result()
 	if err != nil {
 		return nil, err
 	}
 
-	messages := make([]types.Message, 0, len(results))
+	messages := make([]types.Message, 0, len(results)+1)
+
+	// Fetch summary
+	summaryKey := key + ":summary"
+	summaryJSON, err := p.client.Get(ctx, summaryKey).Result()
+	if err == nil && summaryJSON != "" {
+		var summaryData map[string]interface{}
+		if err := json.Unmarshal([]byte(summaryJSON), &summaryData); err == nil {
+			if content, ok := summaryData["content"].(string); ok && content != "" {
+				messages = append(messages, types.Message{
+					Role:    "system",
+					Content: fmt.Sprintf("Previous conversation summary: %s", content),
+				})
+			}
+		}
+	} else if err != nil && err != redis.Nil { // Ignore key not found
+		// Log error or ignore? For memory, maybe best to ignore if just missing
+	}
+
+	// Process recent messages (reverse order: LRange returns [newest, ..., oldest])
+	// We want chronological: [oldest, ..., newest]
 	for i := len(results) - 1; i >= 0; i-- {
 		var msgData map[string]interface{}
 		if err := json.Unmarshal([]byte(results[i]), &msgData); err != nil {
@@ -162,42 +181,15 @@ func (p *RedisMemoryProvider) Clear() error {
 
 func (p *RedisMemoryProvider) GetChatHistory() ([]types.Message, error) {
 	ctx := context.Background()
-	p.mu.RLock()
-	maxHistoryMessages := p.maxHistoryMessages
-	p.mu.RUnlock()
-	return p.GetMessages(ctx, maxHistoryMessages)
-}
-
-func (p *RedisMemoryProvider) trimHistory(ctx context.Context) error {
-	p.mu.RLock()
-	maxHistoryMessages := p.maxHistoryMessages
-	p.mu.RUnlock()
-
-	if maxHistoryMessages <= 0 {
-		return nil
-	}
-
 	key := p.getKey()
-	return p.client.LTrim(ctx, key, 0, int64(maxHistoryMessages-1)).Err()
-}
-
-// CompressMemory compresses old messages into a summary (implements MemoryProvider interface)
-func (p *RedisMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages int) error {
-	if llm == nil {
-		return fmt.Errorf("LLM provider is required for memory compression")
-	}
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	ctx := context.Background()
-	key := p.keyPrefix + ":" + p.sessionID
-	results, err := p.client.LRange(ctx, key, 0, 9999).Result()
+	// Fetch all messages (0 to -1)
+	results, err := p.client.LRange(ctx, key, 0, -1).Result()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	messages := make([]types.Message, 0, len(results))
+	// Reverse order to be chronological
 	for i := len(results) - 1; i >= 0; i-- {
 		var msgData map[string]interface{}
 		if err := json.Unmarshal([]byte(results[i]), &msgData); err != nil {
@@ -215,92 +207,152 @@ func (p *RedisMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages 
 		})
 	}
 
-	if len(messages) <= maxMessages {
-		return nil
+	return messages, nil
+}
+
+// CompressMemory compresses old messages into a summary (implements MemoryProvider interface)
+func (p *RedisMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages int) error {
+	if llm == nil {
+		return fmt.Errorf("LLM provider is required for memory compression")
 	}
 
-	systemMessages := make([]types.Message, 0)
-	recentMessages := make([]types.Message, 0)
-	oldMessages := make([]types.Message, 0)
+	p.mu.Lock()
 
-	for i, msg := range messages {
-		if msg.Role == "system" {
-			systemMessages = append(systemMessages, msg)
-		} else if i < len(messages)-maxMessages {
-			oldMessages = append(oldMessages, msg)
-		} else {
-			recentMessages = append(recentMessages, msg)
+	ctx := context.Background()
+	key := p.getKey()
+	summaryKey := key + ":summary"
+
+	// 1. Get current summary state
+	var lastSummarizedTimestamp int64 = 0
+	currentSummary := ""
+
+	summaryJSON, err := p.client.Get(ctx, summaryKey).Result()
+	if err == nil && summaryJSON != "" {
+		var summaryData map[string]interface{}
+		if err := json.Unmarshal([]byte(summaryJSON), &summaryData); err == nil {
+			if ts, ok := summaryData["last_summarized_timestamp"].(float64); ok {
+				lastSummarizedTimestamp = int64(ts)
+			}
+			if content, ok := summaryData["content"].(string); ok {
+				currentSummary = content
+			}
 		}
 	}
 
-	if len(oldMessages) == 0 {
+	// 2. Get potentially unsummarized messages (those older than maxMessages)
+	// LRange returns [newest, ..., oldest]
+	// We start from maxMessages index (skipping the recent ones)
+	rawMessages, err := p.client.LRange(ctx, key, int64(maxMessages), -1).Result()
+	if err != nil {
+		p.mu.Unlock()
+		return err
+	}
+
+	if len(rawMessages) == 0 {
+		p.mu.Unlock()
+		return nil // Nothing to summarize
+	}
+
+	// 3. Filter messages that are newer than lastSummarizedTimestamp
+	var docsToSummarize []map[string]interface{}
+
+	// Iterate from beginning (NewestOld) to end (OldestOld)
+	for _, rawMsg := range rawMessages {
+		var msgData map[string]interface{}
+		if err := json.Unmarshal([]byte(rawMsg), &msgData); err != nil {
+			continue
+		}
+
+		createdAtVal, ok := msgData["created_at"]
+		var createdAt int64
+		if ok {
+			if ts, ok := createdAtVal.(float64); ok {
+				createdAt = int64(ts)
+			} else if ts, ok := createdAtVal.(int64); ok {
+				createdAt = ts
+			}
+		}
+
+		if createdAt > lastSummarizedTimestamp {
+			docsToSummarize = append(docsToSummarize, msgData)
+		} else {
+			// Found a message that is already summarized or older.
+			// Since list is ordered (newest first), all subsequent messages are also older.
+			break
+		}
+	}
+
+	if len(docsToSummarize) == 0 {
+		p.mu.Unlock()
 		return nil
 	}
 
-	summaryPrompt := "Please provide a concise summary of the following conversation history, preserving key information and context:\n\n"
-	for _, msg := range oldMessages {
-		summaryPrompt += fmt.Sprintf("%s: %s\n", msg.Role, msg.Content)
+	// docsToSummarize is currently [NewestOld, ..., OldestUnsummarized]
+	// We need chronological order [OldestUnsummarized, ..., NewestOld] for summarization
+	// Reverse the slice
+	for i, j := 0, len(docsToSummarize)-1; i < j; i, j = i+1, j-1 {
+		docsToSummarize[i], docsToSummarize[j] = docsToSummarize[j], docsToSummarize[i]
+	}
+
+	// 4. Generate summary
+	newContent := ""
+	for _, doc := range docsToSummarize {
+		role, _ := doc["role"].(string)
+		content, _ := doc["content"].(string)
+		newContent += fmt.Sprintf("%s: %s\n", role, content)
+	}
+	p.mu.Unlock()
+
+	prompt := fmt.Sprintf(`Current summary of conversation:
+%s
+
+New lines of conversation:
+%s
+
+Please update the summary to include the new information, keeping it concise but preserving key details.`, currentSummary, newContent)
+
+	if currentSummary == "" {
+		prompt = fmt.Sprintf(`Please provide a concise summary of the following conversation history:
+%s`, newContent)
 	}
 
 	summaryMsg, err := llm.Chat([]types.Message{
 		{
 			Role:    "system",
-			Content: "You are a helpful assistant that summarizes conversation history while preserving important context and key information.",
+			Content: "You are a helpful assistant that summarizes conversation history.",
 		},
 		{
 			Role:    "user",
-			Content: summaryPrompt,
+			Content: prompt,
 		},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to generate memory summary: %w", err)
 	}
 
-	compressedMessages := make([]types.Message, 0, len(systemMessages)+1+len(recentMessages))
-	compressedMessages = append(compressedMessages, systemMessages...)
-	compressedMessages = append(compressedMessages, types.Message{
-		Role:    "system",
-		Content: fmt.Sprintf("Previous conversation summary: %s", summaryMsg.Content),
-	})
-	compressedMessages = append(compressedMessages, recentMessages...)
-
-	tempKey := key + ":temp:" + fmt.Sprintf("%d", time.Now().UnixNano())
-
-	for i := len(compressedMessages) - 1; i >= 0; i-- {
-		msg := compressedMessages[i]
-		msgData := map[string]interface{}{
-			"role":       msg.Role,
-			"content":    msg.Content,
-			"name":       msg.Name,
-			"created_at": time.Now().Unix(),
-		}
-		msgJSON, err := json.Marshal(msgData)
-		if err != nil {
-			p.client.Del(ctx, tempKey)
-			return fmt.Errorf("failed to marshal message: %w", err)
-		}
-		if err := p.client.LPush(ctx, tempKey, msgJSON).Err(); err != nil {
-			p.client.Del(ctx, tempKey)
-			return fmt.Errorf("failed to insert compressed message to temp key: %w", err)
-		}
+	// 5. Update summary in Redis
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	// New timestamp is the timestamp of the newest message we just summarized (which is the last in docsToSummarize)
+	newestSummarizedDoc := docsToSummarize[len(docsToSummarize)-1]
+	var newTimestamp int64
+	if ts, ok := newestSummarizedDoc["created_at"].(float64); ok {
+		newTimestamp = int64(ts)
+	} else if ts, ok := newestSummarizedDoc["created_at"].(int64); ok {
+		newTimestamp = ts
+	} else {
+		newTimestamp = time.Now().Unix() // Fallback
 	}
 
-	tempCount, err := p.client.LLen(ctx, tempKey).Result()
-	if err != nil || tempCount != int64(len(compressedMessages)) {
-		p.client.Del(ctx, tempKey)
-		return fmt.Errorf("failed to verify compressed messages in temp key")
+	newSummaryData := map[string]interface{}{
+		"content":                   summaryMsg.Content,
+		"last_summarized_timestamp": newTimestamp,
+		"updated_at":                time.Now().Unix(),
+	}
+	newSummaryJSON, err := json.Marshal(newSummaryData)
+	if err != nil {
+		return err
 	}
 
-	if err := p.client.Rename(ctx, tempKey, key).Err(); err != nil {
-		p.client.Del(ctx, tempKey)
-		return fmt.Errorf("failed to atomically replace messages: %w", err)
-	}
-
-	if p.maxHistoryMessages > 0 {
-		if err := p.client.LTrim(ctx, key, 0, int64(p.maxHistoryMessages-1)).Err(); err != nil {
-			return fmt.Errorf("failed to trim history after compression: %w", err)
-		}
-	}
-
-	return nil
+	return p.client.Set(ctx, summaryKey, newSummaryJSON, 0).Err()
 }

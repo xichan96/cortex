@@ -13,6 +13,8 @@ type SimpleMemoryProvider struct {
 	mu                 sync.RWMutex
 	messages           []types.Message
 	maxHistoryMessages int
+	summary            string
+	summaryIdx         int // Index of the last message included in the summary
 }
 
 // NewSimpleMemoryProvider creates a new simple memory provider
@@ -20,6 +22,7 @@ func NewSimpleMemoryProvider() *SimpleMemoryProvider {
 	return &SimpleMemoryProvider{
 		messages:           make([]types.Message, 0),
 		maxHistoryMessages: 100,
+		summaryIdx:         -1,
 	}
 }
 
@@ -28,6 +31,7 @@ func NewSimpleMemoryProviderWithLimit(maxHistoryMessages int) *SimpleMemoryProvi
 	return &SimpleMemoryProvider{
 		messages:           make([]types.Message, 0),
 		maxHistoryMessages: maxHistoryMessages,
+		summaryIdx:         -1,
 	}
 }
 
@@ -36,9 +40,6 @@ func (p *SimpleMemoryProvider) SetMaxHistoryMessages(limit int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.maxHistoryMessages = limit
-	if limit > 0 && len(p.messages) > limit {
-		p.messages = p.messages[len(p.messages)-limit:]
-	}
 }
 
 // AddMessage adds a message
@@ -46,9 +47,6 @@ func (p *SimpleMemoryProvider) AddMessage(ctx context.Context, message types.Mes
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.messages = append(p.messages, message)
-	if p.maxHistoryMessages > 0 && len(p.messages) > p.maxHistoryMessages {
-		p.messages = p.messages[len(p.messages)-p.maxHistoryMessages:]
-	}
 	return nil
 }
 
@@ -56,27 +54,56 @@ func (p *SimpleMemoryProvider) AddMessage(ctx context.Context, message types.Mes
 func (p *SimpleMemoryProvider) GetMessages(ctx context.Context, limit int) ([]types.Message, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	if limit <= 0 || limit >= len(p.messages) {
-		messages := make([]types.Message, len(p.messages))
-		copy(messages, p.messages)
+
+	queryLimit := limit
+	if queryLimit <= 0 {
+		queryLimit = p.maxHistoryMessages
+		if queryLimit <= 0 {
+			queryLimit = 1000
+		}
+	}
+
+	totalMessages := len(p.messages)
+
+	// If total messages fit in limit, just return them (plus summary if exists)
+	if totalMessages <= queryLimit {
+		messages := make([]types.Message, 0, totalMessages+1)
+		if p.summary != "" {
+			messages = append(messages, types.Message{
+				Role:    "system",
+				Content: fmt.Sprintf("Previous conversation summary: %s", p.summary),
+			})
+		}
+		messages = append(messages, p.messages...)
 		return messages, nil
 	}
-	start := len(p.messages) - limit
-	messages := make([]types.Message, limit)
-	copy(messages, p.messages[start:])
+
+	// Otherwise, return summary + recent messages
+	messages := make([]types.Message, 0, queryLimit+1)
+	if p.summary != "" {
+		messages = append(messages, types.Message{
+			Role:    "system",
+			Content: fmt.Sprintf("Previous conversation summary: %s", p.summary),
+		})
+	}
+
+	start := totalMessages - queryLimit
+	messages = append(messages, p.messages[start:]...)
 	return messages, nil
 }
 
 // LoadMemoryVariables loads memory variables (implements MemoryProvider interface)
 func (p *SimpleMemoryProvider) LoadMemoryVariables() (map[string]interface{}, error) {
+	ctx := context.Background()
 	p.mu.RLock()
-	messages := make([]types.Message, len(p.messages))
-	copy(messages, p.messages)
-	maxHistoryMessages := p.maxHistoryMessages
+	limit := p.maxHistoryMessages
 	p.mu.RUnlock()
-	if maxHistoryMessages > 0 && len(messages) > maxHistoryMessages {
-		messages = messages[len(messages)-maxHistoryMessages:]
+
+	messages, err := p.GetMessages(ctx, limit)
+	if err != nil {
+		return nil, err
 	}
+
 	return map[string]interface{}{
 		"history": messages,
 	}, nil
@@ -91,18 +118,12 @@ func (p *SimpleMemoryProvider) SaveContext(input, output map[string]interface{})
 			Role:    "user",
 			Content: inputMsg,
 		})
-		if p.maxHistoryMessages > 0 && len(p.messages) > p.maxHistoryMessages {
-			p.messages = p.messages[len(p.messages)-p.maxHistoryMessages:]
-		}
 	}
 	if outputMsg, ok := output["output"].(string); ok {
 		p.messages = append(p.messages, types.Message{
 			Role:    "assistant",
 			Content: outputMsg,
 		})
-		if p.maxHistoryMessages > 0 && len(p.messages) > p.maxHistoryMessages {
-			p.messages = p.messages[len(p.messages)-p.maxHistoryMessages:]
-		}
 	}
 	return nil
 }
@@ -112,6 +133,8 @@ func (p *SimpleMemoryProvider) Clear() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.messages = make([]types.Message, 0)
+	p.summary = ""
+	p.summaryIdx = -1
 	return nil
 }
 
@@ -123,96 +146,98 @@ func (p *SimpleMemoryProvider) ClearWithContext(ctx context.Context) error {
 // GetChatHistory gets chat history (implements MemoryProvider interface)
 func (p *SimpleMemoryProvider) GetChatHistory() ([]types.Message, error) {
 	p.mu.RLock()
+	defer p.mu.RUnlock()
+	// Return full history as requested "all conversations will be recorded"
+	// For in-memory provider, this is just returning the slice.
+	// If the caller needs context-window sized history, they should use GetMessages with limit.
 	messages := make([]types.Message, len(p.messages))
 	copy(messages, p.messages)
-	maxHistoryMessages := p.maxHistoryMessages
-	p.mu.RUnlock()
-	if maxHistoryMessages > 0 && len(messages) > maxHistoryMessages {
-		messages = messages[len(messages)-maxHistoryMessages:]
-	}
 	return messages, nil
 }
 
 // CompressMemory compresses old messages into a summary (implements MemoryProvider interface)
-// Optimized to avoid holding lock during LLM call to prevent blocking other operations
 func (p *SimpleMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages int) error {
 	if llm == nil {
 		return fmt.Errorf("LLM provider is required for memory compression")
 	}
 
-	// Copy data while holding lock, then release lock before LLM call
-	var systemMessages, recentMessages, oldMessages []types.Message
-	var shouldCompress bool
+	p.mu.Lock()
 
-	func() {
-		p.mu.Lock()
-		defer p.mu.Unlock()
+	// 1. Check if compression is needed
+	// We want to summarize messages that are outside the window of 'maxMessages'.
+	// But we also need to respect what has already been summarized.
+	// p.summaryIdx points to the last message that was included in the summary.
 
-		if len(p.messages) <= maxMessages {
-			return
-		}
-
-		shouldCompress = true
-
-		// Keep system messages and recent messages
-		systemMessages = make([]types.Message, 0)
-		recentMessages = make([]types.Message, 0)
-		oldMessages = make([]types.Message, 0)
-
-		for i, msg := range p.messages {
-			if msg.Role == "system" {
-				systemMessages = append(systemMessages, msg)
-			} else if i < len(p.messages)-maxMessages {
-				oldMessages = append(oldMessages, msg)
-			} else {
-				recentMessages = append(recentMessages, msg)
-			}
-		}
-	}()
-
-	if !shouldCompress || len(oldMessages) == 0 {
+	totalMessages := len(p.messages)
+	if totalMessages <= maxMessages {
+		p.mu.Unlock()
 		return nil
 	}
 
-	// Generate summary of old messages (lock is released, won't block other operations)
-	summaryPrompt := "Please provide a concise summary of the following conversation history, preserving key information and context:\n\n"
-	for _, msg := range oldMessages {
-		summaryPrompt += fmt.Sprintf("%s: %s\n", msg.Role, msg.Content)
+	// Calculate how many new messages need to be summarized
+	// We want to keep the last 'maxMessages' untouched.
+	// So we summarize up to index: totalMessages - maxMessages - 1
+	targetIdx := totalMessages - maxMessages - 1
+
+	if targetIdx <= p.summaryIdx {
+		p.mu.Unlock()
+		return nil // Nothing new to summarize
+	}
+
+	// 2. Identify messages to summarize
+	// From (p.summaryIdx + 1) to targetIdx
+	msgsToSummarize := p.messages[p.summaryIdx+1 : targetIdx+1]
+
+	if len(msgsToSummarize) == 0 {
+		p.mu.Unlock()
+		return nil
+	}
+
+	// 3. Generate summary
+	newContent := ""
+	for _, msg := range msgsToSummarize {
+		newContent += fmt.Sprintf("%s: %s\n", msg.Role, msg.Content)
+	}
+
+	currentSummary := p.summary
+	p.mu.Unlock() // Unlock before LLM call
+
+	prompt := fmt.Sprintf(`Current summary of conversation:
+%s
+
+New lines of conversation:
+%s
+
+Please update the summary to include the new information, keeping it concise but preserving key details.`, currentSummary, newContent)
+
+	if currentSummary == "" {
+		prompt = fmt.Sprintf(`Please provide a concise summary of the following conversation history:
+%s`, newContent)
 	}
 
 	summaryMsg, err := llm.Chat([]types.Message{
 		{
 			Role:    "system",
-			Content: "You are a helpful assistant that summarizes conversation history while preserving important context and key information.",
+			Content: "You are a helpful assistant that summarizes conversation history.",
 		},
 		{
 			Role:    "user",
-			Content: summaryPrompt,
+			Content: prompt,
 		},
 	})
+
+	p.mu.Lock() // Lock to update state
+	defer p.mu.Unlock()
+
 	if err != nil {
 		return fmt.Errorf("failed to generate memory summary: %w", err)
 	}
 
-	// Re-acquire lock to update messages
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	// 4. Update state
+	p.summary = summaryMsg.Content
+	p.summaryIdx = targetIdx
 
-	// Double-check messages haven't changed significantly (another goroutine might have modified)
-	if len(p.messages) <= maxMessages {
-		return nil
-	}
-
-	// Replace old messages with summary
-	compressedMessages := make([]types.Message, 0, len(systemMessages)+1+len(recentMessages))
-	compressedMessages = append(compressedMessages, systemMessages...)
-	compressedMessages = append(compressedMessages, types.Message{
-		Role:    "system",
-		Content: fmt.Sprintf("Previous conversation summary: %s", summaryMsg.Content),
-	})
-	compressedMessages = append(compressedMessages, recentMessages...)
-
-	p.messages = compressedMessages
+	// We DO NOT delete messages from p.messages to preserve full history.
 
 	return nil
 }

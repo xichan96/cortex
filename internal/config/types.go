@@ -146,10 +146,13 @@ type AgentConfig struct {
 	FrequencyPenalty   float64     `yaml:"frequency_penalty"`
 	PresencePenalty    float64     `yaml:"presence_penalty"`
 	Timeout            string      `yaml:"timeout"`
-	RetryAttempts      int         `yaml:"retry_attempts"`
-	EnableToolRetry    bool        `yaml:"enable_tool_retry"`
-	MaxHistoryMessages int         `yaml:"max_history_messages"`
-	MCP                MCPMetadata `yaml:"mcp"`
+	RetryAttempts           int         `yaml:"retry_attempts"`
+	EnableToolRetry         bool        `yaml:"enable_tool_retry"`
+	MaxHistoryMessages      int         `yaml:"max_history_messages"`
+	EnableMemoryCompress    bool        `yaml:"enable_memory_compress"`
+	MemoryCompressThreshold int         `yaml:"memory_compress_threshold"`
+	MemoryCompressRatio     float64     `yaml:"memory_compress_ratio"`
+	MCP                     MCPMetadata `yaml:"mcp"`
 }
 
 type MCPMetadata struct {
