@@ -20,8 +20,21 @@ type MySQLMessageDocument struct {
 	CreatedAt time.Time `gorm:"index;not null" json:"created_at"`
 }
 
+type MySQLSummaryDocument struct {
+	ID                      uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	SessionID               string    `gorm:"type:varchar(255);uniqueIndex;not null" json:"session_id"`
+	Content                 string    `gorm:"type:text" json:"content"`
+	LastSummarizedMessageID uint      `gorm:"index" json:"last_summarized_message_id"`
+	CreatedAt               time.Time `gorm:"index;not null" json:"created_at"`
+	UpdatedAt               time.Time `gorm:"index;not null" json:"updated_at"`
+}
+
 func (MySQLMessageDocument) TableName() string {
 	return "chat_messages"
+}
+
+func (MySQLSummaryDocument) TableName() string {
+	return "chat_summaries"
 }
 
 type MySQLMemoryProvider struct {
@@ -71,8 +84,11 @@ func (p *MySQLMemoryProvider) initTable(ctx context.Context) error {
 	tableName := p.tableName
 	p.mu.RUnlock()
 
-	doc := MySQLMessageDocument{}
-	return p.getDB().WithContext(ctx).Table(tableName).AutoMigrate(&doc)
+	// Ensure both tables exist
+	if err := p.getDB().WithContext(ctx).Table(tableName).AutoMigrate(&MySQLMessageDocument{}); err != nil {
+		return err
+	}
+	return p.getDB().WithContext(ctx).Table("chat_summaries").AutoMigrate(&MySQLSummaryDocument{})
 }
 
 func (p *MySQLMemoryProvider) AddMessage(ctx context.Context, message types.Message) error {
@@ -82,7 +98,6 @@ func (p *MySQLMemoryProvider) AddMessage(ctx context.Context, message types.Mess
 
 	p.mu.RLock()
 	sessionID := p.sessionID
-	maxHistoryMessages := p.maxHistoryMessages
 	tableName := p.tableName
 	p.mu.RUnlock()
 
@@ -98,9 +113,6 @@ func (p *MySQLMemoryProvider) AddMessage(ctx context.Context, message types.Mess
 		return err
 	}
 
-	if maxHistoryMessages > 0 {
-		return p.trimHistory(ctx)
-	}
 	return nil
 }
 
@@ -123,23 +135,43 @@ func (p *MySQLMemoryProvider) GetMessages(ctx context.Context, limit int) ([]typ
 		}
 	}
 
+	// Fetch recent messages
 	var docs []MySQLMessageDocument
 	err := p.getDB().WithContext(ctx).Table(tableName).
 		Where("session_id = ?", sessionID).
-		Order("created_at ASC").
+		Order("created_at DESC"). // Get latest first
 		Limit(queryLimit).
 		Find(&docs).Error
 	if err != nil {
 		return nil, err
 	}
 
-	messages := make([]types.Message, 0, len(docs))
-	for _, doc := range docs {
+	// Reverse to chronological order
+	messages := make([]types.Message, 0, len(docs)+1)
+	for i := len(docs) - 1; i >= 0; i-- {
 		messages = append(messages, types.Message{
-			Role:    doc.Role,
-			Content: doc.Content,
-			Name:    doc.Name,
+			Role:    docs[i].Role,
+			Content: docs[i].Content,
+			Name:    docs[i].Name,
 		})
+	}
+
+	// Fetch summary
+	var summaryDoc MySQLSummaryDocument
+	err = p.getDB().WithContext(ctx).Table("chat_summaries").
+		Where("session_id = ?", sessionID).
+		Order("updated_at DESC").
+		First(&summaryDoc).Error
+
+	if err == nil && summaryDoc.Content != "" {
+		// Prepend summary as a system message
+		summaryMsg := types.Message{
+			Role:    "system",
+			Content: fmt.Sprintf("Previous conversation summary: %s", summaryDoc.Content),
+		}
+		messages = append([]types.Message{summaryMsg}, messages...)
+	} else if err != nil && err != gorm.ErrRecordNotFound {
+		return nil, err
 	}
 
 	return messages, nil
@@ -195,74 +227,17 @@ func (p *MySQLMemoryProvider) Clear() error {
 func (p *MySQLMemoryProvider) GetChatHistory() ([]types.Message, error) {
 	ctx := context.Background()
 	p.mu.RLock()
-	maxHistoryMessages := p.maxHistoryMessages
-	p.mu.RUnlock()
-	return p.GetMessages(ctx, maxHistoryMessages)
-}
-
-func (p *MySQLMemoryProvider) trimHistory(ctx context.Context) error {
-	p.mu.RLock()
-	maxHistoryMessages := p.maxHistoryMessages
 	sessionID := p.sessionID
 	tableName := p.tableName
 	p.mu.RUnlock()
-
-	if maxHistoryMessages <= 0 {
-		return nil
-	}
 
 	var docs []MySQLMessageDocument
 	err := p.getDB().WithContext(ctx).Table(tableName).
 		Where("session_id = ?", sessionID).
 		Order("created_at ASC").
-		Limit(maxHistoryMessages).
 		Find(&docs).Error
 	if err != nil {
-		return err
-	}
-
-	if len(docs) == 0 {
-		return nil
-	}
-
-	var totalCount int64
-	err = p.getDB().WithContext(ctx).Table(tableName).
-		Where("session_id = ?", sessionID).
-		Count(&totalCount).Error
-	if err != nil {
-		return err
-	}
-
-	if totalCount <= int64(maxHistoryMessages) {
-		return nil
-	}
-
-	oldestKeptDoc := docs[0]
-	return p.getDB().WithContext(ctx).Table(tableName).
-		Where("session_id = ? AND created_at < ?", sessionID, oldestKeptDoc.CreatedAt).
-		Delete(&MySQLMessageDocument{}).Error
-}
-
-func (p *MySQLMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages int) error {
-	if llm == nil {
-		return fmt.Errorf("LLM provider is required for memory compression")
-	}
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	ctx := context.Background()
-	sessionID := p.sessionID
-	tableName := p.tableName
-
-	var docs []MySQLMessageDocument
-	err := p.getDB().WithContext(ctx).Table(tableName).
-		Where("session_id = ?", sessionID).
-		Order("created_at ASC").
-		Limit(10000).
-		Find(&docs).Error
-	if err != nil {
-		return err
+		return nil, err
 	}
 
 	messages := make([]types.Message, 0, len(docs))
@@ -274,97 +249,110 @@ func (p *MySQLMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages 
 		})
 	}
 
-	if len(messages) <= maxMessages {
-		return nil
+	return messages, nil
+}
+
+func (p *MySQLMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages int) error {
+	if llm == nil {
+		return fmt.Errorf("LLM provider is required for memory compression")
 	}
 
-	systemMessages := make([]types.Message, 0)
-	recentMessages := make([]types.Message, 0)
-	oldMessages := make([]types.Message, 0)
+	p.mu.Lock()
+	ctx := context.Background()
+	sessionID := p.sessionID
+	tableName := p.tableName
 
-	for i, msg := range messages {
-		if msg.Role == "system" {
-			systemMessages = append(systemMessages, msg)
-		} else if i < len(messages)-maxMessages {
-			oldMessages = append(oldMessages, msg)
-		} else {
-			recentMessages = append(recentMessages, msg)
-		}
+	// 1. Get current summary
+	var summaryDoc MySQLSummaryDocument
+	err := p.getDB().WithContext(ctx).Table("chat_summaries").
+		Where("session_id = ?", sessionID).
+		Order("updated_at DESC").
+		First(&summaryDoc).Error
+
+	lastSummarizedID := uint(0)
+	currentSummary := ""
+	if err == nil {
+		lastSummarizedID = summaryDoc.LastSummarizedMessageID
+		currentSummary = summaryDoc.Content
+	} else if err != gorm.ErrRecordNotFound {
+		p.mu.Unlock()
+		return err
 	}
 
-	if len(oldMessages) == 0 {
-		return nil
+	// 2. Get unsummarized messages
+	var unsummarizedDocs []MySQLMessageDocument
+	err = p.getDB().WithContext(ctx).Table(tableName).
+		Where("session_id = ? AND id > ?", sessionID, lastSummarizedID).
+		Order("created_at ASC").
+		Find(&unsummarizedDocs).Error
+	if err != nil {
+		p.mu.Unlock()
+		return err
 	}
 
-	summaryPrompt := "Please provide a concise summary of the following conversation history, preserving key information and context:\n\n"
-	for _, msg := range oldMessages {
-		summaryPrompt += fmt.Sprintf("%s: %s\n", msg.Role, msg.Content)
+	// 3. Determine what to summarize
+	// We want to keep maxMessages as "recent" (unsummarized) context.
+	// So we summarize everything except the last maxMessages.
+	if len(unsummarizedDocs) <= maxMessages {
+		p.mu.Unlock()
+		return nil // Nothing to summarize yet
+	}
+
+	numToSummarize := len(unsummarizedDocs) - maxMessages
+	docsToSummarize := unsummarizedDocs[:numToSummarize]
+	lastDoc := docsToSummarize[len(docsToSummarize)-1]
+
+	// 4. Generate summary
+	newContent := ""
+	for _, doc := range docsToSummarize {
+		newContent += fmt.Sprintf("%s: %s\n", doc.Role, doc.Content)
+	}
+	p.mu.Unlock()
+
+	prompt := fmt.Sprintf(`Current summary of conversation:
+%s
+
+New lines of conversation:
+%s
+
+Please update the summary to include the new information, keeping it concise but preserving key details.`, currentSummary, newContent)
+
+	if currentSummary == "" {
+		prompt = fmt.Sprintf(`Please provide a concise summary of the following conversation history:
+%s`, newContent)
 	}
 
 	summaryMsg, err := llm.Chat([]types.Message{
 		{
 			Role:    "system",
-			Content: "You are a helpful assistant that summarizes conversation history while preserving important context and key information.",
+			Content: "You are a helpful assistant that summarizes conversation history.",
 		},
 		{
 			Role:    "user",
-			Content: summaryPrompt,
+			Content: prompt,
 		},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to generate memory summary: %w", err)
 	}
 
-	now := time.Now()
-	compressedMessages := make([]MySQLMessageDocument, 0, len(systemMessages)+1+len(recentMessages))
-
-	for _, msg := range systemMessages {
-		compressedMessages = append(compressedMessages, MySQLMessageDocument{
-			SessionID: sessionID,
-			Role:      msg.Role,
-			Content:   msg.Content,
-			Name:      msg.Name,
-			CreatedAt: now,
-		})
+	// 5. Save updated summary
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	newSummaryDoc := MySQLSummaryDocument{
+		SessionID:               sessionID,
+		Content:                 summaryMsg.Content,
+		LastSummarizedMessageID: lastDoc.ID,
+		CreatedAt:               time.Now(),
+		UpdatedAt:               time.Now(),
 	}
 
-	compressedMessages = append(compressedMessages, MySQLMessageDocument{
-		SessionID: sessionID,
-		Role:      "system",
-		Content:   fmt.Sprintf("Previous conversation summary: %s", summaryMsg.Content),
-		CreatedAt: now,
-	})
-
-	for _, msg := range recentMessages {
-		compressedMessages = append(compressedMessages, MySQLMessageDocument{
-			SessionID: sessionID,
-			Role:      msg.Role,
-			Content:   msg.Content,
-			Name:      msg.Name,
-			CreatedAt: now,
-		})
+	// We can either update the existing record or insert a new one (history of summaries).
+	// For now, let's keep one summary per session to keep it simple, or insert new to track history.
+	// The GetMessages uses Order("updated_at DESC").First(), so inserting new is fine and safer.
+	if err := p.getDB().WithContext(ctx).Table("chat_summaries").Create(&newSummaryDoc).Error; err != nil {
+		return fmt.Errorf("failed to save summary: %w", err)
 	}
 
-	tx := p.getDB().WithContext(ctx).Begin()
-	defer tx.Rollback()
-
-	if err := tx.Table(tableName).CreateInBatches(compressedMessages, 100).Error; err != nil {
-		return fmt.Errorf("failed to insert compressed messages: %w", err)
-	}
-
-	var insertedDocs []MySQLMessageDocument
-	err = tx.Table(tableName).
-		Where("session_id = ? AND created_at = ?", sessionID, now).
-		Find(&insertedDocs).Error
-	if err != nil || len(insertedDocs) < len(compressedMessages) {
-		return fmt.Errorf("failed to verify compressed messages insertion, rolled back")
-	}
-
-	if err := tx.Table(tableName).
-		Where("session_id = ? AND created_at < ?", sessionID, now).
-		Delete(&MySQLMessageDocument{}).Error; err != nil {
-		return fmt.Errorf("failed to delete old messages after compression, rolled back: %w", err)
-	}
-
-	return tx.Commit().Error
+	return nil
 }

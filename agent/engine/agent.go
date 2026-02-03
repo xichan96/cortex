@@ -391,13 +391,21 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 					llm := ae.model
 					ae.mu.RUnlock()
 					if llm != nil {
-						if err := ae.memory.CompressMemory(llm, compressThreshold); err != nil {
-							ae.logger.LogError("Execute", err, slog.String("phase", "compress_memory"))
-						} else {
-							ae.logger.Info("Memory compressed successfully",
-								slog.Int("original_count", len(history)),
-								slog.Int("threshold", compressThreshold))
-						}
+						// Execute compression asynchronously to avoid blocking the main thread
+						go func() {
+							defer func() {
+								if r := recover(); r != nil {
+									ae.logger.LogError("Execute", fmt.Errorf("panic in compress memory async: %v", r))
+								}
+							}()
+							if err := ae.memory.CompressMemory(llm, compressThreshold); err != nil {
+								ae.logger.LogError("Execute", err, slog.String("phase", "compress_memory_async"))
+							} else {
+								ae.logger.Info("Memory compressed successfully",
+									slog.Int("original_count", len(history)),
+									slog.Int("threshold", compressThreshold))
+							}
+						}()
 					}
 				}
 			}
@@ -895,13 +903,21 @@ func (ae *AgentEngine) executeStreamWithIterations(initialMessages []types.Messa
 					llm := ae.model
 					ae.mu.RUnlock()
 					if llm != nil {
-						if err := ae.memory.CompressMemory(llm, compressThreshold); err != nil {
-							ae.logger.LogError("executeStreamWithIterations", err, slog.String("phase", "compress_memory"))
-						} else {
-							ae.logger.Info("Memory compressed successfully",
-								slog.Int("original_count", len(history)),
-								slog.Int("threshold", compressThreshold))
-						}
+						// Execute compression asynchronously to avoid blocking the main thread
+						go func() {
+							defer func() {
+								if r := recover(); r != nil {
+									ae.logger.LogError("executeStreamWithIterations", fmt.Errorf("panic in compress memory async: %v", r))
+								}
+							}()
+							if err := ae.memory.CompressMemory(llm, compressThreshold); err != nil {
+								ae.logger.LogError("executeStreamWithIterations", err, slog.String("phase", "compress_memory_async"))
+							} else {
+								ae.logger.Info("Memory compressed successfully",
+									slog.Int("original_count", len(history)),
+									slog.Int("threshold", compressThreshold))
+							}
+						}()
 					}
 				}
 			}

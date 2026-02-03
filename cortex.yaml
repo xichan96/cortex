@@ -109,7 +109,10 @@ agent:
   timeout: "30s"
   retry_attempts: 3
   enable_tool_retry: true
-  max_history_messages: 100
+  max_history_messages: 10
+  enable_memory_compress: true
+  memory_compress_threshold: 10
+  memory_compress_ratio: 0.5
   mcp:
     server:
       name: "cortex-mcp"
