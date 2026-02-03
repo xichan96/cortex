@@ -36,7 +36,7 @@ CORTEX implements functionality similar to n8n's AI Agent but adopts a lightweig
 - **Agent Skills**: Dynamic skill loading and management via file system, supporting Lazy Load pattern.
 - **Tool Ecosystem**: Extensible tool system with built-in MCP and HTTP clients.
 - **Streaming Support**: Real-time response streaming for interactive applications.
-- **Memory Management**: Context-aware memory system for preserving conversation history with support for LangChain, MongoDB, Redis, MySQL, and SQLite storage backends.
+- **Hybrid Memory Architecture**: Implements a hybrid strategy combining full conversation history with rolling summaries. This approach optimizes token usage while retaining full context, backed by asynchronous compression to ensure low latency under high concurrency. Compatible with LangChain, MongoDB, Redis, MySQL, and SQLite.
 - **Configuration Flexibility**: Comprehensive options for fine-tuning agent behavior.
 - **Parallel Tool Calls**: Efficient execution of multiple tools simultaneously.
 - **Robust Error Handling**: Comprehensive error management and retry mechanisms.
