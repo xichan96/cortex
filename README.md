@@ -1,7 +1,6 @@
-![cortex-desc.png](docs/images/desc.png)
 # CORTEX
-
-<p align="center">CORTEX is an AI Agent framework designed for efficient integration and utilization of large language models (LLMs), built in Go.</p>
+![cortex-desc.png](docs/images/desc.png)
+<p align="center">CORTEX is a high-performance AI Agent framework built in Go, engineered for the efficient integration and orchestration of Large Language Models (LLMs).</p>
 
 <p align="center">
   <img alt="GitHub commit activity" src="https://img.shields.io/github/commit-activity/m/xichan96/cortex"/>
@@ -11,9 +10,10 @@
 <p align="center">
   <a href="#overview">Overview</a>
   · <a href="#features">Features</a>
-  · <a href="#installation">Installation</a>
-  · <a href="#basic-usage">Usage</a>
-  · <a href="#agent-module-usage">Agent Module</a>
+  · <a href="#quick-start">Quick Start</a>
+  · <a href="#core-components">Core Components</a>
+  · <a href="#tools">Tools</a>
+  · <a href="#memory-system">Memory System</a>
   · <a href="#examples">Examples</a>
   · <a href="#license">License</a>
 </p>
@@ -24,28 +24,30 @@
 
 ## Overview
 
-CORTEX is an AI Agent framework designed for efficient integration and utilization of large language models (LLMs). It is built using Go, one of the most popular programming languages for enterprise applications. CORTEX combines the simplicity of a lightweight framework with the robustness and performance of Go, offering seamless integration with various LLMs and providing a comprehensive set of tools for building AI agents with tool-calling capabilities.
+By bridging the simplicity of a lightweight framework with the robustness of Go, CORTEX enables seamless integration with leading LLMs. It provides a comprehensive toolkit for building AI agents capable of complex tool execution and reasoning.
 
-CORTEX implements functionality similar to n8n's AI Agent but adopts a lightweight design philosophy. In practical development, many scenarios do not require the complex workflow orchestration capabilities provided by n8n, and there are certain configuration complexities and resource usage issues when fully integrating n8n into one's own project. In contrast, this library is specifically designed to simplify the integration process, maintaining core AI Agent functionality while significantly lowering the barrier to use, making it ideal for project scenarios with strict requirements on resource usage and integration complexity.
+Designed for production environments, CORTEX prioritizes reliability, configurability, and resource efficiency. It empowers developers to build next-generation AI applications with the performance and safety guarantees inherent to the Go ecosystem.
 
-## Feature & Status
+**Design Philosophy**: While sharing core capabilities with n8n's AI Agent, CORTEX adopts a minimalist approach. It eliminates the heavy dependencies and complex orchestration overhead of n8n, focusing instead on streamlined integration and low resource footprint. This makes it the ideal choice for developers who need powerful Agent capabilities without the bloat of a full-fledged workflow automation platform.
 
-- **Intelligent Agent Engine**: Core functionality for creating AI agents with advanced tool calling capabilities.
-- **LLM Integration**: Seamless support for OpenAI, DeepSeek, Volce, and custom LLM providers.
-- **Multi-Modal Support**: Process text, images, and other media formats effortlessly.
-- **Agent Skills**: Dynamic skill loading and management via file system, supporting Lazy Load pattern.
-- **Tool Ecosystem**: Extensible tool system with built-in MCP and HTTP clients.
-- **Streaming Support**: Real-time response streaming for interactive applications.
+## Features
+
+- **Intelligent Agent Engine**: A robust core for building agents with advanced reasoning and tool-calling capabilities.
+- **Broad LLM Support**: Seamless integration with OpenAI, DeepSeek, Volce, and custom providers.
+- **Multi-Modal Native**: Effortlessly process and generate text, images, and other media formats.
+- **Dynamic Skills**: File-system-based skill management with Lazy Loading for optimal performance.
+- **Extensible Tooling**: Built-in support for MCP and HTTP clients, making tool extension trivial.
+- **Real-Time Streaming**: Full support for response streaming, enabling interactive, low-latency user experiences.
 - **Hybrid Memory Architecture**: Implements a hybrid strategy combining full conversation history with rolling summaries. This approach optimizes token usage while retaining full context, backed by asynchronous compression to ensure low latency under high concurrency. Compatible with LangChain, MongoDB, Redis, MySQL, and SQLite.
-- **Configuration Flexibility**: Comprehensive options for fine-tuning agent behavior.
-- **Parallel Tool Calls**: Efficient execution of multiple tools simultaneously.
-- **Robust Error Handling**: Comprehensive error management and retry mechanisms.
+- **Granular Configuration**: Extensive options to fine-tune agent behavior and performance.
+- **Parallel Execution**: Efficiently execute multiple tool calls concurrently to minimize wait times.
+- **Production-Grade Reliability**: Comprehensive error handling and retry mechanisms built for stability.
 
 ## Architecture Overview
 
 Cortex follows a modular architecture with the following key components:
 
-> Note: The agent package is built on top of [LangChain](https://github.com/tmc/langchaingo), leveraging its powerful LLM interaction and tool-calling capabilities to build intelligent agent systems.
+> **Note**: The `agent` package is built on top of [LangChain](https://github.com/tmc/langchaingo), leveraging its powerful LLM interaction and tool-calling capabilities to build intelligent agent systems.
 
 ```
 cortex/
@@ -61,13 +63,9 @@ cortex/
 │   ├── http/          # HTTP trigger (REST API)
 │   └── mcp/           # MCP trigger (MCP server)
 └── examples/          # Example applications
-    ├── basic/         # Basic usage example
-    ├── chat-web/      # Web-based chat application
-    │   └── server/    # Web server implementation
-    └── mcp-server/    # MCP server example
 ```
 
-## Getting Started
+## Quick Start
 
 ### Installation
 
@@ -75,9 +73,9 @@ cortex/
 go get github.com/xichan96/cortex
 ```
 
-### Basic Usage
+### Minimal Example
 
-Here's a simple example of how to use Cortex to create an AI agent:
+Create a weather-checking AI agent in seconds:
 
 ```go
 package main
@@ -92,905 +90,139 @@ import (
 )
 
 func main() {
-	// 1. Create an LLM provider
+	// 1. Initialize LLM Provider
 	llmProvider, err := llm.OpenAIClient("your-api-key", "gpt-4o-mini")
 	if err != nil {
-		fmt.Printf("Error creating LLM provider: %v\n", err)
-		return
+		panic(err)
 	}
 
-	// 2. Create agent configuration
+	// 2. Configure Agent
 	agentConfig := types.NewAgentConfig()
-	// Basic configuration
-	agentConfig.MaxIterations = 5                  // Maximum number of iterations
-	agentConfig.ReturnIntermediateSteps = true    // Return intermediate steps
 	agentConfig.SystemMessage = "You are a helpful AI assistant."
+	agentConfig.Timeout = 30 * time.Second
 
-	// Advanced configuration
-	agentConfig.Temperature = 0.7                  // Creativity level
-	agentConfig.MaxTokens = 2048                   // Response length limit
-	agentConfig.TopP = 0.9                         // Top P sampling
-	agentConfig.FrequencyPenalty = 0.1             // Frequency penalty
-	agentConfig.PresencePenalty = 0.1              // Presence penalty
-	agentConfig.Timeout = 30 * time.Second         // Request timeout
-	agentConfig.RetryAttempts = 3                  // Retry attempts
-	agentConfig.EnableToolRetry = true             // Enable tool retry
-	agentConfig.ToolRetryAttempts = 2              // Tool retry attempts
-	agentConfig.ParallelToolCalls = true           // Parallel tool calls
-	agentConfig.ToolCallTimeout = 10 * time.Second // Tool call timeout
-
-	// 3. Create agent engine
+	// 3. Create Engine
 	agentEngine := engine.NewAgentEngine(llmProvider, agentConfig)
 
-	// 4. Add tools (optional)
-	// agentEngine.AddTool(yourTool)
-
-	// 5. Execute the agent
-	result, err := agentEngine.Execute("What is the weather in New York today?", nil)
+	// 4. Execute
+	result, err := agentEngine.Execute("What is the weather in New York?", nil)
 	if err != nil {
-		fmt.Printf("Error executing agent: %v\n", err)
+		fmt.Printf("Execution failed: %v\n", err)
 		return
 	}
 
-	fmt.Printf("Agent result: %s\n", result.Output)
+	fmt.Printf("Response: %s\n", result.Output)
 }
 ```
 
-### Running the Main Program
+### Run the Service
 
-Cortex provides a ready-to-use main program that can quickly start the service with a configuration file:
+Cortex ships with a ready-to-deploy HTTP server:
 
 ```bash
-# Use default config file cortex.yaml
+# Run with default config
 go run cortex.go
 
-# Or specify a config file path
+# Run with custom config
 go run cortex.go -config /path/to/cortex.yaml
 ```
 
-The main program provides the following HTTP endpoints:
-- `POST /chat`: Standard chat endpoint
-- `POST /chat/stream`: Streaming chat endpoint
-- `ANY /mcp`: MCP protocol endpoint
+Default endpoints (port `:5678`):
+- `POST /chat`: Standard chat
+- `POST /chat/stream`: Streaming chat (SSE)
+- `ANY /mcp`: MCP Protocol endpoint
 
-The default service port is `:5678`, which can be modified via the configuration file.
+## Core Components
 
-### API Documentation
+### LLM Integration
 
-#### POST /chat
-
-Standard chat endpoint that returns complete conversation results.
-
-**Request Body:**
-```json
-{
-  "session_id": "string",  // Session ID to distinguish different conversation sessions
-  "message": "string"       // User message content
-}
-```
-
-**Response:**
-```json
-{
-  "output": "string",                    // AI agent's reply content
-  "tool_calls": [                        // List of tool calls (if any)
-    {
-      "tool": "string",                  // Tool name
-      "tool_input": {},                  // Tool input parameters
-      "tool_call_id": "string",          // Tool call ID
-      "type": "string"                   // Tool call type
-    }
-  ],
-  "intermediate_steps": []               // Intermediate steps (if enabled)
-}
-```
-
-**Example:**
-```bash
-curl -X POST http://localhost:5678/chat \
-  -H "Content-Type: application/json" \
-  -d '{
-    "session_id": "user-123",
-    "message": "What is the weather in Beijing today?"
-  }'
-```
-
-#### POST /chat/stream
-
-Streaming chat endpoint using Server-Sent Events (SSE) for real-time responses.
-
-**Request Body:**
-```json
-{
-  "session_id": "string",  // Session ID to distinguish different conversation sessions
-  "message": "string"       // User message content
-}
-```
-
-**Response Format (SSE):**
-
-The response uses `text/event-stream` format with the following event types:
-
-1. **chunk event** - Content chunk
-```
-data: {"type":"chunk","content":"Today"}
-```
-
-2. **error event** - Error message
-```
-data: {"type":"error","error":"Error description"}
-```
-
-3. **end event** - End marker
-```
-data: {"type":"end","end":true,"data":{"output":"Complete reply","tool_calls":[],"intermediate_steps":[]}}
-```
-
-**Example:**
-```bash
-curl -X POST http://localhost:5678/chat/stream \
-  -H "Content-Type: application/json" \
-  -d '{
-    "session_id": "user-123",
-    "message": "Tell me a story"
-  }'
-```
-
-**JavaScript Example:**
-```javascript
-const eventSource = new EventSource('http://localhost:5678/chat/stream', {
-  method: 'POST',
-  body: JSON.stringify({
-    session_id: 'user-123',
-    message: 'Tell me a story'
-  })
-});
-
-eventSource.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-  if (data.type === 'chunk') {
-    console.log(data.content);
-  } else if (data.type === 'end') {
-    eventSource.close();
-  }
-};
-```
-
-#### ANY /mcp
-
-MCP (Model Context Protocol) protocol endpoint that supports MCP client connections.
-
-This endpoint follows the MCP protocol specification and automatically registers the following tools:
-- `ping`: Health check tool
-- Configurable chat tool (name and description set via configuration file)
-
-**Usage:**
-
-Connect to `http://localhost:5678/mcp` via an MCP client to use the registered tools.
-
-**Example (using MCP client):**
-```bash
-# MCP client connection example
-mcp-client connect http://localhost:5678/mcp
-```
-
-### Docker Deployment
-
-Quickly deploy Cortex service using Docker:
-
-```bash
-# Build Docker image
-docker build -f build/Dockerfile -t cortex:latest .
-
-# Run container
-docker run -d -p 5678:5678 \
-  -v /path/to/cortex.yaml:/go/bin/cortex.yaml \
-  cortex:latest \
-  /go/bin/cortex -config /go/bin/cortex.yaml
-```
-
-## Agent Module Usage
-
-The agent module is the core of the Cortex framework, providing the intelligence and tool integration capabilities.
-
-### LLM Provider Integration
-
-Cortex supports OpenAI, DeepSeek, Volce, and custom LLM providers with flexible configuration options:
+Unified interface for major LLM providers:
 
 ```go
-// OpenAI with default configuration
-llmProvider, err := llm.OpenAIClient("your-api-key", "gpt-4o-mini")
+// OpenAI
+llmProvider, _ := llm.OpenAIClient("sk-...", "gpt-4o")
 
-// OpenAI with custom base URL
-llmProvider, err := llm.OpenAIClientWithBaseURL("your-api-key", "https://custom-api.example.com", "custom-model")
+// DeepSeek
+llmProvider, _ := llm.QuickDeepSeekProvider("sk-...", "deepseek-chat")
 
-// DeepSeek integration
-llmProvider, err := llm.QuickDeepSeekProvider("your-api-key", "deepseek-chat")
-
-// Volce integration
-llmProvider, err := llm.VolceClient("your-api-key", "doubao-seed-1-6-251015")
-
-// Volce with custom base URL
-llmProvider, err := llm.VolceClientWithBaseURL("your-api-key", "https://ark.cn-beijing.volces.com/api/v3", "doubao-seed-1-6-251015")
-
-// With advanced options for OpenAI
-opts := llm.OpenAIOptions{
-	APIKey:  "your-api-key",
-	BaseURL: "https://api.openai.com",
-	Model:   "gpt-4o",
-	OrgID:   "your-organization-id",
-}
-llmProvider, err := llm.NewOpenAIClient(opts)
-
-// With advanced options for DeepSeek
-opts := llm.DeepSeekOptions{
-	APIKey:  "your-api-key",
-	BaseURL: "https://api.deepseek.com",
-	Model:   "deepseek-chat",
-}
-llmProvider, err := llm.NewDeepSeekClient(opts)
-
-// With advanced options for Volce
-opts := llm.VolceOptions{
-	APIKey:  "your-api-key",
-	BaseURL: "https://ark.cn-beijing.volces.com/api/v3",
-	Model:   "doubao-seed-1-6-251015",
-}
-llmProvider, err := llm.NewVolceClient(opts)
+// Volcengine
+llmProvider, _ := llm.VolceClient("ak-...", "doubao-pro-32k")
 ```
 
-### Agent Configuration
+### Triggers
 
-Configure your agent with extensive options using the `AgentConfig` struct:
-
-```go
-agentConfig := types.NewAgentConfig()
-
-// Basic configuration
-agentConfig.MaxIterations = 5                  // Maximum number of iterations
-agentConfig.ReturnIntermediateSteps = true    // Return intermediate steps
-agentConfig.SystemMessage = "You are a helpful AI assistant."
-
-// Advanced configuration
-agentConfig.Temperature = 0.7                  // Creativity level
-agentConfig.MaxTokens = 2048                   // Response length limit
-agentConfig.TopP = 0.9                         // Top P sampling
-agentConfig.FrequencyPenalty = 0.1             // Frequency penalty
-agentConfig.PresencePenalty = 0.1              // Presence penalty
-agentConfig.Timeout = 30 * time.Second         // Request timeout
-agentConfig.RetryAttempts = 3                  // Retry attempts
-agentConfig.EnableToolRetry = true             // Enable tool retry
-agentConfig.ToolRetryAttempts = 2              // Tool retry attempts
-agentConfig.ParallelToolCalls = true           // Parallel tool calls
-agentConfig.ToolCallTimeout = 10 * time.Second // Tool call timeout
-```
-
-### Agent Engine Creation
-
-```go
-// Create agent engine with LLM provider and configuration
-agentEngine := engine.NewAgentEngine(llmProvider, agentConfig)
-```
-
-### Tool Management
-
-Extend your agent's capabilities by adding tools:
-
-```go
-// Add a single tool
-agentEngine.AddTool(tool)
-
-// Add multiple tools
-agentEngine.AddTools([]types.Tool{tool1, tool2, tool3})
-```
-
-### Agent Execution
-
-Execute your agent with various input types and modes:
-
-```go
-// Execute with text input
-result, err := agentEngine.Execute("What is the capital of France?", nil)
-if err != nil {
-	// Handle error
-}
-fmt.Printf("Agent output: %s\n", result.Output)
-
-// Execute with streaming
-stream, err := agentEngine.ExecuteStream("Tell me a story about AI.", nil)
-if err != nil {
-	// Handle error
-}
-
-for chunk := range stream {
-	if chunk.Error != nil {
-		// Handle streaming error
-		break
-	}
-	fmt.Printf("%s", chunk.Content)
-}
-
-// Note: Current version of Execute method only supports text input
-// Multi-modal input (e.g., images) support is under development
-```
-
-### Agent Skills
-
-Cortex supports loading skill definitions from specified directories, allowing you to extend Agent capabilities in a modular way.
-
-#### 1. Configuration
-
-Configure skill directories in `cortex.yaml`:
-
-```yaml
-skills:
-  paths:
-    - "./skills"
-    - "/path/to/other/skills"
-```
-
-#### 2. Skill Definition (SKILL.md)
-
-Create a `SKILL.md` file in the skill directory. The file contains YAML Frontmatter metadata and Markdown content:
-
-```markdown
----
-name: "WeatherSkill"
-description: "Skill for querying weather"
-version: "1.0"
----
-
-# Weather Query Skill
-
-When the user asks about the weather, you should...
-```
-
-#### 3. How it Works (Lazy Load)
-
-1. **Load**: Cortex scans configured directories on startup and parses the Frontmatter of `SKILL.md`.
-2. **Inject**: The skill's name and description are injected into the Agent's System Prompt.
-3. **Invoke**: When the Agent decides a skill is needed, it uses the `read_file` tool to read the full content of the skill (requires `file` tool to be enabled).
-4. **Execute**: The Agent executes tasks based on the read skill instructions.
-
-#### 4. Programmatic Usage
-
-If you are using Cortex as a library in your code, you can manually load and inject skills:
-
-```go
-import (
-	"github.com/xichan96/cortex/agent/skills"
-	"github.com/xichan96/cortex/agent/tools/builtin"
-)
-
-// ... initialize agentConfig ...
-
-// 1. Load skills
-loadedSkills, err := skills.LoadSkillsFromDirs([]string{"./skills"})
-if err != nil {
-	// Handle error
-}
-
-// 2. Inject prompt
-skillsPrompt := skills.BuildSystemPromptInjection(loadedSkills)
-if skillsPrompt != "" {
-	agentConfig.SystemMessage += "\n" + skillsPrompt
-}
-
-// 3. Create engine and ensure file tool is enabled (for Lazy Load)
-agentEngine := engine.NewAgentEngine(llmProvider, agentConfig)
-agentEngine.AddTool(builtin.NewFileTool()) // Must enable file tool
-```
-
-### Built-in Tool Integrations
-
-#### MCP Tool Integration
-
-Leverage MCP (Model Control Protocol) tools with built-in support:
-
-```go
-import "github.com/xichan96/cortex/pkg/mcp"
-
-// Create MCP client
-mcpClient := mcp.NewClient("https://api.example.com/mcp/sse", "http", map[string]string{
-	"Content-Type": "application/json",
-})
-
-// Connect to MCP server
-ctx := context.Background()
-if err := mcpClient.Connect(ctx); err != nil {
-	// Handle connection error
-}
-
-// Get MCP tools and add to agent
-mcpTools := mcpClient.GetTools()
-agentEngine.AddTools(mcpTools)
-
-// Don't forget to disconnect when done
-defer mcpClient.Disconnect(ctx)
-```
-
-#### Built-in Tools
-
-Cortex provides a set of built-in tools that can be directly added to your agent:
-
-##### SSH Tool
-
-Execute commands on a remote server via SSH, supporting password, private key, and SSH agent authentication, with bastion host support:
-
-```go
-import "github.com/xichan96/cortex/agent/tools/builtin"
-
-// Create SSH tool
-sshTool := builtin.NewSSHTool()
-agentEngine.AddTool(sshTool)
-```
-
-The SSH tool supports the following parameters:
-- `username`: SSH username (required)
-- `address`: SSH server address (required)
-- `command`: Command to execute (required)
-- `password`: SSH password (optional)
-- `private_key`: SSH private key content (optional)
-- `agent_socket`: SSH agent socket path (optional)
-- `port`: SSH server port (default: 22)
-- `timeout`: Connection timeout in seconds (default: 15)
-- `bastion`: Bastion host address (optional)
-- `bastion_port`: Bastion host port (default: 22)
-- `bastion_user`: Bastion host username (optional)
-
-##### File Tool
-
-Perform file and directory operations including read, write, create, delete, copy, move, and list operations:
-
-```go
-import "github.com/xichan96/cortex/agent/tools/builtin"
-
-// Create file tool
-fileTool := builtin.NewFileTool()
-agentEngine.AddTool(fileTool)
-```
-
-The file tool supports the following operations:
-- `read_file`: Read file content
-- `write_file`: Write to file
-- `append_file`: Append content to file
-- `create_dir`: Create directory
-- `delete_file`: Delete file
-- `delete_dir`: Delete directory
-- `list_dir`: List directory contents
-- `exists`: Check if file or directory exists
-- `copy`: Copy file or directory
-- `move`: Move file or directory
-- `is_file`: Check if path is a file
-- `is_dir`: Check if path is a directory
-
-##### Email Tool
-
-Send emails with support for HTML, plain text, and Markdown content types:
-
-```go
-import (
-	"github.com/xichan96/cortex/agent/tools/builtin"
-	"github.com/xichan96/cortex/pkg/email"
-)
-
-// Configure email client
-emailConfig := &email.Config{
-	SMTPHost:     "smtp.example.com",
-	SMTPPort:     587,
-	SMTPUsername: "your-username",
-	SMTPPassword: "your-password",
-	From:         "sender@example.com",
-}
-
-// Create email tool
-emailTool := builtin.NewEmailTool(emailConfig)
-agentEngine.AddTool(emailTool)
-```
-
-The email tool supports the following parameters:
-- `to`: List of recipient email addresses (required)
-- `subject`: Email subject line (required)
-- `type`: Content type, supports `text/html`, `text/plain`, `text/markdown` (required)
-- `message`: Email message content (required)
-
-##### Command Tool
-
-Execute shell commands locally and return the output, with timeout configuration support:
-
-```go
-import "github.com/xichan96/cortex/agent/tools/builtin"
-
-// Create command tool
-commandTool := builtin.NewCommandTool()
-agentEngine.AddTool(commandTool)
-```
-
-The command tool supports the following parameters:
-- `command`: Command to execute (required)
-- `timeout`: Command execution timeout in seconds (default: 30)
-
-##### Math Tool
-
-Perform mathematical calculations with support for basic operations, advanced operations, and trigonometric functions:
-
-```go
-import "github.com/xichan96/cortex/agent/tools/builtin"
-
-// Create math tool
-mathTool := builtin.NewMathTool()
-agentEngine.AddTool(mathTool)
-```
-
-The math tool supports the following parameters:
-- `expression`: Mathematical expression to evaluate (required), supports:
-  - Basic operations: `+`, `-`, `*`, `/`, `%`
-  - Advanced operations: `^` (power), `√` or `sqrt` (square root), `!` (factorial)
-  - Trigonometric functions: `sin`, `cos`, `tan`, `asin`/`arcsin`, `acos`/`arccos`, `atan`/`arctan`
-  - Logarithmic functions: `ln`, `log`/`log10`, `exp`
-  - Other functions: `abs`, `floor`, `ceil`, `round`
-- `use_degrees`: Use degrees for trigonometric functions (default: false, uses radians)
-
-##### Time Tool
-
-Get current time in specified timezone:
-
-```go
-import "github.com/xichan96/cortex/agent/tools/builtin"
-
-// Create time tool
-timeTool := builtin.NewTimeTool()
-agentEngine.AddTool(timeTool)
-```
-
-The time tool supports the following parameters:
-- `timezone`: Timezone name (optional, default: `Asia/Hong_Kong`), e.g., `Asia/Hong_Kong`, `America/New_York`, `UTC`
-
-##### Network Check Tool
-
-Check network connectivity to a remote host:
-
-```go
-import "github.com/xichan96/cortex/agent/tools/builtin"
-
-// Create network check tool
-pingTool := builtin.NewPingTool()
-agentEngine.AddTool(pingTool)
-```
-
-The network check tool supports the following parameters:
-- `address`: Target address in format `host:port` (required), e.g., `example.com:80` or `192.168.1.1:22`
-- `timeout`: Connection timeout in seconds (default: 5)
-
-### Trigger Modules
-
-Cortex provides trigger modules to expose your agent through different protocols, making it easy to integrate with various systems.
+Expose your agent via different protocols.
 
 #### HTTP Trigger
-
-Expose your agent as HTTP API endpoints for chat and streaming chat:
-
-```go
-import (
-	"github.com/gin-gonic/gin"
-	httptrigger "github.com/xichan96/cortex/trigger/http"
-)
-
-// Create HTTP handler
-httpHandler := httptrigger.NewHandler(agentEngine)
-
-// Setup routes
-r := gin.Default()
-r.POST("/chat", httpHandler.ChatAPI)
-r.GET("/chat/stream", httpHandler.StreamChatAPI)
-r.POST("/chat/stream", httpHandler.StreamChatAPI)
-```
-
-The HTTP trigger provides two endpoints:
-- `ChatAPI`: Standard chat endpoint that returns complete results
-- `StreamChatAPI`: Streaming chat endpoint using Server-Sent Events (SSE) for real-time responses
+Standard RESTful API for chat and streaming.
 
 #### MCP Trigger
+Fully compliant with the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), allowing your agent to serve as a tool for MCP clients (e.g., Claude Desktop).
 
-Expose your agent as an MCP (Model Context Protocol) server, allowing it to be used as a tool by other MCP clients:
+## Tools
 
-```go
-import (
-	"github.com/gin-gonic/gin"
-	"github.com/xichan96/cortex/trigger/mcp"
-)
+Extensive built-in tool library:
 
-// Configure MCP options
-mcpOpt := mcp.Options{
-	Server: mcp.Metadata{
-		Name:    "cortex-mcp",
-		Version: "0.1.0",
-	},
-	Tool: mcp.Metadata{
-		Name:        "chat",
-		Description: "Chat with the AI agent",
-	},
-}
-
-// Create MCP handler
-mcpHandler := mcp.NewHandler(agentEngine, mcpOpt)
-
-// Setup routes
-r := gin.Default()
-mcpGroup := r.Group("/mcp")
-mcpGroup.Any("", mcpHandler.Agent())
-```
-
-The MCP trigger automatically registers:
-- `ping`: Health check tool
-- A configurable chat tool that executes the agent
-
-## Examples
-
-### Basic Example
-
-The `examples/basic` directory contains a simple example demonstrating how to use Cortex to create an AI agent that connects to an AI training service via MCP.
-
-```go
-// See examples/basic/main.go for a complete example
-```
-
-### Chat Web Example
-
-The `examples/chat-web` directory contains a web-based chat application using Cortex with HTTP trigger.
-
-```go
-// See examples/chat-web/main.go for a complete example
-```
-![chat-web-screenshot.png](docs/images/e.png)
-
-### MCP Server Example
-
-The `examples/mcp-server` directory contains an example demonstrating how to expose your agent as an MCP server.
-
-```go
-// See examples/mcp-server/main.go for the full example
-```
-
-### Agent Skills Example
-
-The `examples/agent-skills` directory contains an example demonstrating how to load and use Agent Skills.
-
-```go
-// See examples/agent-skills/main.go for the full example
-```
-
-## Advanced Usage
+- **MCP Tools**: Connect to any MCP Server.
+- **Web Search**: Integrated search engines.
+- **File Operations**: Safe filesystem access.
+- **SSH**: Remote server management.
+- **Email**: Send HTML/Text emails.
+- **Math**: Complex calculations.
+- **System Command**: Secure shell execution.
 
 ### Custom Tools
 
-You can create custom tools by implementing the `types.Tool` interface:
+Implement the `types.Tool` interface to extend capabilities:
 
 ```go
-type CustomTool struct {}
+type MyTool struct{}
 
-func (t *CustomTool) Name() string {
-	return "custom_tool"
-}
-
-func (t *CustomTool) Description() string {
-	return "A custom tool that performs a specific function"
-}
-
-func (t *CustomTool) Schema() map[string]interface{} {
-	return map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"input": map[string]interface{}{
-				"type":        "string",
-				"description": "Input for the custom tool",
-			},
-		},
-		"required": []string{"input"},
-	}
-}
-
-func (t *CustomTool) Execute(input map[string]interface{}) (interface{}, error) {
-	// Tool execution logic
-	return "Tool result", nil
-}
-
-func (t *CustomTool) Metadata() types.ToolMetadata {
-	return types.ToolMetadata{
-		SourceNodeName: "custom_tool",
-		IsFromToolkit:  false,
-		ToolType:       "custom",
-	}
+func (t *MyTool) Name() string { return "my_tool" }
+func (t *MyTool) Description() string { return "A custom tool" }
+func (t *MyTool) Execute(input map[string]interface{}) (interface{}, error) {
+    // Business logic...
+    return "Result", nil
 }
 ```
 
-### Memory Management
+## Memory System
 
-Cortex provides memory management capabilities for conversation history with multiple storage backends:
+Cortex features an advanced **Hybrid Memory Architecture** designed for long-running conversations.
 
-#### LangChain Memory (Default)
+### Key Features
 
-```go
-// Set LangChain memory provider
-memoryProvider := providers.NewLangChainMemory()
-agentEngine.SetMemory(memoryProvider)
+1.  **Raw History**: Preserves every interaction for complete auditability.
+2.  **Rolling Summary**: Asynchronously generates concise summaries of past conversations.
+3.  **Smart Retrieval**: Dynamically constructs prompts using "Summary + Recent Context" to maximize information density within token limits.
+4.  **Async Processing**: Summary generation happens in the background with automatic panic recovery, ensuring zero latency impact on user interactions.
 
-// Configure memory usage
-agentConfig.MaxTokensFromMemory = 1000 // Maximum tokens from memory
-```
+### Storage Backends
 
-#### MongoDB Memory
+Switch storage with a single line of config:
 
-Use MongoDB as persistent storage:
-
-```go
-import (
-	"github.com/xichan96/cortex/agent/providers"
-	"github.com/xichan96/cortex/pkg/mongodb"
-)
-
-// Create MongoDB client
-mongoClient, err := mongodb.NewClient("mongodb://localhost:27017", "database_name")
-if err != nil {
-	// Handle error
-}
-
-// Create MongoDB memory provider
-memoryProvider := providers.NewMongoDBMemoryProvider(mongoClient, "session-id")
-
-// Optional: Set maximum history messages
-memoryProvider.SetMaxHistoryMessages(100)
-
-// Optional: Set collection name (default: "chat_messages")
-memoryProvider.SetCollectionName("chat_messages")
-
-// Set memory provider
-agentEngine.SetMemory(memoryProvider)
-```
-
-#### Redis Memory
-
-Use Redis as persistent storage:
+- **Memory (Default)**: Ephemeral, for testing.
+- **Redis**: High-performance KV store (Recommended for production).
+- **MongoDB**: Flexible document store.
+- **MySQL / SQLite**: Relational database support.
 
 ```go
-import (
-	"github.com/xichan96/cortex/agent/providers"
-	"github.com/xichan96/cortex/pkg/redis"
-)
-
-// Create Redis client
-redisClient := redis.NewClient(&redis.Options{
-	Addr: "localhost:6379",
-})
-
-// Create Redis memory provider
-memoryProvider := providers.NewRedisMemoryProvider(redisClient, "session-id")
-
-// Optional: Set maximum history messages
-memoryProvider.SetMaxHistoryMessages(100)
-
-// Optional: Set key prefix (default: "chat_messages")
-memoryProvider.SetKeyPrefix("chat_messages")
-
-// Set memory provider
-agentEngine.SetMemory(memoryProvider)
+// Example: Redis Memory
+redisClient := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+memory := providers.NewRedisMemoryProvider(redisClient, "session-id")
+agentEngine.SetMemory(memory)
 ```
 
-#### MySQL Memory
+## Examples
 
-Use MySQL as persistent storage:
-
-```go
-import (
-	"github.com/xichan96/cortex/agent/providers"
-	"github.com/xichan96/cortex/pkg/sql/mysql"
-)
-
-// Create MySQL client
-mysqlCfg := &mysql.Config{
-	Host:     "localhost",
-	Port:     3306,
-	User:     "root",
-	Password: "password",
-	Database: "cortex",
-}
-mysqlClient, err := mysql.NewClient(mysqlCfg)
-if err != nil {
-	// Handle error
-}
-
-// Create MySQL memory provider
-memoryProvider := providers.NewMySQLMemoryProvider(mysqlClient, "session-id")
-
-// Optional: Set maximum history messages
-memoryProvider.SetMaxHistoryMessages(100)
-
-// Optional: Set table name (default: "chat_messages")
-memoryProvider.SetTableName("chat_messages")
-
-// Set memory provider
-agentEngine.SetMemory(memoryProvider)
-```
-
-#### SQLite Memory
-
-Use SQLite as persistent storage:
-
-```go
-import (
-	"github.com/xichan96/cortex/agent/providers"
-	"github.com/xichan96/cortex/pkg/sql/sqlite"
-)
-
-// Create SQLite client
-sqliteCfg := &sqlite.Config{
-	Path: "cortex.db",
-}
-sqliteClient, err := sqlite.NewClient(sqliteCfg)
-if err != nil {
-	// Handle error
-}
-
-// Create SQLite memory provider
-memoryProvider := providers.NewSQLiteMemoryProvider(sqliteClient, "session-id")
-
-// Optional: Set maximum history messages
-memoryProvider.SetMaxHistoryMessages(100)
-
-// Optional: Set table name (default: "chat_messages")
-memoryProvider.SetTableName("chat_messages")
-
-// Set memory provider
-agentEngine.SetMemory(memoryProvider)
-```
-
-### Error Handling
-
-Cortex includes comprehensive error handling:
-
-```go
-import "github.com/xichan96/cortex/agent/errors"
-
-// Check for specific error types
-if errors.Is(err, errors.ErrToolExecution) {
-	// Handle tool execution error
-} else if errors.Is(err, errors.ErrLLMCall) {
-	// Handle LLM call error
-}
-```
-
-## Configuration Reference
-
-### Agent Configuration Options
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `MaxIterations` | Maximum number of iterations | 5 |
-| `ReturnIntermediateSteps` | Return intermediate steps | false |
-| `SystemMessage` | System prompt message | "" |
-| `Temperature` | LLM temperature (creativity) | 0.7 |
-| `MaxTokens` | Maximum tokens per response | 2048 |
-| `TopP` | Top P sampling parameter | 0.9 |
-| `FrequencyPenalty` | Frequency penalty | 0.1 |
-| `PresencePenalty` | Presence penalty | 0.1 |
-| `Timeout` | Request timeout | 30s |
-| `RetryAttempts` | Number of retry attempts | 3 |
-| `EnableToolRetry` | Enable tool retry | false |
-| `ToolRetryAttempts` | Tool retry attempts | 2 |
-| `ParallelToolCalls` | Enable parallel tool calls | false |
-| `ToolCallTimeout` | Tool call timeout | 10s |
-| `MaxTokensFromMemory` | Maximum tokens from memory | 1000 |
-| `EnableCache` | Enable response caching | true |
-| `CacheSize` | Maximum number of cached items | 1000 |
+- [Basic Example](examples/basic): Fundamental usage patterns.
+- [Chat Web](examples/chat-web): Full-stack chat application (Gin + React).
+- [MCP Server](examples/mcp-server): Expose Agent as an MCP service.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Issues and Pull Requests are welcome!
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Support
-
-For issues, questions, or feature requests, please create an issue in the GitHub repository.
+MIT License
