@@ -10,14 +10,16 @@ import (
 
 // Registry tool registry
 type Registry struct {
-	tools map[string]types.Tool
-	mu    sync.RWMutex
+	tools       map[string]types.Tool
+	toolsByType map[string][]types.Tool
+	mu          sync.RWMutex
 }
 
 // NewRegistry creates a new tool registry
 func NewRegistry() *Registry {
 	return &Registry{
-		tools: make(map[string]types.Tool),
+		tools:       make(map[string]types.Tool),
+		toolsByType: make(map[string][]types.Tool),
 	}
 }
 
@@ -32,6 +34,11 @@ func (r *Registry) Register(tool types.Tool) error {
 	}
 
 	r.tools[name] = tool
+
+	// Update index
+	toolType := tool.Metadata().ToolType
+	r.toolsByType[toolType] = append(r.toolsByType[toolType], tool)
+
 	return nil
 }
 
@@ -76,15 +83,14 @@ func (r *Registry) GetByType(toolType string) []types.Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	tools := make([]types.Tool, 0)
-	for _, tool := range r.tools {
-		metadata := tool.Metadata()
-		if metadata.ToolType == toolType {
-			tools = append(tools, tool)
-		}
+	if tools, ok := r.toolsByType[toolType]; ok {
+		// Return a copy to prevent external modification of the slice
+		result := make([]types.Tool, len(tools))
+		copy(result, tools)
+		return result
 	}
 
-	return tools
+	return []types.Tool{}
 }
 
 // Remove removes a tool
@@ -96,7 +102,26 @@ func (r *Registry) Remove(name string) error {
 		return errors.NewError(errors.EC_TOOL_NOT_FOUND.Code, fmt.Sprintf("tool %s not found", name))
 	}
 
+	// Remove from main map
+	tool := r.tools[name]
 	delete(r.tools, name)
+
+	// Remove from index
+	toolType := tool.Metadata().ToolType
+	if tools, ok := r.toolsByType[toolType]; ok {
+		newTools := make([]types.Tool, 0, len(tools)-1)
+		for _, t := range tools {
+			if t.Name() != name {
+				newTools = append(newTools, t)
+			}
+		}
+		if len(newTools) == 0 {
+			delete(r.toolsByType, toolType)
+		} else {
+			r.toolsByType[toolType] = newTools
+		}
+	}
+
 	return nil
 }
 
