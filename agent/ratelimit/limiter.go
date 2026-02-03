@@ -91,21 +91,42 @@ func (t *TokenBucketLimiter) Wait(ctx context.Context) error {
 		t.totalWait.Add(int64(waitDuration))
 	}()
 
-	ticker := time.NewTicker(10 * time.Millisecond)
+	// Calculate adaptive polling interval based on refill rate
+	// We want to poll slightly faster than the refill rate to capture tokens as soon as they are available
+	// but not too fast to burn CPU.
+	// Interval = 1s / refillRate / 2 (Nyquist-ish, check twice per period)
+	var pollInterval time.Duration
+	if t.refillRate > 0 {
+		pollInterval = time.Second / time.Duration(t.refillRate)
+		if pollInterval > 100*time.Millisecond {
+			pollInterval = 100 * time.Millisecond // Cap max wait at 100ms for responsiveness
+		} else if pollInterval < 1*time.Millisecond {
+			pollInterval = 1 * time.Millisecond // Cap min wait at 1ms
+		}
+	} else {
+		pollInterval = 10 * time.Millisecond // Fallback
+	}
+
+	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
 	for {
+		// Check context first
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		if err := t.Allow(ctx); err == nil {
 			return nil
 		}
 
 		select {
 		case <-ctx.Done():
-			t.rejected.Add(1)
 			return ctx.Err()
 		case <-ticker.C:
-			t.refill()
-			continue
+			// Continue loop to try Allow() again
 		}
 	}
 }

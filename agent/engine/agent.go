@@ -1400,33 +1400,31 @@ func (ae *AgentEngine) sortToolCallsByDependencies(toolCalls []types.ToolCall) (
 		return toolCalls, nil
 	}
 
-	ae.mu.RLock()
-	toolsMap := make(map[string]types.Tool, len(ae.toolsMap))
-	for k, v := range ae.toolsMap {
-		toolsMap[k] = v
-	}
-	ae.mu.RUnlock()
-
 	// Build dependency graph and priority map
 	dependencyGraph := make(map[string][]string)   // tool -> dependencies
 	priorityMap := make(map[string]int)            // tool -> priority
 	toolCallMap := make(map[string]types.ToolCall) // tool name -> tool call
 
+	ae.mu.RLock()
 	for _, tc := range toolCalls {
 		toolName := tc.Function.Name
 		toolCallMap[toolName] = tc
 
 		// Get tool metadata
-		if tool, exists := toolsMap[toolName]; exists {
+		if tool, exists := ae.toolsMap[toolName]; exists {
 			metadata := tool.Metadata()
 			priorityMap[toolName] = metadata.Priority
 			if len(metadata.Dependencies) > 0 {
-				dependencyGraph[toolName] = metadata.Dependencies
+				// Copy dependencies to avoid race conditions
+				deps := make([]string, len(metadata.Dependencies))
+				copy(deps, metadata.Dependencies)
+				dependencyGraph[toolName] = deps
 			}
 		} else {
 			priorityMap[toolName] = 0
 		}
 	}
+	ae.mu.RUnlock()
 
 	// Detect circular dependencies
 	if err := ae.detectCircularDependencies(dependencyGraph); err != nil {

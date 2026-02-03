@@ -10,6 +10,7 @@ import (
 var (
 	globalTransport *http.Transport
 	transportOnce   sync.Once
+	globalConfig    *ConnectionPoolConfig
 )
 
 type ConnectionPoolConfig struct {
@@ -28,9 +29,19 @@ func DefaultConnectionPoolConfig() ConnectionPoolConfig {
 	}
 }
 
+func SetGlobalConnectionPoolConfig(config ConnectionPoolConfig) {
+	globalConfig = &config
+}
+
 func GetGlobalTransport() *http.Transport {
 	transportOnce.Do(func() {
-		config := DefaultConnectionPoolConfig()
+		var config ConnectionPoolConfig
+		if globalConfig != nil {
+			config = *globalConfig
+		} else {
+			config = DefaultConnectionPoolConfig()
+		}
+
 		globalTransport = &http.Transport{
 			MaxIdleConns:        config.MaxSize,
 			MaxIdleConnsPerHost: config.MaxSize,
