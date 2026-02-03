@@ -54,6 +54,7 @@ cortex/
 ├── agent/             # 核心代理功能
 │   ├── engine/        # 代理引擎实现
 │   ├── llm/           # LLM 提供商集成
+│   ├── skills/        # 技能加载与管理
 │   ├── tools/         # 工具生态系统（MCP、HTTP）
 │   ├── types/         # 核心类型定义
 │   ├── providers/     # 外部服务提供商

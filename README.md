@@ -54,6 +54,7 @@ cortex/
 ├── agent/             # Core agent functionality
 │   ├── engine/        # Agent engine implementation
 │   ├── llm/           # LLM provider integrations
+│   ├── skills/        # Skill loading and management
 │   ├── tools/         # Tool ecosystem (MCP, HTTP)
 │   ├── types/         # Core type definitions
 │   ├── providers/     # External service providers
