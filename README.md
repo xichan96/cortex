@@ -29,7 +29,7 @@ By bridging the simplicity of a lightweight framework with the robustness of Go,
 
 Designed for production environments, CORTEX prioritizes reliability, configurability, and resource efficiency. It empowers developers to build next-generation AI applications with the performance and safety guarantees inherent to the Go ecosystem.
 
-**Design Philosophy**: While sharing core capabilities with n8n's AI Agent, CORTEX adopts a minimalist approach. It eliminates the heavy dependencies and complex orchestration overhead of n8n, focusing instead on streamlined integration and low resource footprint. This makes it the ideal choice for developers who need powerful Agent capabilities without the bloat of a full-fledged workflow automation platform.
+**Design Philosophy**: CORTEX adopts a minimalist approach, focusing on streamlined integration and low resource footprint. It eliminates heavy dependencies and complex orchestration overhead, making it the ideal choice for developers who need powerful Agent capabilities without the bloat of a full-fledged workflow automation platform.
 
 ## Features
 
@@ -216,6 +216,34 @@ curl -s "wttr.in/New+York?format=3"
 ````
 
 This approach allows you to leverage any CLI tool, API, or script as a first-class agent capability.
+
+## Task Scheduling System
+
+Cortex features a powerful built-in task scheduling system (`xcron`), allowing agents to autonomously manage scheduled tasks. This empowers agents to handle not just immediate requests, but also periodic jobs or delayed tasks.
+
+### Key Features
+
+- **Flexible Scheduling Modes**:
+  - `oneshot`: Execute once after a delay (e.g., "Remind me to drink water in 10 minutes").
+  - `periodic`: Execute at regular intervals (e.g., "Check server status every 2 hours").
+  - `cron`: Precise timing using Cron expressions (e.g., "Send a daily report at 8:00 AM").
+- **Persistence**: Tasks are persisted, ensuring they survive service restarts.
+- **Agent-Driven**: Agents can autonomously create, query, and manage tasks using built-in tools (`schedule_job`, `list_jobs`, `delete_job`).
+
+### Example Scenario
+
+User: "Summarize the top Hacker News stories from yesterday every morning at 9 AM."
+
+The Agent automatically invokes the `schedule_job` tool:
+```json
+{
+  "name": "hn_daily_summary",
+  "type": "cron",
+  "schedule": "0 0 9 * * *",
+  "payload": "Summarize yesterday's top Hacker News stories and send them to me.",
+  "task_type": "agent_task"
+}
+```
 
 ## Memory System
 
