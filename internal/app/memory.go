@@ -5,10 +5,10 @@ import (
 
 	"github.com/xichan96/cortex/agent/providers"
 	"github.com/xichan96/cortex/agent/types"
-	"github.com/xichan96/cortex/pkg/mongodb"
-	"github.com/xichan96/cortex/pkg/redis"
-	"github.com/xichan96/cortex/pkg/sql/mysql"
-	"github.com/xichan96/cortex/pkg/sql/sqlite"
+	"github.com/xichan96/cortex/pkg/middle/mongodb"
+	"github.com/xichan96/cortex/pkg/middle/redis"
+	"github.com/xichan96/cortex/pkg/middle/sql/mysql"
+	"github.com/xichan96/cortex/pkg/middle/sql/sqlite"
 )
 
 func (a *agent) setupMemory(sessionID string) types.MemoryProvider {

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/xichan96/cortex/agent/types"
-	"github.com/xichan96/cortex/pkg/mongodb"
+	"github.com/xichan96/cortex/pkg/middle/mongodb"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )

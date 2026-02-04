@@ -11,7 +11,7 @@ import (
 	"github.com/xichan96/cortex/agent/providers"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/mcp"
-	"github.com/xichan96/cortex/pkg/redis"
+	"github.com/xichan96/cortex/pkg/middle/redis"
 	// "github.com/xichan96/cortex/pkg/mongodb"
 )
 
