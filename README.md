@@ -13,6 +13,7 @@
   · <a href="#quick-start">Quick Start</a>
   · <a href="#core-components">Core Components</a>
   · <a href="#tools">Tools</a>
+  · <a href="#agent-skills">Agent Skills</a>
   · <a href="#memory-system">Memory System</a>
   · <a href="#examples">Examples</a>
   · <a href="#license">License</a>
@@ -165,7 +166,6 @@ Fully compliant with the [Model Context Protocol (MCP)](https://modelcontextprot
 Extensive built-in tool library:
 
 - **MCP Tools**: Connect to any MCP Server.
-- **Web Search**: Integrated search engines.
 - **File Operations**: Safe filesystem access.
 - **SSH**: Remote server management.
 - **Email**: Send HTML/Text emails.
@@ -186,6 +186,36 @@ func (t *MyTool) Execute(input map[string]interface{}) (interface{}, error) {
     return "Result", nil
 }
 ```
+
+## Agent Skills
+
+Cortex implements a unique **filesystem-based skill system** that allows you to teach the agent new capabilities without recompiling code.
+
+### How it Works
+
+1.  **Define**: Create a `SKILL.md` file in a directory (e.g., `./skills/my-skill/SKILL.md`).
+2.  **Describe**: Use Markdown to describe the task and provide executable examples (e.g., `curl` commands, SQL queries).
+3.  **Discover**: Cortex automatically scans the skills directory and injects available skills into the system prompt.
+4.  **Execute**: When the agent needs to perform a task, it follows the instructions in your `SKILL.md`.
+
+### Example Skill (`skills/weather/SKILL.md`)
+
+````markdown
+---
+name: weather
+description: Get current weather using command line tools.
+---
+
+# Weather
+
+To check the weather, use `curl` with wttr.in:
+
+```bash
+curl -s "wttr.in/New+York?format=3"
+```
+````
+
+This approach allows you to leverage any CLI tool, API, or script as a first-class agent capability.
 
 ## Memory System
 

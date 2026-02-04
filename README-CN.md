@@ -13,6 +13,7 @@
   · <a href="#快速开始">快速开始</a>
   · <a href="#核心组件">核心组件</a>
   · <a href="#工具生态">工具生态</a>
+  · <a href="#技能系统-agent-skills">技能系统</a>
   · <a href="#记忆系统">记忆系统</a>
   · <a href="#示例">示例</a>
   · <a href="#许可证">许可证</a>
@@ -165,7 +166,6 @@ llmProvider, _ := llm.VolceClient("ak-...", "doubao-pro-32k")
 Cortex 内置了丰富的工具库，开箱即用：
 
 - **MCP 工具**：无缝连接 MCP Server，扩展无限可能。
-- **Web 搜索**：集成主流搜索引擎。
 - **文件操作**：安全的文件读写与管理。
 - **SSH**：远程服务器管理与命令执行。
 - **邮件**：发送 HTML/Text 邮件。
@@ -186,6 +186,36 @@ func (t *MyTool) Execute(input map[string]interface{}) (interface{}, error) {
     return "执行结果", nil
 }
 ```
+
+## 技能系统 (Agent Skills)
+
+Cortex 实现了一套独特的**基于文件系统的技能系统**，允许您在不重新编译代码的情况下扩展 Agent 的能力。
+
+### 工作原理
+
+1.  **定义**：在技能目录中创建 `SKILL.md` 文件（例如 `./skills/my-skill/SKILL.md`）。
+2.  **描述**：使用 Markdown 描述任务并提供可执行的示例（如 `curl` 命令、SQL 查询等）。
+3.  **发现**：Cortex 会自动扫描技能目录，并将可用技能注入到系统提示词中。
+4.  **执行**：当 Agent 需要执行相关任务时，它会严格遵循 `SKILL.md` 中的指引进行操作。
+
+### 技能示例 (`skills/weather/SKILL.md`)
+
+````markdown
+---
+name: weather
+description: Get current weather using command line tools.
+---
+
+# Weather
+
+To check the weather, use `curl` with wttr.in:
+
+```bash
+curl -s "wttr.in/New+York?format=3"
+```
+````
+
+这种方式使您可以轻松地将任何 CLI 工具、API 或脚本转化为 Agent 的原生能力。
 
 ## 记忆系统
 
