@@ -9,7 +9,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/xichan96/cortex/agent/types"
-	credis "github.com/xichan96/cortex/pkg/redis"
+	credis "github.com/xichan96/cortex/pkg/middle/redis"
 )
 
 type RedisMemoryProvider struct {

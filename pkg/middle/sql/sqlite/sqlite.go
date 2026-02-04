@@ -3,7 +3,7 @@ package sqlite
 import (
 	"time"
 
-	"github.com/xichan96/cortex/pkg/sql"
+	"github.com/xichan96/cortex/pkg/middle/sql"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )

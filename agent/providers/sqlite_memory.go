@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/xichan96/cortex/agent/types"
-	"github.com/xichan96/cortex/pkg/sql/sqlite"
+	"github.com/xichan96/cortex/pkg/middle/sql/sqlite"
 	"gorm.io/gorm"
 )
 

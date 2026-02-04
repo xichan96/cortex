@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/xichan96/cortex/pkg/sql"
+	"github.com/xichan96/cortex/pkg/middle/sql"
 	gmysql "gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/plugin/dbresolver"
