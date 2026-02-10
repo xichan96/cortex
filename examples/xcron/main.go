@@ -50,7 +50,7 @@ func loadAndInjectSkills(agentConfig *types.AgentConfig) ([]skills.Skill, error)
 
 	log.Info().Str("path", skillsDir).Msg("Loading skills")
 
-	loadedSkills, err := skills.LoadSkillsFromDirs([]string{skillsDir})
+	loadedSkills, err := skills.LoadSkillsFromDirs(nil, []string{skillsDir})
 	if err != nil {
 		return nil, fmt.Errorf("failed to load skills: %w", err)
 	}

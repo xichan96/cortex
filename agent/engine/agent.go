@@ -96,18 +96,30 @@ func NewAgentEngine(model types.LLMProvider, config *types.AgentConfig) *AgentEn
 		config = types.NewAgentConfig()
 	}
 
-	return &AgentEngine{
+	loggerConfig := &logger.LoggerConfig{
+		Silent:   config.LogSilent,
+		FilePath: config.LogFile,
+	}
+
+	ae := &AgentEngine{
 		model:         model,
 		config:        config,
 		tools:         make([]types.Tool, 0),
 		toolsMap:      make(map[string]types.Tool),
 		toolCache:     make(map[string]*toolCacheEntry),
 		toolCacheSize: DefaultCacheSize, // Using constant-defined cache size
-		logger:        logger.NewLogger(),
+		logger:        logger.NewLoggerWithConfig(loggerConfig),
 		ctx:           ctx,
 		cancel:        cancel,
 		rateLimiter:   ratelimit.NewTokenBucketLimiter(10, 10), // 10 req/s default
 	}
+
+	// Propagate logger to model if supported
+	if provider, ok := model.(interface{ SetLogger(*logger.Logger) }); ok {
+		provider.SetLogger(ae.logger)
+	}
+
+	return ae
 }
 
 // NewAgent creates a new agent instance (via interface)
@@ -225,6 +237,17 @@ func (ae *AgentEngine) SetConfig(config *types.AgentConfig) {
 		ae.config = types.NewAgentConfig()
 	} else {
 		ae.config = config
+	}
+
+	loggerConfig := &logger.LoggerConfig{
+		Silent:   ae.config.LogSilent,
+		FilePath: ae.config.LogFile,
+	}
+	ae.logger = logger.NewLoggerWithConfig(loggerConfig)
+
+	// Propagate logger to model if supported
+	if provider, ok := ae.model.(interface{ SetLogger(*logger.Logger) }); ok {
+		provider.SetLogger(ae.logger)
 	}
 }
 

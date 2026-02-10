@@ -138,20 +138,22 @@ type SQLiteConfig struct {
 }
 
 type AgentConfig struct {
-	MaxIterations      int         `yaml:"max_iterations"`
-	SystemMessage      string      `yaml:"system_message"`
-	Temperature        float64     `yaml:"temperature"`
-	MaxTokens          int         `yaml:"max_tokens"`
-	TopP               float64     `yaml:"top_p"`
-	FrequencyPenalty   float64     `yaml:"frequency_penalty"`
-	PresencePenalty    float64     `yaml:"presence_penalty"`
-	Timeout            string      `yaml:"timeout"`
+	MaxIterations           int         `yaml:"max_iterations"`
+	SystemMessage           string      `yaml:"system_message"`
+	Temperature             float64     `yaml:"temperature"`
+	MaxTokens               int         `yaml:"max_tokens"`
+	TopP                    float64     `yaml:"top_p"`
+	FrequencyPenalty        float64     `yaml:"frequency_penalty"`
+	PresencePenalty         float64     `yaml:"presence_penalty"`
+	Timeout                 string      `yaml:"timeout"`
 	RetryAttempts           int         `yaml:"retry_attempts"`
 	EnableToolRetry         bool        `yaml:"enable_tool_retry"`
 	MaxHistoryMessages      int         `yaml:"max_history_messages"`
 	EnableMemoryCompress    bool        `yaml:"enable_memory_compress"`
 	MemoryCompressThreshold int         `yaml:"memory_compress_threshold"`
 	MemoryCompressRatio     float64     `yaml:"memory_compress_ratio"`
+	LogSilent               bool        `yaml:"log_silent"`
+	LogFile                 string      `yaml:"log_file"`
 	MCP                     MCPMetadata `yaml:"mcp"`
 }
 

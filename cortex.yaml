@@ -113,6 +113,8 @@ agent:
   enable_memory_compress: true
   memory_compress_threshold: 10
   memory_compress_ratio: 0.5
+  log_silent: false
+  log_file: ""
   mcp:
     server:
       name: "cortex-mcp"
