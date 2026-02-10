@@ -68,7 +68,7 @@ func (a *agent) build(sessionID string) (*engine.AgentEngine, error) {
 
 	// Load skills if configured
 	if len(a.config.Skills.Paths) > 0 {
-		loadedSkills, err := skills.LoadSkillsFromDirs(a.config.Skills.Paths)
+		loadedSkills, err := skills.LoadSkillsFromDirs(a.logger, a.config.Skills.Paths)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load skills: %w", err)
 		}

@@ -28,7 +28,7 @@ type LangChainAgentEngine struct {
 
 // NewLangChainAgentEngine creates a new LangChain agent engine
 func NewLangChainAgentEngine(llm types.LLMProvider, systemPrompt string) *LangChainAgentEngine {
-	return &LangChainAgentEngine{
+	e := &LangChainAgentEngine{
 		llm:                llm,
 		tools:              make([]types.Tool, 0),
 		toolsMap:           make(map[string]types.Tool),
@@ -37,6 +37,13 @@ func NewLangChainAgentEngine(llm types.LLMProvider, systemPrompt string) *LangCh
 		maxHistoryMessages: 100,
 		logger:             logger.NewLogger(),
 	}
+
+	// Propagate logger to llm if supported
+	if provider, ok := llm.(interface{ SetLogger(*logger.Logger) }); ok {
+		provider.SetLogger(e.logger)
+	}
+
+	return e
 }
 
 // NewLangChainAgent creates a new LangChain agent instance (via interface)
@@ -314,6 +321,18 @@ func (e *LangChainAgentEngine) SetConfig(config *types.AgentConfig) {
 	e.SetRetryDelay(config.RetryDelay)
 	e.mu.Lock()
 	e.maxHistoryMessages = config.MaxHistoryMessages
+
+	loggerConfig := &logger.LoggerConfig{
+		Silent:   config.LogSilent,
+		FilePath: config.LogFile,
+	}
+	e.logger = logger.NewLoggerWithConfig(loggerConfig)
+
+	// Propagate logger to llm if supported
+	if provider, ok := e.llm.(interface{ SetLogger(*logger.Logger) }); ok {
+		provider.SetLogger(e.logger)
+	}
+
 	e.limitMemoryLocked()
 	e.mu.Unlock()
 }

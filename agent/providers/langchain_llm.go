@@ -46,6 +46,11 @@ func (p *LangChainLLMProvider) SetRetryDelay(delay time.Duration) {
 	p.retryDelay = delay
 }
 
+// SetLogger sets the logger
+func (p *LangChainLLMProvider) SetLogger(l *logger.Logger) {
+	p.logger = l
+}
+
 // handle429Retry handles 429 rate limit errors with retry logic
 func (p *LangChainLLMProvider) handle429Retry(err error, retryCount, maxRetries int) (shouldRetry bool, waitTime time.Duration) {
 	if retryCount >= maxRetries {

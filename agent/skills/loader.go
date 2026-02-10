@@ -3,29 +3,33 @@ package skills
 import (
 	"bufio"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/xichan96/cortex/pkg/logger"
 	"gopkg.in/yaml.v3"
 )
 
 // LoadSkillsFromDirs scans the provided directories for SKILL.md files and loads them.
-func LoadSkillsFromDirs(dirs []string) ([]Skill, error) {
+func LoadSkillsFromDirs(l *logger.Logger, dirs []string) ([]Skill, error) {
 	var skills []Skill
 
 	for _, dir := range dirs {
 		absDir, err := filepath.Abs(dir)
 		if err != nil {
-			log.Printf("Warning: could not get absolute path for %s: %v", dir, err)
+			if l != nil {
+				l.Warn(fmt.Sprintf("could not get absolute path for %s: %v", dir, err))
+			}
 			absDir = dir
 		}
 
 		err = filepath.Walk(absDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				// Log error but continue walking
-				log.Printf("Warning: error accessing path %q: %v", path, err)
+				if l != nil {
+					l.Warn(fmt.Sprintf("error accessing path %q: %v", path, err))
+				}
 				return nil
 			}
 
@@ -33,7 +37,9 @@ func LoadSkillsFromDirs(dirs []string) ([]Skill, error) {
 				skill, err := loadSkillFromFile(path)
 				if err != nil {
 					// Log error but continue
-					log.Printf("Warning: skipping invalid skill file %s: %v", path, err)
+					if l != nil {
+						l.Warn(fmt.Sprintf("skipping invalid skill file %s: %v", path, err))
+					}
 					return nil
 				}
 				skills = append(skills, skill)

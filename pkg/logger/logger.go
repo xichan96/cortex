@@ -1,9 +1,17 @@
 package logger
 
 import (
+	"io"
 	"log/slog"
+	"os"
 	"time"
 )
+
+// LoggerConfig logging configuration
+type LoggerConfig struct {
+	Silent   bool
+	FilePath string
+}
 
 // Logger structured logger
 type Logger struct {
@@ -12,8 +20,33 @@ type Logger struct {
 
 // NewLogger creates a new logger
 func NewLogger() *Logger {
+	return NewLoggerWithConfig(nil)
+}
+
+// NewLoggerWithConfig creates a new logger with specific configuration
+func NewLoggerWithConfig(cfg *LoggerConfig) *Logger {
+	if cfg == nil {
+		cfg = &LoggerConfig{}
+	}
+
+	if cfg.Silent {
+		return &Logger{
+			logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		}
+	}
+
+	var w io.Writer = os.Stdout
+	if cfg.FilePath != "" {
+		f, err := os.OpenFile(cfg.FilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err == nil {
+			w = f
+		} else {
+			slog.Error("Failed to open log file, falling back to stdout", "error", err, "path", cfg.FilePath)
+		}
+	}
+
 	return &Logger{
-		logger: slog.Default(),
+		logger: slog.New(slog.NewTextHandler(w, nil)),
 	}
 }
 
@@ -57,4 +90,14 @@ func (l *Logger) Info(message string, attrs ...slog.Attr) {
 		allAttrs = append(allAttrs, attr)
 	}
 	l.logger.Info(message, allAttrs...)
+}
+
+// Warn logs warning message
+func (l *Logger) Warn(message string, attrs ...slog.Attr) {
+	allAttrs := make([]any, 0, len(attrs)*2+2)
+	allAttrs = append(allAttrs, slog.Time("timestamp", time.Now()))
+	for _, attr := range attrs {
+		allAttrs = append(allAttrs, attr)
+	}
+	l.logger.Warn(message, allAttrs...)
 }

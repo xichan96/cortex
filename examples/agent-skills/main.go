@@ -49,7 +49,7 @@ func loadAndInjectSkills(agentConfig *types.AgentConfig) ([]skills.Skill, error)
 
 	fmt.Printf("Loading skills from: %s\n", skillsDir)
 
-	loadedSkills, err := skills.LoadSkillsFromDirs([]string{skillsDir})
+	loadedSkills, err := skills.LoadSkillsFromDirs(nil, []string{skillsDir})
 	if err != nil {
 		return nil, fmt.Errorf("failed to load skills: %w", err)
 	}
@@ -92,6 +92,7 @@ func main() {
 	agentConfig.Timeout = 60 * time.Second
 	agentConfig.RetryAttempts = 3
 	agentConfig.EnableToolRetry = true
+	agentConfig.LogSilent = true // Enable silent mode for logger
 
 	// 3. Load Skills and update System Prompt
 	_, err = loadAndInjectSkills(agentConfig)

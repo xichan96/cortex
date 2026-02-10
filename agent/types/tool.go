@@ -111,6 +111,8 @@ type AgentConfig struct {
 	EnableMemoryCompress    bool          `json:"enableMemoryCompress"`    // 启用记忆压缩
 	MemoryCompressThreshold int           `json:"memoryCompressThreshold"` // 记忆压缩阈值（消息数量）
 	MemoryCompressRatio     float32       `json:"memoryCompressRatio"`     // 记忆压缩比例（0.0-1.0）
+	LogSilent               bool          `json:"logSilent"`               // 是否静默日志
+	LogFile                 string        `json:"logFile"`                 // 日志文件路径，为空则输出到终端
 }
 
 // NewAgentConfig creates a new agent configuration with reasonable defaults
@@ -133,6 +135,8 @@ func NewAgentConfig() *AgentConfig {
 		EnableMemoryCompress:    false,
 		MemoryCompressThreshold: 50,
 		MemoryCompressRatio:     0.5,
+		LogSilent:               false,
+		LogFile:                 "",
 	}
 }
 
