@@ -42,7 +42,7 @@ func loadAndInjectSkills(agentConfig *types.AgentConfig) ([]skills.Skill, error)
 	}
 
 	// Try to find the skills directory
-	skillsDir := filepath.Join(cwd, "examples", "agent-skills", "skills")
+	skillsDir := filepath.Join(cwd, "examples", "skills", "skills")
 	if _, err := os.Stat(skillsDir); os.IsNotExist(err) {
 		skillsDir = filepath.Join(cwd, "skills")
 	}
@@ -95,10 +95,17 @@ func main() {
 	agentConfig.LogSilent = true // Enable silent mode for logger
 
 	// 3. Load Skills and update System Prompt
-	_, err = loadAndInjectSkills(agentConfig)
+	loadedSkills, err := loadAndInjectSkills(agentConfig)
 	if err != nil {
 		log.Fatalf("Skill loading error: %v", err)
 	}
+
+	// 3.1 Register skills for Planner
+	registry := skills.NewRegistry()
+	for i := range loadedSkills {
+		registry.Register(&loadedSkills[i])
+	}
+	planner := skills.NewPlanner(registry)
 
 	// 4. Create Agent Engine
 	agentEngine := engine.NewAgentEngine(llmProvider, agentConfig)
@@ -131,6 +138,28 @@ func main() {
 		}
 		if userInput == "" {
 			continue
+		}
+
+		// Check for skills execution plan
+		plan, err := planner.Plan(userInput)
+		if err == nil && len(plan.Steps) > 0 {
+			fmt.Println("\n[Planner] Identified skills execution plan:")
+			var skillsContext strings.Builder
+			skillsContext.WriteString("Based on your request, the following skills have been identified. You MUST use their instructions to fulfill the request:\n\n")
+
+			for i, step := range plan.Steps {
+				skillNames := make([]string, len(step.Skills))
+				for j, s := range step.Skills {
+					skillNames[j] = s.Name
+					// Append skill content to context
+					skillsContext.WriteString(fmt.Sprintf("## Skill: %s\n%s\n\n", s.Name, s.Content))
+				}
+				fmt.Printf("  Step %d (%s): Executing %s\n", i+1, step.Mode, strings.Join(skillNames, ", "))
+			}
+
+			// Update userInput with context to fast-track execution
+			userInput = skillsContext.String() + "User Request: " + userInput
+			fmt.Println("[Planner] Injecting skill context and executing...")
 		}
 
 		fmt.Printf("Assistant: ")
