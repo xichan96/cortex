@@ -23,7 +23,7 @@ func getLLMProvider() (types.LLMProvider, error) {
 	// If model is empty, llm.NewVolceClient will use the default (DoubaoSeed1)
 	// If baseURL is empty, llm.NewVolceClient will use the default
 	opts := llm.VolceOptions{
-		APIKey: "b0a430b9-f314-45ec-937d-5dd60062d8c5",
+		APIKey: "",
 		Model:  "deepseek-v3-1-250821",
 	}
 
