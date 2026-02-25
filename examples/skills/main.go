@@ -42,7 +42,7 @@ func loadAndInjectSkills(agentConfig *types.AgentConfig) ([]skills.Skill, error)
 	}
 
 	// Try to find the skills directory
-	skillsDir := filepath.Join(cwd, "examples", "agent-skills", "skills")
+	skillsDir := filepath.Join(cwd, "examples", "skills", "skills")
 	if _, err := os.Stat(skillsDir); os.IsNotExist(err) {
 		skillsDir = filepath.Join(cwd, "skills")
 	}
