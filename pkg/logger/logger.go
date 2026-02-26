@@ -4,8 +4,30 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 )
+
+var (
+	defaultLogger *Logger
+	once          sync.Once
+)
+
+func init() {
+	once.Do(func() {
+		defaultLogger = NewLogger()
+	})
+}
+
+// GetLogger returns the global logger instance
+func GetLogger() *Logger {
+	return defaultLogger
+}
+
+// SetGlobalLogger sets the global logger instance
+func SetGlobalLogger(l *Logger) {
+	defaultLogger = l
+}
 
 // LoggerConfig logging configuration
 type LoggerConfig struct {
@@ -100,4 +122,46 @@ func (l *Logger) Warn(message string, attrs ...slog.Attr) {
 		allAttrs = append(allAttrs, attr)
 	}
 	l.logger.Warn(message, allAttrs...)
+}
+
+// Error logs error message
+func (l *Logger) Error(message string, attrs ...slog.Attr) {
+	allAttrs := make([]any, 0, len(attrs)*2+2)
+	allAttrs = append(allAttrs, slog.Time("timestamp", time.Now()))
+	for _, attr := range attrs {
+		allAttrs = append(allAttrs, attr)
+	}
+	l.logger.Error(message, allAttrs...)
+}
+
+// Global helper functions
+
+// LogExecution logs execution information using the global logger
+func LogExecution(operation string, iteration int, message string, attrs ...slog.Attr) {
+	defaultLogger.LogExecution(operation, iteration, message, attrs...)
+}
+
+// LogToolExecution logs tool execution information using the global logger
+func LogToolExecution(toolName string, success bool, duration time.Duration, attrs ...slog.Attr) {
+	defaultLogger.LogToolExecution(toolName, success, duration, attrs...)
+}
+
+// LogError logs error information using the global logger
+func LogError(operation string, err error, attrs ...slog.Attr) {
+	defaultLogger.LogError(operation, err, attrs...)
+}
+
+// Info logs informational message using the global logger
+func Info(message string, attrs ...slog.Attr) {
+	defaultLogger.Info(message, attrs...)
+}
+
+// Warn logs warning message using the global logger
+func Warn(message string, attrs ...slog.Attr) {
+	defaultLogger.Warn(message, attrs...)
+}
+
+// Error logs error message using the global logger
+func Error(message string, attrs ...slog.Attr) {
+	defaultLogger.Error(message, attrs...)
 }

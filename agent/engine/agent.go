@@ -63,7 +63,6 @@ type AgentEngine struct {
 
 	// Configuration and state
 	config *types.AgentConfig // Engine configuration
-	logger *logger.Logger     // Structured logger
 
 	// Internal state management
 	mu        sync.RWMutex       // State mutex lock
@@ -96,11 +95,6 @@ func NewAgentEngine(model types.LLMProvider, config *types.AgentConfig) *AgentEn
 		config = types.NewAgentConfig()
 	}
 
-	loggerConfig := &logger.LoggerConfig{
-		Silent:   config.LogSilent,
-		FilePath: config.LogFile,
-	}
-
 	ae := &AgentEngine{
 		model:         model,
 		config:        config,
@@ -108,7 +102,6 @@ func NewAgentEngine(model types.LLMProvider, config *types.AgentConfig) *AgentEn
 		toolsMap:      make(map[string]types.Tool),
 		toolCache:     make(map[string]*toolCacheEntry),
 		toolCacheSize: DefaultCacheSize, // Using constant-defined cache size
-		logger:        logger.NewLoggerWithConfig(loggerConfig),
 		ctx:           ctx,
 		cancel:        cancel,
 		rateLimiter:   ratelimit.NewTokenBucketLimiter(10, 10), // 10 req/s default
@@ -116,7 +109,7 @@ func NewAgentEngine(model types.LLMProvider, config *types.AgentConfig) *AgentEn
 
 	// Propagate logger to model if supported
 	if provider, ok := model.(interface{ SetLogger(*logger.Logger) }); ok {
-		provider.SetLogger(ae.logger)
+		provider.SetLogger(logger.GetLogger())
 	}
 
 	return ae
@@ -239,15 +232,9 @@ func (ae *AgentEngine) SetConfig(config *types.AgentConfig) {
 		ae.config = config
 	}
 
-	loggerConfig := &logger.LoggerConfig{
-		Silent:   ae.config.LogSilent,
-		FilePath: ae.config.LogFile,
-	}
-	ae.logger = logger.NewLoggerWithConfig(loggerConfig)
-
 	// Propagate logger to model if supported
 	if provider, ok := ae.model.(interface{ SetLogger(*logger.Logger) }); ok {
-		provider.SetLogger(ae.logger)
+		provider.SetLogger(logger.GetLogger())
 	}
 }
 
@@ -302,7 +289,7 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 
 	// Add execution tracking
 	startTime := time.Now()
-	ae.logger.LogExecution("Execute", 0, "Starting agent execution",
+	logger.LogExecution("Execute", 0, "Starting agent execution",
 		slog.String("input", truncateString(input, 100)),
 		slog.Int("previousRequests", len(previousRequests)))
 
@@ -318,7 +305,7 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		if err := limiter.Wait(ctx); err != nil {
-			ae.logger.LogError("Execute", err, slog.String("phase", "rate_limit"))
+			logger.LogError("Execute", err, slog.String("phase", "rate_limit"))
 			return nil, errors.NewError(errors.EC_SYSTEM_OVERLOAD.Code, "rate limit exceeded").Wrap(err)
 		}
 	}
@@ -326,7 +313,7 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 	// Pre-allocate slice capacity to reduce memory reallocations
 	messages, err := ae.prepareMessages(input, previousRequests)
 	if err != nil {
-		ae.logger.LogError("Execute", err, slog.String("phase", "prepare_messages"))
+		logger.LogError("Execute", err, slog.String("phase", "prepare_messages"))
 		return nil, errors.NewError(errors.EC_PREPARE_MESSAGES_FAILED.Code, errors.EC_PREPARE_MESSAGES_FAILED.Message).Wrap(err)
 	}
 
@@ -344,12 +331,12 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 
 	// Iterate until no tool calls or maximum iterations reached
 	for iteration < maxIterations {
-		ae.logger.LogExecution("Execute", iteration, fmt.Sprintf("Starting iteration %d/%d", iteration+1, maxIterations))
+		logger.LogExecution("Execute", iteration, fmt.Sprintf("Starting iteration %d/%d", iteration+1, maxIterations))
 
 		// Execute single iteration
 		result, continueIterating, err := ae.executeIteration(messages, iteration)
 		if err != nil {
-			ae.logger.LogError("Execute", err, slog.Int("iteration", iteration+1))
+			logger.LogError("Execute", err, slog.Int("iteration", iteration+1))
 			return nil, errors.NewError(errors.EC_ITERATION_FAILED.Code, fmt.Sprintf("iteration %d failed", iteration+1)).Wrap(err)
 		}
 
@@ -358,7 +345,7 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 
 		// If no tool calls or continuation not needed, end
 		if !continueIterating || len(result.ToolCalls) == 0 {
-			ae.logger.LogExecution("Execute", iteration, "Execution completed, no more tool calls")
+			logger.LogExecution("Execute", iteration, "Execution completed, no more tool calls")
 			break
 		}
 
@@ -368,15 +355,15 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 
 		// Avoid too fast execution - only delay if there are more iterations
 		if iteration < maxIterations {
-			ae.logger.LogExecution("Execute", iteration, "Preparing next iteration")
+			logger.LogExecution("Execute", iteration, "Preparing next iteration")
 			time.Sleep(IterationDelay)
 		} else {
-			ae.logger.LogExecution("Execute", iteration, "Reached maximum iterations")
+			logger.LogExecution("Execute", iteration, "Reached maximum iterations")
 		}
 	}
 
 	if iteration >= maxIterations {
-		ae.logger.LogExecution("Execute", iteration, fmt.Sprintf("Reached maximum iteration limit: %d", maxIterations))
+		logger.LogExecution("Execute", iteration, fmt.Sprintf("Reached maximum iteration limit: %d", maxIterations))
 	}
 
 	executionTime := time.Since(startTime)
@@ -384,7 +371,7 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 	if finalResult != nil {
 		outputLength = len(finalResult.Output)
 	}
-	ae.logger.LogExecution("Execute", 0, "Agent execution completed successfully",
+	logger.LogExecution("Execute", 0, "Agent execution completed successfully",
 		slog.Duration("total_duration", executionTime),
 		slog.Int("total_iterations", iteration+1),
 		slog.Int("output_length", outputLength))
@@ -394,7 +381,7 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 		inputMap := map[string]interface{}{"input": input}
 		outputMap := map[string]interface{}{"output": finalResult.Output}
 		if err := ae.memory.SaveContext(inputMap, outputMap); err != nil {
-			ae.logger.LogError("Execute", err, slog.String("phase", "save_context"))
+			logger.LogError("Execute", err, slog.String("phase", "save_context"))
 			// Do not interrupt execution as main flow is complete
 		} else {
 			// Check if memory compression is needed
@@ -418,13 +405,13 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 						go func() {
 							defer func() {
 								if r := recover(); r != nil {
-									ae.logger.LogError("Execute", fmt.Errorf("panic in compress memory async: %v", r))
+									logger.LogError("Execute", fmt.Errorf("panic in compress memory async: %v", r))
 								}
 							}()
 							if err := ae.memory.CompressMemory(llm, compressThreshold); err != nil {
-								ae.logger.LogError("Execute", err, slog.String("phase", "compress_memory_async"))
+								logger.LogError("Execute", err, slog.String("phase", "compress_memory_async"))
 							} else {
-								ae.logger.Info("Memory compressed successfully",
+								logger.Info("Memory compressed successfully",
 									slog.Int("original_count", len(history)),
 									slog.Int("threshold", compressThreshold))
 							}
@@ -459,7 +446,7 @@ func (ae *AgentEngine) ExecuteStream(input string, previousRequests []types.Tool
 		defer ae.isRunning.Store(false)
 
 		startTime := time.Now()
-		ae.logger.LogExecution("ExecuteStream", 0, "Starting stream execution", slog.String("input", truncateString(input, 100)), slog.Int("previousRequests", len(previousRequests)))
+		logger.LogExecution("ExecuteStream", 0, "Starting stream execution", slog.String("input", truncateString(input, 100)), slog.Int("previousRequests", len(previousRequests)))
 
 		ae.mu.RLock()
 		limiter := ae.rateLimiter
@@ -473,7 +460,7 @@ func (ae *AgentEngine) ExecuteStream(input string, previousRequests []types.Tool
 			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
 			if err := limiter.Wait(ctx); err != nil {
-				ae.logger.LogError("ExecuteStream", err, slog.String("phase", "rate_limit"))
+				logger.LogError("ExecuteStream", err, slog.String("phase", "rate_limit"))
 				resultChan <- StreamResult{
 					Type:  "error",
 					Error: errors.NewError(errors.EC_SYSTEM_OVERLOAD.Code, "rate limit exceeded").Wrap(err),
@@ -484,7 +471,7 @@ func (ae *AgentEngine) ExecuteStream(input string, previousRequests []types.Tool
 
 		defer func() {
 			if r := recover(); r != nil {
-				ae.logger.LogError("ExecuteStream", fmt.Errorf("panic recovered: %v", r))
+				logger.LogError("ExecuteStream", fmt.Errorf("panic recovered: %v", r))
 				resultChan <- StreamResult{
 					Type:  "error",
 					Error: errors.NewError(errors.EC_STREAM_PANIC.Code, "panic in stream execution").Wrap(fmt.Errorf("%v", r)),
@@ -495,7 +482,7 @@ func (ae *AgentEngine) ExecuteStream(input string, previousRequests []types.Tool
 		// Prepare initial messages
 		messages, err := ae.prepareMessages(input, previousRequests)
 		if err != nil {
-			ae.logger.LogError("ExecuteStream", err, slog.String("phase", "prepare_messages"))
+			logger.LogError("ExecuteStream", err, slog.String("phase", "prepare_messages"))
 			resultChan <- StreamResult{
 				Type:  "error",
 				Error: errors.NewError(errors.EC_PREPARE_MESSAGES_FAILED.Code, "failed to prepare messages").Wrap(err),
@@ -506,7 +493,7 @@ func (ae *AgentEngine) ExecuteStream(input string, previousRequests []types.Tool
 		// Stream iterative execution
 		ae.executeStreamWithIterations(messages, resultChan)
 
-		ae.logger.LogExecution("ExecuteStream", 0, "Stream execution completed", slog.Duration("total_duration", time.Since(startTime)))
+		logger.LogExecution("ExecuteStream", 0, "Stream execution completed", slog.Duration("total_duration", time.Since(startTime)))
 	}()
 
 	return resultChan, nil
@@ -612,7 +599,7 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 	ctx := ae.ctx
 	ae.mu.RUnlock()
 	startTime := time.Now()
-	ae.logger.LogExecution("executeIteration", iteration, fmt.Sprintf("Starting iteration %d/%d", iteration+1, maxIterations))
+	logger.LogExecution("executeIteration", iteration, fmt.Sprintf("Starting iteration %d/%d", iteration+1, maxIterations))
 
 	// Create context with timeout if configured
 	if ctx == nil {
@@ -630,7 +617,7 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 
 	response, err := ae.model.ChatWithTools(messages, tools)
 	if err != nil {
-		ae.logger.LogError("executeIteration", err, slog.Int("iteration", iteration))
+		logger.LogError("executeIteration", err, slog.Int("iteration", iteration))
 		return nil, false, errors.NewError(errors.EC_CHAT_FAILED.Code, "failed to chat with tools").Wrap(err)
 	}
 
@@ -640,12 +627,12 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 
 	// Handle tool calls
 	if len(response.ToolCalls) > 0 {
-		ae.logger.Info("LLM requested tool calls",
+		logger.Info("LLM requested tool calls",
 			slog.Int("tool_count", len(response.ToolCalls)),
 			slog.Int("iteration", iteration+1))
 
 		if iteration+1 >= maxIterations {
-			ae.logger.Info("Reached maximum iterations, skipping tool execution",
+			logger.Info("Reached maximum iterations, skipping tool execution",
 				slog.Int("iteration", iteration+1),
 				slog.Int("max_iterations", maxIterations))
 			return result, false, nil
@@ -654,7 +641,7 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 		// Sort tool calls by priority and dependencies
 		sortedToolCalls, err := ae.sortToolCallsByDependencies(response.ToolCalls)
 		if err != nil {
-			ae.logger.LogError("executeIteration", err, slog.String("phase", "sort_tool_calls"))
+			logger.LogError("executeIteration", err, slog.String("phase", "sort_tool_calls"))
 			// Continue with original order if sorting fails
 			sortedToolCalls = response.ToolCalls
 		}
@@ -663,7 +650,7 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 		intermediateSteps := make([]types.ToolCallData, 0, len(sortedToolCalls))
 
 		for _, toolCall := range sortedToolCalls {
-			ae.logger.Info("Executing tool",
+			logger.Info("Executing tool",
 				slog.String("tool_name", toolCall.Function.Name),
 				slog.Int("iteration", iteration+1))
 
@@ -672,7 +659,7 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 			ae.mu.RUnlock()
 			if !exists {
 				errMsg := fmt.Sprintf("tool '%s' not found in available tools", toolCall.Function.Name)
-				ae.logger.Info("Tool not found",
+				logger.Info("Tool not found",
 					slog.String("tool_name", toolCall.Function.Name),
 					slog.Int("iteration", iteration+1))
 				intermediateSteps = append(intermediateSteps, types.ToolCallData{
@@ -691,10 +678,10 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 			toolStartTime := time.Now()
 			toolResult, err, cached := ae.getCachedToolResult(toolCall.Function.Name, toolCall.Function.Arguments)
 			if cached {
-				ae.logger.LogToolExecution(toolCall.Function.Name, true, 0, slog.Bool("cached", true))
+				logger.LogToolExecution(toolCall.Function.Name, true, 0, slog.Bool("cached", true))
 				if err != nil {
 					errMsg := fmt.Sprintf("Tool '%s' execution failed (cached error): %v", toolCall.Function.Name, err)
-					ae.logger.LogToolExecution(toolCall.Function.Name, false, 0,
+					logger.LogToolExecution(toolCall.Function.Name, false, 0,
 						slog.String("error", err.Error()),
 						slog.Bool("cached", true))
 					intermediateSteps = append(intermediateSteps, types.ToolCallData{
@@ -715,7 +702,7 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 
 				if err != nil {
 					errMsg := fmt.Sprintf("Tool '%s' execution failed: %v", toolCall.Function.Name, err)
-					ae.logger.LogToolExecution(toolCall.Function.Name, false, duration,
+					logger.LogToolExecution(toolCall.Function.Name, false, duration,
 						slog.String("error", err.Error()),
 						slog.String("tool_input", fmt.Sprintf("%v", toolCall.Function.Arguments)))
 					intermediateSteps = append(intermediateSteps, types.ToolCallData{
@@ -732,10 +719,10 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 
 				// Cache tool result
 				ae.setCachedToolResult(toolCall.Function.Name, toolCall.Function.Arguments, toolResult, err)
-				ae.logger.LogToolExecution(toolCall.Function.Name, true, duration, slog.Bool("cached", false))
+				logger.LogToolExecution(toolCall.Function.Name, true, duration, slog.Bool("cached", false))
 			}
 
-			ae.logger.Info("Tool executed successfully",
+			logger.Info("Tool executed successfully",
 				slog.String("tool_name", toolCall.Function.Name),
 				slog.Int("iteration", iteration+1))
 
@@ -765,7 +752,7 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 		result.IntermediateSteps = intermediateSteps
 
 		// Log iteration completion information
-		ae.logger.LogExecution("executeIteration", iteration,
+		logger.LogExecution("executeIteration", iteration,
 			fmt.Sprintf("Iteration %d completed with %d tool calls", iteration+1, len(toolCalls)),
 			slog.Int("tool_calls", len(toolCalls)),
 			slog.Duration("duration", time.Since(startTime)))
@@ -774,7 +761,7 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 		return result, len(toolCalls) > 0, nil
 	}
 
-	ae.logger.LogExecution("executeIteration", iteration, fmt.Sprintf("Iteration %d completed with no tool calls", iteration+1))
+	logger.LogExecution("executeIteration", iteration, fmt.Sprintf("Iteration %d completed with no tool calls", iteration+1))
 	return result, false, nil
 }
 
@@ -865,13 +852,13 @@ func (ae *AgentEngine) executeStreamWithIterations(initialMessages []types.Messa
 
 	for iteration := 0; iteration < maxIterations; iteration++ {
 		iterationStartTime := time.Now()
-		ae.logger.LogExecution("executeStreamWithIterations", iteration,
+		logger.LogExecution("executeStreamWithIterations", iteration,
 			fmt.Sprintf("Starting streaming iteration %d/%d", iteration+1, maxIterations))
 
 		// Execute single round iteration with streaming
 		iterationResult, hasMore, err := ae.executeStreamIteration(messages, resultChan, iteration)
 		if err != nil {
-			ae.logger.LogError("executeStreamWithIterations", err, slog.Int("iteration", iteration+1))
+			logger.LogError("executeStreamWithIterations", err, slog.Int("iteration", iteration+1))
 			resultChan <- StreamResult{
 				Type:  "error",
 				Error: errors.NewError(errors.EC_STREAM_ITERATION_FAILED.Code, fmt.Sprintf("iteration %d failed", iteration+1)).Wrap(err),
@@ -886,7 +873,7 @@ func (ae *AgentEngine) executeStreamWithIterations(initialMessages []types.Messa
 
 		// If no more tool calls, end iteration
 		if !hasMore {
-			ae.logger.LogExecution("executeStreamWithIterations", iteration,
+			logger.LogExecution("executeStreamWithIterations", iteration,
 				"Streaming execution completed",
 				slog.Int("total_iterations", iteration+1),
 				slog.Duration("iteration_duration", time.Since(iterationStartTime)))
@@ -894,10 +881,10 @@ func (ae *AgentEngine) executeStreamWithIterations(initialMessages []types.Messa
 		}
 
 		if iteration+1 < maxIterations {
-			ae.logger.LogExecution("executeStreamWithIterations", iteration, "Preparing next iteration messages")
+			logger.LogExecution("executeStreamWithIterations", iteration, "Preparing next iteration messages")
 			messages = ae.buildNextMessages(messages, iterationResult)
 		} else {
-			ae.logger.LogExecution("executeStreamWithIterations", iteration, "Reached maximum iterations")
+			logger.LogExecution("executeStreamWithIterations", iteration, "Reached maximum iterations")
 		}
 	}
 
@@ -906,7 +893,7 @@ func (ae *AgentEngine) executeStreamWithIterations(initialMessages []types.Messa
 		input := map[string]interface{}{"input": initialMessages[len(initialMessages)-1].Content}
 		output := map[string]interface{}{"output": finalResult.Output}
 		if err := ae.memory.SaveContext(input, output); err != nil {
-			ae.logger.LogError("executeStreamWithIterations", err, slog.String("phase", "save_context"))
+			logger.LogError("executeStreamWithIterations", err, slog.String("phase", "save_context"))
 			// Do not interrupt execution as main flow is complete
 		} else {
 			// Check if memory compression is needed
@@ -930,13 +917,13 @@ func (ae *AgentEngine) executeStreamWithIterations(initialMessages []types.Messa
 						go func() {
 							defer func() {
 								if r := recover(); r != nil {
-									ae.logger.LogError("executeStreamWithIterations", fmt.Errorf("panic in compress memory async: %v", r))
+									logger.LogError("executeStreamWithIterations", fmt.Errorf("panic in compress memory async: %v", r))
 								}
 							}()
 							if err := ae.memory.CompressMemory(llm, compressThreshold); err != nil {
-								ae.logger.LogError("executeStreamWithIterations", err, slog.String("phase", "compress_memory_async"))
+								logger.LogError("executeStreamWithIterations", err, slog.String("phase", "compress_memory_async"))
 							} else {
-								ae.logger.Info("Memory compressed successfully",
+								logger.Info("Memory compressed successfully",
 									slog.Int("original_count", len(history)),
 									slog.Int("threshold", compressThreshold))
 							}
@@ -951,7 +938,7 @@ func (ae *AgentEngine) executeStreamWithIterations(initialMessages []types.Messa
 	finalResult.ToolCalls = toolCalls
 	finalResult.IntermediateSteps = intermediateSteps
 
-	ae.logger.LogExecution("executeStreamWithIterations", 0, "Stream execution completed successfully",
+	logger.LogExecution("executeStreamWithIterations", 0, "Stream execution completed successfully",
 		slog.Int("total_iterations", len(toolCalls)),
 		slog.Int("total_tools", len(toolCalls)))
 
@@ -1036,11 +1023,11 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 	result.Output = outputBuilder.String()
 
 	if len(result.ToolCalls) > 0 {
-		ae.logger.LogExecution("executeStreamIteration", iteration, "Processing tool calls",
+		logger.LogExecution("executeStreamIteration", iteration, "Processing tool calls",
 			slog.Int("tool_count", len(result.ToolCalls)))
 
 		if iteration+1 >= maxIterations {
-			ae.logger.LogExecution("executeStreamIteration", iteration, "Reached maximum iterations, skipping tool execution")
+			logger.LogExecution("executeStreamIteration", iteration, "Reached maximum iterations, skipping tool execution")
 			return result, false, nil
 		}
 
@@ -1060,7 +1047,7 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 		// Sort tool calls by priority and dependencies
 		sortedToolCalls, err := ae.sortToolCallsByDependencies(toolCallsForSorting)
 		if err != nil {
-			ae.logger.LogError("executeStreamIteration", err, slog.String("phase", "sort_tool_calls"))
+			logger.LogError("executeStreamIteration", err, slog.String("phase", "sort_tool_calls"))
 			// Continue with original order if sorting fails
 			sortedToolCalls = toolCallsForSorting
 		}
@@ -1077,7 +1064,7 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 		}
 
 		for _, toolCall := range sortedToolCallRequests {
-			ae.logger.LogExecution("executeStreamIteration", iteration, "Executing tool",
+			logger.LogExecution("executeStreamIteration", iteration, "Executing tool",
 				slog.String("tool_name", toolCall.Tool))
 
 			ae.mu.RLock()
@@ -1085,7 +1072,7 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 			ae.mu.RUnlock()
 			if !exists {
 				errMsg := fmt.Sprintf("tool '%s' not found in available tools", toolCall.Tool)
-				ae.logger.LogError("executeStreamIteration", fmt.Errorf("tool %q not found in available tools", toolCall.Tool),
+				logger.LogError("executeStreamIteration", fmt.Errorf("tool %q not found in available tools", toolCall.Tool),
 					slog.String("tool_name", toolCall.Tool))
 				intermediateSteps = append(intermediateSteps, types.ToolCallData{
 					Action: types.ToolActionStep{
@@ -1103,10 +1090,10 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 			toolStartTime := time.Now()
 			toolResult, err, cached := ae.getCachedToolResult(toolCall.Tool, toolCall.ToolInput)
 			if cached {
-				ae.logger.LogToolExecution(toolCall.Tool, true, 0, slog.Bool("cached", true), slog.String("context", "streaming"))
+				logger.LogToolExecution(toolCall.Tool, true, 0, slog.Bool("cached", true), slog.String("context", "streaming"))
 				if err != nil {
 					errMsg := fmt.Sprintf("Tool '%s' execution failed (cached error): %v", toolCall.Tool, err)
-					ae.logger.LogToolExecution(toolCall.Tool, false, 0,
+					logger.LogToolExecution(toolCall.Tool, false, 0,
 						slog.String("error", err.Error()),
 						slog.Bool("cached", true),
 						slog.String("context", "streaming"))
@@ -1128,7 +1115,7 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 
 				if err != nil {
 					errMsg := fmt.Sprintf("Tool '%s' execution failed: %v", toolCall.Tool, err)
-					ae.logger.LogToolExecution(toolCall.Tool, false, duration,
+					logger.LogToolExecution(toolCall.Tool, false, duration,
 						slog.String("error", err.Error()),
 						slog.String("tool_input", fmt.Sprintf("%v", toolCall.ToolInput)),
 						slog.String("context", "streaming"))
@@ -1146,7 +1133,7 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 
 				// Cache tool result
 				ae.setCachedToolResult(toolCall.Tool, toolCall.ToolInput, toolResult, err)
-				ae.logger.LogToolExecution(toolCall.Tool, true, duration, slog.Bool("cached", false), slog.String("context", "streaming"))
+				logger.LogToolExecution(toolCall.Tool, true, duration, slog.Bool("cached", false), slog.String("context", "streaming"))
 			}
 
 			// Format observation from tool result
@@ -1166,14 +1153,14 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 
 		result.IntermediateSteps = intermediateSteps
 
-		ae.logger.LogExecution("executeStreamIteration", iteration, "Tool execution completed",
+		logger.LogExecution("executeStreamIteration", iteration, "Tool execution completed",
 			slog.Int("executed_tools", len(result.ToolCalls)),
 			slog.Int("intermediate_steps", len(intermediateSteps)))
 
 		return result, len(result.ToolCalls) > 0, nil
 	}
 
-	ae.logger.LogExecution("executeStreamIteration", iteration, "No tool calls in this iteration")
+	logger.LogExecution("executeStreamIteration", iteration, "No tool calls in this iteration")
 	return result, false, nil
 }
 

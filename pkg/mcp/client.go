@@ -25,7 +25,6 @@ type Client struct {
 	toolsMu   sync.RWMutex
 	connected bool
 	connectMu sync.RWMutex
-	logger    *logger.Logger
 }
 
 // NewClient creates a new MCP client
@@ -42,7 +41,6 @@ func NewClient(url string, transport string, headers map[string]string) *Client 
 		transport: transport,
 		headers:   headers,
 		tools:     make([]types.Tool, 0),
-		logger:    logger.NewLogger(),
 	}
 }
 
@@ -55,7 +53,7 @@ func (c *Client) Connect(ctx context.Context) error {
 		return nil
 	}
 
-	c.logger.Info("Connecting to MCP server",
+	logger.Info("Connecting to MCP server",
 		slog.String("server_url", c.serverURL),
 		slog.String("transport", c.transport))
 
@@ -190,7 +188,7 @@ func (c *Client) refreshTools(ctx context.Context) error {
 		return errors.EC_MCP_NO_ACTIVE_CLIENT
 	}
 
-	c.logger.Info("Fetching tool list from MCP server")
+	logger.Info("Fetching tool list from MCP server")
 
 	request := mcp.ListToolsRequest{}
 	result, err := c.mcpClient.ListTools(ctx, request)
@@ -228,7 +226,7 @@ func (c *Client) refreshTools(ctx context.Context) error {
 	c.tools = mcpTools
 	c.toolsMu.Unlock()
 
-	c.logger.Info("Successfully fetched tools from MCP server",
+	logger.Info("Successfully fetched tools from MCP server",
 		slog.Int("tool_count", len(mcpTools)))
 	return nil
 }

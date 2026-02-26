@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rs/zerolog/log"
+	"github.com/xichan96/cortex/pkg/logger"
 )
 
 // LocalCacheIer local cache interface
@@ -142,7 +142,7 @@ func (c *LocalCache) IsExists(key string) bool {
 func (c *LocalCache) background(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Error().Msgf("panic in background: %v", r)
+			logger.Error(fmt.Sprintf("panic in background: %v", r))
 		}
 	}()
 	ticker := time.NewTicker(1 * time.Second)

@@ -39,15 +39,13 @@ func NewLogHook(cfg *LogConfig) redis.Hook {
 	}
 
 	return &LoggerHook{
-		logger: logger.NewLogger(),
-		cfg:    cfg,
+		cfg: cfg,
 	}
 }
 
 // LoggerHook is 日志
 type LoggerHook struct {
-	logger *logger.Logger
-	cfg    *LogConfig
+	cfg *LogConfig
 }
 
 // DialHook 实现dial钩子
@@ -107,9 +105,9 @@ func (r *LoggerHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 
 		if logErr != nil {
 			attrs = append(attrs, slog.String("error", logErr.Error()))
-			r.logger.LogError("redis command", logErr, attrs...)
+			logger.LogError("redis command", logErr, attrs...)
 		} else {
-			r.logger.Info("redis command", attrs...)
+			logger.Info("redis command", attrs...)
 		}
 
 		return nextErr
