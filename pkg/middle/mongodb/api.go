@@ -14,8 +14,6 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-var defaultLogger = logger.NewLogger()
-
 const (
 	updateLog = "collection %s, match %d, modify %d, upsert %d"
 	deleteLog = "collection %s, delete %d"
@@ -69,7 +67,7 @@ func (c *Client) Update(ctx context.Context, filters bson.M, data bson.M) error 
 func (c *Client) UpdateMany(ctx context.Context, filters bson.M, data bson.M) error {
 	res, err := c.Coll.UpdateAll(ctx, filters, bson.M{"$set": data})
 	if res != nil {
-		defaultLogger.Info(fmt.Sprintf(updateLog, c.Coll.GetCollectionName(), res.MatchedCount, res.ModifiedCount, res.UpsertedCount),
+		logger.Info(fmt.Sprintf(updateLog, c.Coll.GetCollectionName(), res.MatchedCount, res.ModifiedCount, res.UpsertedCount),
 			slog.String("collection", c.Coll.GetCollectionName()),
 			slog.Int64("matched", res.MatchedCount),
 			slog.Int64("modified", res.ModifiedCount),
@@ -82,7 +80,7 @@ func (c *Client) UpdateMany(ctx context.Context, filters bson.M, data bson.M) er
 func (c *Client) DeleteAll(ctx context.Context, data bson.M) error {
 	res, err := c.Coll.RemoveAll(ctx, data)
 	if res != nil {
-		defaultLogger.Info(fmt.Sprintf(deleteLog, c.Coll.GetCollectionName(), res.DeletedCount),
+		logger.Info(fmt.Sprintf(deleteLog, c.Coll.GetCollectionName(), res.DeletedCount),
 			slog.String("collection", c.Coll.GetCollectionName()),
 			slog.Int64("deleted", res.DeletedCount))
 	}
@@ -98,7 +96,7 @@ func (c *Client) GetBulkContainer(collection string) (bulk *qmgo.Bulk) {
 func (c *Client) BulkExecute(ctx context.Context, bulk *qmgo.Bulk) (err error) {
 	res, err := bulk.Run(ctx)
 	if res != nil {
-		defaultLogger.Info(fmt.Sprintf(bulkLog, res.InsertedCount, res.MatchedCount, res.ModifiedCount, res.UpsertedCount),
+		logger.Info(fmt.Sprintf(bulkLog, res.InsertedCount, res.MatchedCount, res.ModifiedCount, res.UpsertedCount),
 			slog.Int64("inserted", res.InsertedCount),
 			slog.Int64("matched", res.MatchedCount),
 			slog.Int64("modified", res.ModifiedCount),

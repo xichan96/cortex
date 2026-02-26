@@ -20,7 +20,6 @@ import (
 type LangChainLLMProvider struct {
 	model      llms.Model
 	modelName  string
-	logger     *logger.Logger
 	maxRetries int
 	retryDelay time.Duration
 }
@@ -30,7 +29,6 @@ func NewLangChainLLMProvider(model llms.Model, modelName string) *LangChainLLMPr
 	return &LangChainLLMProvider{
 		model:      model,
 		modelName:  modelName,
-		logger:     logger.NewLogger(),
 		maxRetries: 3,
 		retryDelay: 1 * time.Second,
 	}
@@ -44,11 +42,6 @@ func (p *LangChainLLMProvider) SetMaxRetries(maxRetries int) {
 // SetRetryDelay sets retry delay duration
 func (p *LangChainLLMProvider) SetRetryDelay(delay time.Duration) {
 	p.retryDelay = delay
-}
-
-// SetLogger sets the logger
-func (p *LangChainLLMProvider) SetLogger(l *logger.Logger) {
-	p.logger = l
 }
 
 // handle429Retry handles 429 rate limit errors with retry logic
@@ -81,7 +74,7 @@ func (p *LangChainLLMProvider) handle429Retry(err error, retryCount, maxRetries 
 		}
 	}
 
-	p.logger.Info("Received 429 error, will retry after wait",
+	logger.Info("Received 429 error, will retry after wait",
 		slog.Duration("wait_time", waitTime),
 		slog.Int("attempt", retryCount+1),
 		slog.Int("max_retries", maxRetries))
@@ -294,7 +287,7 @@ func (p *LangChainLLMProvider) ChatWithToolsStream(messages []types.Message, too
 						var args map[string]interface{}
 						if tc.FunctionCall.Arguments != "" {
 							if err := json.Unmarshal([]byte(tc.FunctionCall.Arguments), &args); err != nil {
-								p.logger.LogError("ChatWithToolsStream", err, slog.String("tool", tc.FunctionCall.Name))
+								logger.LogError("ChatWithToolsStream", err, slog.String("tool", tc.FunctionCall.Name))
 								args = make(map[string]interface{})
 							}
 						}
@@ -455,7 +448,7 @@ func (p *LangChainLLMProvider) convertMessageFromLangChain(choice *llms.ContentC
 			var args map[string]interface{}
 			if tc.FunctionCall.Arguments != "" {
 				if err := json.Unmarshal([]byte(tc.FunctionCall.Arguments), &args); err != nil {
-					p.logger.LogError("convertMessageFromLangChain", err, slog.String("tool", tc.FunctionCall.Name))
+					logger.LogError("convertMessageFromLangChain", err, slog.String("tool", tc.FunctionCall.Name))
 					args = make(map[string]interface{})
 				}
 			}

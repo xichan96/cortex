@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
-	"github.com/rs/zerolog/log"
+	"github.com/xichan96/cortex/pkg/logger"
 )
 
 type TaskHandler func(ctx context.Context, payload string) error
@@ -71,7 +72,7 @@ func (s *Scheduler) Start() {
 	ctx := context.Background()
 	jobs, err := s.store.GetPendingJobs(ctx)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to load pending jobs")
+		logger.Error("Failed to load pending jobs", slog.String("error", err.Error()))
 		return
 	}
 
@@ -79,7 +80,7 @@ func (s *Scheduler) Start() {
 
 	for _, job := range jobs {
 		if err := s.scheduleJob(job); err != nil {
-			log.Error().Err(err).Str("job_id", job.ID).Msg("Failed to reschedule job")
+			logger.Error("Failed to reschedule job", slog.String("error", err.Error()), slog.String("job_id", job.ID))
 		}
 	}
 }
@@ -94,7 +95,7 @@ func (s *Scheduler) checkStuckJobs() {
 		case <-ticker.C:
 			ctx := context.Background()
 			if err := s.store.ResetStuckJobs(ctx, 2*time.Hour); err != nil {
-				log.Error().Err(err).Msg("Failed to reset stuck jobs")
+				logger.Error("Failed to reset stuck jobs", slog.String("error", err.Error()))
 			}
 		}
 	}
@@ -244,7 +245,7 @@ func (s *Scheduler) createJobWrapper(job *Job) func() {
 		// Reload job to get latest status/retries
 		currentJob, err := s.store.Get(ctx, job.ID)
 		if err != nil {
-			log.Error().Err(err).Str("job_id", job.ID).Msg("Failed to load job for execution")
+			logger.Error("Failed to load job for execution", slog.String("error", err.Error()), slog.String("job_id", job.ID))
 			return
 		}
 
@@ -256,7 +257,7 @@ func (s *Scheduler) createJobWrapper(job *Job) func() {
 		if s.locker != nil {
 			locked, err := s.locker.Lock(ctx, "job_lock:"+currentJob.ID, 1*time.Minute)
 			if err != nil || !locked {
-				log.Debug().Str("job_id", currentJob.ID).Msg("Failed to acquire lock, skipping")
+				logger.Info("Failed to acquire lock, skipping", slog.String("job_id", currentJob.ID))
 				return
 			}
 			defer s.locker.Unlock(ctx, "job_lock:"+currentJob.ID)
@@ -267,7 +268,7 @@ func (s *Scheduler) createJobWrapper(job *Job) func() {
 
 		handler, ok := s.handlers[currentJob.TaskType]
 		if !ok {
-			log.Error().Str("type", string(currentJob.TaskType)).Msg("No handler registered for task type")
+			logger.Error("No handler registered for task type", slog.String("type", string(currentJob.TaskType)))
 			s.handleFailure(ctx, currentJob, fmt.Errorf("no handler for type %s", currentJob.TaskType), time.Since(startTime))
 			return
 		}
@@ -322,14 +323,14 @@ func (s *Scheduler) executeWithRetry(ctx context.Context, handler TaskHandler, j
 			return nil
 		} else {
 			lastErr = err
-			log.Warn().Err(err).Str("job_id", job.ID).Int("retry", i).Msg("Job execution failed, retrying")
+			logger.Warn("Job execution failed, retrying", slog.String("error", err.Error()), slog.String("job_id", job.ID), slog.Int("retry", i))
 		}
 	}
 	return lastErr
 }
 
 func (s *Scheduler) handleFailure(ctx context.Context, job *Job, err error, duration time.Duration) {
-	log.Error().Err(err).Str("job_id", job.ID).Msg("Job failed after retries")
+	logger.Error("Job failed after retries", slog.String("error", err.Error()), slog.String("job_id", job.ID))
 	s.store.UpdateStatus(ctx, job.ID, JobStatusFailed, nil, time.Time{}, duration, err.Error())
 	if s.onFailure != nil {
 		s.onFailure(job, err)

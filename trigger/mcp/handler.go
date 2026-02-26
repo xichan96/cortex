@@ -21,17 +21,15 @@ type handler struct {
 	engine    *engine.AgentEngine
 	opt       Options
 	mcpServer *mcpsrv.MCPServer
-	logger    *logger.Logger
 }
 
-func NewHandler(engine *engine.AgentEngine, opt Options) Handler {
+func NewHandler(engine *engine.AgentEngine, opt Options) (Handler, error) {
 	if engine == nil {
-		// 使用默认 logger 记录错误，但继续创建 handler
-		logger.NewLogger().LogError("NewHandler", fmt.Errorf("agent engine is nil"))
+		return nil, fmt.Errorf("agent engine is nil")
 	}
 
 	if opt.Tool.Name == "" {
-		logger.NewLogger().LogError("NewHandler", fmt.Errorf("tool name is required"))
+		return nil, fmt.Errorf("tool name is required")
 	}
 
 	mcp := mcpsrv.NewMCPServer(
@@ -43,10 +41,9 @@ func NewHandler(engine *engine.AgentEngine, opt Options) Handler {
 		engine:    engine,
 		opt:       opt,
 		mcpServer: mcp,
-		logger:    logger.NewLogger(),
 	}
 	h.registerTools(mcp)
-	return h
+	return h, nil
 }
 
 func (h *handler) Agent() gin.HandlerFunc {
@@ -58,7 +55,7 @@ func (h *handler) Agent() gin.HandlerFunc {
 }
 
 func (h *handler) registerTools(mcp *mcpsrv.MCPServer) {
-	h.logger.Info("Registering MCP tools",
+	logger.Info("Registering MCP tools",
 		slog.String("tool_name", h.opt.Tool.Name),
 		slog.String("server_name", h.opt.Server.Name))
 
@@ -67,7 +64,7 @@ func (h *handler) registerTools(mcp *mcpsrv.MCPServer) {
 		func(ctx context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 			select {
 			case <-ctx.Done():
-				h.logger.Info("Ping tool context cancelled",
+				logger.Info("Ping tool context cancelled",
 					slog.String("reason", ctx.Err().Error()))
 				return nil, ctx.Err()
 			default:
@@ -77,7 +74,7 @@ func (h *handler) registerTools(mcp *mcpsrv.MCPServer) {
 	)
 
 	if h.opt.Tool.Name == "" {
-		h.logger.LogError("registerTools", fmt.Errorf("tool name is required"))
+		logger.LogError("registerTools", fmt.Errorf("tool name is required"))
 		return
 	}
 
@@ -91,14 +88,14 @@ func (h *handler) registerTools(mcp *mcpsrv.MCPServer) {
 		func(ctx context.Context, request mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 			select {
 			case <-ctx.Done():
-				h.logger.Info("Chat tool context cancelled",
+				logger.Info("Chat tool context cancelled",
 					slog.String("reason", ctx.Err().Error()))
 				return nil, ctx.Err()
 			default:
 			}
 
 			if h.engine == nil {
-				h.logger.LogError("Chat tool", fmt.Errorf("agent engine is nil"))
+				logger.LogError("Chat tool", fmt.Errorf("agent engine is nil"))
 				return mcpgo.NewToolResultError("agent engine is not available"), nil
 			}
 
@@ -112,11 +109,11 @@ func (h *handler) registerTools(mcp *mcpsrv.MCPServer) {
 				var errorMsg string
 				if e, ok := err.(*errors.Error); ok {
 					errorMsg = fmt.Sprintf("%d: %s", e.Code, e.Message)
-					h.logger.LogError("Chat tool execution", err,
+					logger.LogError("Chat tool execution", err,
 						slog.Int("error_code", e.Code))
 				} else {
 					errorMsg = err.Error()
-					h.logger.LogError("Chat tool execution", err)
+					logger.LogError("Chat tool execution", err)
 				}
 				return mcpgo.NewToolResultError(errorMsg), nil
 			}

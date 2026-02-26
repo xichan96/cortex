@@ -119,7 +119,7 @@ func (a *agent) McpTrigger() (mcp.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	mcpHandler := mcp.NewHandler(engine, mcp.Options{
+	mcpHandler, err := mcp.NewHandler(engine, mcp.Options{
 		Server: mcp.Metadata{
 			Name:    a.config.Agent.MCP.Server.Name,
 			Version: a.config.Agent.MCP.Server.Version,
@@ -129,5 +129,8 @@ func (a *agent) McpTrigger() (mcp.Handler, error) {
 			Description: a.config.Agent.MCP.Tool.Description,
 		},
 	})
+	if err != nil {
+		return nil, err
+	}
 	return mcpHandler, nil
 }

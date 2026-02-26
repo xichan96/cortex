@@ -19,13 +19,10 @@ type Handler interface {
 }
 
 type handler struct {
-	logger *logger.Logger
 }
 
 func NewHandler() Handler {
-	return &handler{
-		logger: logger.NewLogger(),
-	}
+	return &handler{}
 }
 
 func (h *handler) handleError(err error) *errors.Error {
@@ -45,13 +42,13 @@ func (h *handler) formatError(err error) string {
 func (h *handler) sendSSEvent(c *gin.Context, event SSEvent) bool {
 	data, err := json.Marshal(event)
 	if err != nil {
-		h.logger.LogError("sendSSEvent", err,
+		logger.LogError("sendSSEvent", err,
 			slog.String("event_type", event.Type),
 			slog.String("operation", "marshal"))
 		return false
 	}
 	if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", data); err != nil {
-		h.logger.LogError("sendSSEvent", err,
+		logger.LogError("sendSSEvent", err,
 			slog.String("event_type", event.Type),
 			slog.String("operation", "write"))
 		return false
@@ -84,7 +81,7 @@ func (h *handler) GetMessageRequest(c *gin.Context) (*MessageRequest, error) {
 
 func (h *handler) ChatAPI(c *gin.Context, engine *engine.AgentEngine, req *MessageRequest) {
 	if engine == nil {
-		h.logger.LogError("ChatAPI", fmt.Errorf("agent engine is nil"))
+		logger.LogError("ChatAPI", fmt.Errorf("agent engine is nil"))
 		c.JSON(http.StatusInternalServerError, ErrorResponse{
 			Status: errors.EC_HTTP_EXECUTE_FAILED.Code,
 			Msg:    "agent engine is not available",
@@ -95,7 +92,7 @@ func (h *handler) ChatAPI(c *gin.Context, engine *engine.AgentEngine, req *Messa
 	result, err := engine.Execute(req.Message, nil)
 	if err != nil {
 		ec := h.handleError(err)
-		h.logger.LogError("ChatAPI", err,
+		logger.LogError("ChatAPI", err,
 			slog.String("session_id", req.SessionID),
 			slog.Int("error_code", ec.Code))
 		c.JSON(http.StatusInternalServerError, ErrorResponse{
@@ -109,7 +106,7 @@ func (h *handler) ChatAPI(c *gin.Context, engine *engine.AgentEngine, req *Messa
 
 func (h *handler) StreamChatAPI(c *gin.Context, engine *engine.AgentEngine, req *MessageRequest) {
 	if engine == nil {
-		h.logger.LogError("StreamChatAPI", fmt.Errorf("agent engine is nil"))
+		logger.LogError("StreamChatAPI", fmt.Errorf("agent engine is nil"))
 		c.Header("Content-Type", "text/event-stream")
 		if !h.sendSSEvent(c, SSEvent{
 			Type:  "error",
@@ -128,7 +125,7 @@ func (h *handler) StreamChatAPI(c *gin.Context, engine *engine.AgentEngine, req 
 	stream, err := engine.ExecuteStream(req.Message, nil)
 	if err != nil {
 		ec := h.handleError(err)
-		h.logger.LogError("StreamChatAPI", err,
+		logger.LogError("StreamChatAPI", err,
 			slog.String("session_id", req.SessionID),
 			slog.Int("error_code", ec.Code))
 		if !h.sendSSEvent(c, SSEvent{
@@ -143,7 +140,7 @@ func (h *handler) StreamChatAPI(c *gin.Context, engine *engine.AgentEngine, req 
 	for result := range stream {
 		select {
 		case <-ctx.Done():
-			h.logger.Info("Stream context cancelled",
+			logger.Info("Stream context cancelled",
 				slog.String("session_id", req.SessionID),
 				slog.String("reason", ctx.Err().Error()))
 			return

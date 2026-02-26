@@ -23,7 +23,6 @@ type LangChainAgentEngine struct {
 	systemPrompt       string
 	memory             []types.Message
 	maxHistoryMessages int
-	logger             *logger.Logger
 }
 
 // NewLangChainAgentEngine creates a new LangChain agent engine
@@ -35,12 +34,11 @@ func NewLangChainAgentEngine(llm types.LLMProvider, systemPrompt string) *LangCh
 		systemPrompt:       systemPrompt,
 		memory:             make([]types.Message, 0),
 		maxHistoryMessages: 100,
-		logger:             logger.NewLogger(),
 	}
 
-	// Propagate logger to llm if supported
+	// Propagatlogger.to llm if supported
 	if provider, ok := llm.(interface{ SetLogger(*logger.Logger) }); ok {
-		provider.SetLogger(e.logger)
+		provider.SetLogger(logger.GetLogger())
 	}
 
 	return e
@@ -322,15 +320,15 @@ func (e *LangChainAgentEngine) SetConfig(config *types.AgentConfig) {
 	e.mu.Lock()
 	e.maxHistoryMessages = config.MaxHistoryMessages
 
-	loggerConfig := &logger.LoggerConfig{
-		Silent:   config.LogSilent,
-		FilePath: config.LogFile,
-	}
-	e.logger = logger.NewLoggerWithConfig(loggerConfig)
+	// loggerConfig := &logger.LoggerConfig{
+	// 	Silent:   config.LogSilent,
+	// 	FilePath: config.LogFile,
+	// }
+	// // Use global logger, do not re-initialize
 
-	// Propagate logger to llm if supported
+	// Propagate global logger to llm if supported
 	if provider, ok := e.llm.(interface{ SetLogger(*logger.Logger) }); ok {
-		provider.SetLogger(e.logger)
+		provider.SetLogger(logger.GetLogger())
 	}
 
 	e.limitMemoryLocked()
@@ -390,18 +388,18 @@ func (e *LangChainAgentEngine) AddTools(tools []types.Tool) {
 // Execute executes the agent (implements Agent interface)
 func (e *LangChainAgentEngine) Execute(input string, previousRequests []types.ToolCallData) (*AgentResult, error) {
 	startTime := time.Now()
-	e.logger.LogExecution("LangChainAgentEngine.Execute", 0, "Starting execution",
+	logger.LogExecution("LangChainAgentEngine.Execute", 0, "Starting execution",
 		slog.String("input", truncateString(input, 100)))
 
 	// Adapt to Agent interface, ignore previousRequests parameter
 	output, err := e.ExecuteSimple(input)
 	if err != nil {
-		e.logger.LogError("LangChainAgentEngine.Execute", err)
+		logger.LogError("LangChainAgentEngine.Execute", err)
 		return nil, err
 	}
 
 	executionTime := time.Since(startTime)
-	e.logger.LogExecution("LangChainAgentEngine.Execute", 0, "Execution completed",
+	logger.LogExecution("LangChainAgentEngine.Execute", 0, "Execution completed",
 		slog.Duration("duration", executionTime))
 
 	return &AgentResult{

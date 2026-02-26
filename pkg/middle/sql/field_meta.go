@@ -60,7 +60,7 @@ func NewGlobalFieldMetaMapping[T CTable](ml schema.Tabler, fm T, tAs ...string) 
 	if ok {
 		return val.(*T)
 	}
-	logger.NewLogger().Info("NewGlobalFieldMetaMapping: %s", slog.String("table_name", ml.TableName()))
+	logger.Info("NewGlobalFieldMetaMapping", slog.String("table_name", ml.TableName()))
 	fmp := NewFieldMetaMapping(ml, fm)
 	fieldMetaMapping.Store(ml.TableName(), fmp)
 	return fmp

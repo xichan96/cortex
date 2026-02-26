@@ -260,7 +260,7 @@ func (c *connection) Exec(cmd string) (stdout string, err error) {
 		if exitErr, ok := err.(*ssh.ExitError); ok {
 			exitCode = exitErr.ExitStatus()
 		}
-		logger.NewLogger().Info("exitCode", slog.Int("exitCode", exitCode))
+		logger.Info("exitCode", slog.Int("exitCode", exitCode))
 		return "", err
 	}
 
