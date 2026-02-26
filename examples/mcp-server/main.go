@@ -22,7 +22,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create agent engine: %v", err)
 	}
-	mcpHandler := mcp.NewHandler(agentEngine, mcpOpt)
+	mcpHandler, err := mcp.NewHandler(agentEngine, mcpOpt)
+	if err != nil {
+		log.Fatalf("Failed to create MCP handler: %v", err)
+	}
 	r := gin.Default()
 	mcpGroup := r.Group("/mcp")
 	mcpGroup.Any("", mcpHandler.Agent())

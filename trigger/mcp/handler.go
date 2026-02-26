@@ -23,14 +23,13 @@ type handler struct {
 	mcpServer *mcpsrv.MCPServer
 }
 
-func NewHandler(engine *engine.AgentEngine, opt Options) Handler {
+func NewHandler(engine *engine.AgentEngine, opt Options) (Handler, error) {
 	if engine == nil {
-		// 使用默认 logger 记录错误，但继续创建 handler
-		logger.LogError("NewHandler", fmt.Errorf("agent engine is nil"))
+		return nil, fmt.Errorf("agent engine is nil")
 	}
 
 	if opt.Tool.Name == "" {
-		logger.LogError("NewHandler", fmt.Errorf("tool name is required"))
+		return nil, fmt.Errorf("tool name is required")
 	}
 
 	mcp := mcpsrv.NewMCPServer(
@@ -44,7 +43,7 @@ func NewHandler(engine *engine.AgentEngine, opt Options) Handler {
 		mcpServer: mcp,
 	}
 	h.registerTools(mcp)
-	return h
+	return h, nil
 }
 
 func (h *handler) Agent() gin.HandlerFunc {
