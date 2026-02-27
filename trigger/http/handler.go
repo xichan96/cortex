@@ -89,7 +89,7 @@ func (h *handler) ChatAPI(c *gin.Context, engine *engine.AgentEngine, req *Messa
 		return
 	}
 
-	result, err := engine.Execute(req.Message, nil)
+	result, err := engine.Execute(c.Request.Context(), req.Message, nil)
 	if err != nil {
 		ec := h.handleError(err)
 		logger.LogError("ChatAPI", err,
@@ -122,7 +122,7 @@ func (h *handler) StreamChatAPI(c *gin.Context, engine *engine.AgentEngine, req 
 	c.Header("Connection", "keep-alive")
 
 	ctx := c.Request.Context()
-	stream, err := engine.ExecuteStream(req.Message, nil)
+	stream, err := engine.ExecuteStream(ctx, req.Message, nil)
 	if err != nil {
 		ec := h.handleError(err)
 		logger.LogError("StreamChatAPI", err,

@@ -177,8 +177,7 @@ func (p *MySQLMemoryProvider) GetMessages(ctx context.Context, limit int) ([]typ
 	return messages, nil
 }
 
-func (p *MySQLMemoryProvider) LoadMemoryVariables() (map[string]interface{}, error) {
-	ctx := context.Background()
+func (p *MySQLMemoryProvider) LoadMemoryVariables(ctx context.Context) (map[string]interface{}, error) {
 	p.mu.RLock()
 	maxHistoryMessages := p.maxHistoryMessages
 	p.mu.RUnlock()
@@ -191,8 +190,7 @@ func (p *MySQLMemoryProvider) LoadMemoryVariables() (map[string]interface{}, err
 	}, nil
 }
 
-func (p *MySQLMemoryProvider) SaveContext(input, output map[string]interface{}) error {
-	ctx := context.Background()
+func (p *MySQLMemoryProvider) SaveContext(ctx context.Context, input, output map[string]interface{}) error {
 	if inputMsg, ok := input["input"].(string); ok {
 		if err := p.AddMessage(ctx, types.Message{
 			Role:    "user",
@@ -212,25 +210,25 @@ func (p *MySQLMemoryProvider) SaveContext(input, output map[string]interface{}) 
 	return nil
 }
 
-func (p *MySQLMemoryProvider) Clear() error {
-	ctx := context.Background()
+func (p *MySQLMemoryProvider) Clear(ctx context.Context) error {
+	if err := p.initTable(ctx); err != nil {
+		return err
+	}
 	p.mu.RLock()
 	sessionID := p.sessionID
 	tableName := p.tableName
 	p.mu.RUnlock()
-
-	return p.getDB().WithContext(ctx).Table(tableName).
-		Where("session_id = ?", sessionID).
-		Delete(&MySQLMessageDocument{}).Error
+	return p.getDB().WithContext(ctx).Table(tableName).Where("session_id = ?", sessionID).Delete(nil).Error
 }
 
-func (p *MySQLMemoryProvider) GetChatHistory() ([]types.Message, error) {
-	ctx := context.Background()
+func (p *MySQLMemoryProvider) GetChatHistory(ctx context.Context) ([]types.Message, error) {
+	if err := p.initTable(ctx); err != nil {
+		return nil, err
+	}
 	p.mu.RLock()
 	sessionID := p.sessionID
 	tableName := p.tableName
 	p.mu.RUnlock()
-
 	var docs []MySQLMessageDocument
 	err := p.getDB().WithContext(ctx).Table(tableName).
 		Where("session_id = ?", sessionID).
@@ -239,7 +237,6 @@ func (p *MySQLMemoryProvider) GetChatHistory() ([]types.Message, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	messages := make([]types.Message, 0, len(docs))
 	for _, doc := range docs {
 		messages = append(messages, types.Message{
@@ -248,17 +245,15 @@ func (p *MySQLMemoryProvider) GetChatHistory() ([]types.Message, error) {
 			Name:    doc.Name,
 		})
 	}
-
 	return messages, nil
 }
 
-func (p *MySQLMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages int) error {
+func (p *MySQLMemoryProvider) CompressMemory(ctx context.Context, llm types.LLMProvider, maxMessages int) error {
 	if llm == nil {
 		return fmt.Errorf("LLM provider is required for memory compression")
 	}
 
 	p.mu.Lock()
-	ctx := context.Background()
 	sessionID := p.sessionID
 	tableName := p.tableName
 
@@ -322,7 +317,7 @@ Please update the summary to include the new information, keeping it concise but
 %s`, newContent)
 	}
 
-	summaryMsg, err := llm.Chat([]types.Message{
+	summaryMsg, err := llm.Chat(ctx, []types.Message{
 		{
 			Role:    "system",
 			Content: "You are a helpful assistant that summarizes conversation history.",

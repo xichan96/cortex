@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/xichan96/cortex/agent/providers"
@@ -11,7 +12,7 @@ import (
 	"github.com/xichan96/cortex/pkg/middle/sql/sqlite"
 )
 
-func (a *agent) setupMemory(sessionID string) types.MemoryProvider {
+func (a *agent) setupMemory(ctx context.Context, sessionID string) types.MemoryProvider {
 	memCfg := a.config.Memory
 	maxHistory := memCfg.MaxHistoryMessages
 	if maxHistory <= 0 {
@@ -20,13 +21,13 @@ func (a *agent) setupMemory(sessionID string) types.MemoryProvider {
 
 	switch memCfg.Provider {
 	case "redis":
-		return a.initRedisMemory(sessionID, maxHistory)
+		return a.initRedisMemory(ctx, sessionID, maxHistory)
 	case "mongodb":
-		return a.initMongoDBMemory(sessionID, maxHistory)
+		return a.initMongoDBMemory(ctx, sessionID, maxHistory)
 	case "mysql":
-		return a.initMySQLMemory(sessionID, maxHistory)
+		return a.initMySQLMemory(ctx, sessionID, maxHistory)
 	case "sqlite":
-		return a.initSQLiteMemory(sessionID, maxHistory)
+		return a.initSQLiteMemory(ctx, sessionID, maxHistory)
 	case "simple", "langchain", "":
 		return providers.NewSimpleMemoryProviderWithLimit(maxHistory)
 	default:
@@ -34,7 +35,7 @@ func (a *agent) setupMemory(sessionID string) types.MemoryProvider {
 	}
 }
 
-func (a *agent) initRedisMemory(sessionID string, maxHistory int) types.MemoryProvider {
+func (a *agent) initRedisMemory(ctx context.Context, sessionID string, maxHistory int) types.MemoryProvider {
 	cfg := a.config.Memory.Redis
 	redisCfg := &redis.Config{
 		Host:     cfg.Host,
@@ -59,7 +60,7 @@ func (a *agent) initRedisMemory(sessionID string, maxHistory int) types.MemoryPr
 	return provider
 }
 
-func (a *agent) initMongoDBMemory(sessionID string, maxHistory int) types.MemoryProvider {
+func (a *agent) initMongoDBMemory(ctx context.Context, sessionID string, maxHistory int) types.MemoryProvider {
 	cfg := a.config.Memory.MongoDB
 	opts := []mongodb.ClientOptionFunc{
 		mongodb.SetURI(cfg.URI),
@@ -93,7 +94,7 @@ func (a *agent) initMongoDBMemory(sessionID string, maxHistory int) types.Memory
 	return provider
 }
 
-func (a *agent) initMySQLMemory(sessionID string, maxHistory int) types.MemoryProvider {
+func (a *agent) initMySQLMemory(ctx context.Context, sessionID string, maxHistory int) types.MemoryProvider {
 	cfg := a.config.Memory.MySQL
 	mysqlCfg := &mysql.Config{
 		Host:             cfg.Host,
@@ -122,7 +123,7 @@ func (a *agent) initMySQLMemory(sessionID string, maxHistory int) types.MemoryPr
 	return provider
 }
 
-func (a *agent) initSQLiteMemory(sessionID string, maxHistory int) types.MemoryProvider {
+func (a *agent) initSQLiteMemory(ctx context.Context, sessionID string, maxHistory int) types.MemoryProvider {
 	cfg := a.config.Memory.SQLite
 	sqliteCfg := &sqlite.Config{
 		Path:             cfg.Path,

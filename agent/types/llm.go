@@ -1,14 +1,16 @@
 package types
 
+import "context"
+
 // LLMProvider defines LLM provider interface
 type LLMProvider interface {
 	// Basic chat functionality
-	Chat(messages []Message) (Message, error)
-	ChatStream(messages []Message) (<-chan StreamMessage, error)
+	Chat(ctx context.Context, messages []Message) (Message, error)
+	ChatStream(ctx context.Context, messages []Message) (<-chan StreamMessage, error)
 
 	// Tool call support
-	ChatWithTools(messages []Message, tools []Tool) (Message, error)
-	ChatWithToolsStream(messages []Message, tools []Tool) (<-chan StreamMessage, error)
+	ChatWithTools(ctx context.Context, messages []Message, tools []Tool) (Message, error)
+	ChatWithToolsStream(ctx context.Context, messages []Message, tools []Tool) (<-chan StreamMessage, error)
 
 	// Model information
 	GetModelName() string
@@ -86,19 +88,19 @@ type StreamMessage struct {
 // MemoryProvider memory system interface
 type MemoryProvider interface {
 	// Load memory variables
-	LoadMemoryVariables() (map[string]interface{}, error)
+	LoadMemoryVariables(ctx context.Context) (map[string]interface{}, error)
 
 	// Save context
-	SaveContext(input, output map[string]interface{}) error
+	SaveContext(ctx context.Context, input, output map[string]interface{}) error
 
 	// Clear memory
-	Clear() error
+	Clear(ctx context.Context) error
 
 	// Get chat history
-	GetChatHistory() ([]Message, error)
+	GetChatHistory(ctx context.Context) ([]Message, error)
 
 	// Compress memory (optional, for memory compression)
-	CompressMemory(llm LLMProvider, maxMessages int) error
+	CompressMemory(ctx context.Context, llm LLMProvider, maxMessages int) error
 }
 
 // OutputParser output parser interface

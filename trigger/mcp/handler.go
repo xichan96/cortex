@@ -104,7 +104,7 @@ func (h *handler) registerTools(mcp *mcpsrv.MCPServer) {
 				return mcpgo.NewToolResultError("message parameter is required"), nil
 			}
 
-			result, err := h.engine.Execute(message, nil)
+			result, err := h.engine.Execute(ctx, message, nil)
 			if err != nil {
 				var errorMsg string
 				if e, ok := err.(*errors.Error); ok {

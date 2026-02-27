@@ -38,7 +38,7 @@ func (a *LangChainToolAdapter) Call(ctx context.Context, input string) (string, 
 	}
 
 	// Execute tool
-	result, err := a.baseTool.Execute(args)
+	result, err := a.baseTool.Execute(ctx, args)
 	if err != nil {
 		return "", err
 	}

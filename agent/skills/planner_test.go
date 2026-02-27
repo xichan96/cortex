@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"context"
 	"sort"
 	"testing"
 )
@@ -71,7 +72,7 @@ func TestPlanner_Plan(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := planner.Plan(tt.input)
+			plan, err := planner.Plan(context.Background(), tt.input)
 			if err != nil {
 				t.Fatalf("Plan() error = %v", err)
 			}

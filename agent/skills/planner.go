@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"context"
 	"fmt"
 )
 
@@ -15,7 +16,11 @@ func NewPlanner(r *Registry) *Planner {
 }
 
 // Plan creates an execution plan based on the input text
-func (p *Planner) Plan(input string) (*ExecutionPlan, error) {
+func (p *Planner) Plan(ctx context.Context, input string) (*ExecutionPlan, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	// 1. Identify skills based on input
 	matchedSkills := p.registry.MatchAll(input)
 	if len(matchedSkills) == 0 {

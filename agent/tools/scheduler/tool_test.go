@@ -78,18 +78,18 @@ func TestScheduleJobTool_Execute(t *testing.T) {
 	tool := &ScheduleJobTool{scheduler: scheduler}
 
 	// Test case 1: Missing required fields
-	_, err := tool.Execute(map[string]interface{}{})
+	_, err := tool.Execute(context.Background(), map[string]interface{}{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "name is required")
 
-	_, err = tool.Execute(map[string]interface{}{
+	_, err = tool.Execute(context.Background(), map[string]interface{}{
 		"name": "test-job",
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "type is required")
 
 	// Test case 2: Valid input (Oneshot)
-	result, err := tool.Execute(map[string]interface{}{
+	result, err := tool.Execute(context.Background(), map[string]interface{}{
 		"name":      "test-job",
 		"type":      "oneshot",
 		"schedule":  "1h",
@@ -98,12 +98,12 @@ func TestScheduleJobTool_Execute(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
-	
+
 	// Verify job is stored
 	resMap := result.(map[string]interface{})
 	jobID := resMap["job_id"].(string)
 	assert.NotEmpty(t, jobID)
-	
+
 	assert.Len(t, store.jobs, 1)
 	assert.Equal(t, "test-job", store.jobs[jobID].Name)
 }
@@ -119,13 +119,13 @@ func TestListJobsTool_Execute(t *testing.T) {
 	store.jobs["3"] = &xcron.Job{ID: "3", Name: "Job3"}
 
 	// Test case 1: List all (default limit 50)
-	res, err := tool.Execute(map[string]interface{}{})
+	res, err := tool.Execute(context.Background(), map[string]interface{}{})
 	assert.NoError(t, err)
 	jobs := res.([]map[string]interface{})
 	assert.Len(t, jobs, 3)
 
 	// Test case 2: Pagination (Limit 1)
-	res, err = tool.Execute(map[string]interface{}{
+	res, err = tool.Execute(context.Background(), map[string]interface{}{
 		"limit": 1.0, // JSON numbers are float64
 	})
 	assert.NoError(t, err)
@@ -133,7 +133,7 @@ func TestListJobsTool_Execute(t *testing.T) {
 	assert.Len(t, jobs, 1)
 
 	// Test case 3: Pagination (Offset 3)
-	res, err = tool.Execute(map[string]interface{}{
+	res, err = tool.Execute(context.Background(), map[string]interface{}{
 		"offset": 3.0,
 	})
 	assert.NoError(t, err)

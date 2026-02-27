@@ -71,6 +71,10 @@ func (t *TokenBucketLimiter) Allow(ctx context.Context) error {
 	t.refill()
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		tokens := t.tokens.Load()
 		if tokens <= 0 {
 			t.rejected.Add(1)

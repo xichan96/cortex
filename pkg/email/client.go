@@ -2,6 +2,8 @@
 package email
 
 import (
+	"context"
+
 	"gopkg.in/gomail.v2"
 )
 
@@ -21,13 +23,31 @@ type Content struct {
 }
 
 // Do 发送
-func Do(cfg *Config, recvUser []string, content *Content) error {
+func Do(ctx context.Context, cfg *Config, recvUser []string, content *Content) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	m := gomail.NewMessage()
 	m.SetHeader("From", m.FormatAddress(cfg.Address, cfg.Name))
 	m.SetHeader("To", recvUser...)
 	m.SetHeader("Subject", content.Title)
 	m.SetBody(content.Type, content.Message)
+
 	d := gomail.NewDialer(cfg.Host, cfg.Port, cfg.Address, cfg.Pwd)
-	err := d.DialAndSend(m)
-	return err
+
+	errChan := make(chan error, 1)
+	go func() {
+		if err := d.DialAndSend(m); err != nil {
+			errChan <- err
+		}
+		close(errChan)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-errChan:
+		return err
+	}
 }

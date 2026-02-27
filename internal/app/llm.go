@@ -1,28 +1,29 @@
 package app
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/xichan96/cortex/agent/llm"
 	"github.com/xichan96/cortex/agent/types"
 )
 
-func (a *agent) setupLLM() (types.LLMProvider, error) {
+func (a *agent) setupLLM(ctx context.Context) (types.LLMProvider, error) {
 	llmCfg := a.config.LLM
 
 	switch llmCfg.Provider {
 	case "openai":
-		return a.initOpenAI()
+		return a.initOpenAI(ctx)
 	case "deepseek":
-		return a.initDeepSeek()
+		return a.initDeepSeek(ctx)
 	case "volce":
-		return a.initVolce()
+		return a.initVolce(ctx)
 	default:
 		return nil, fmt.Errorf("unsupported LLM provider: %s", llmCfg.Provider)
 	}
 }
 
-func (a *agent) initOpenAI() (types.LLMProvider, error) {
+func (a *agent) initOpenAI(ctx context.Context) (types.LLMProvider, error) {
 	cfg := a.config.LLM.OpenAI
 	opts := llm.OpenAIOptions{
 		APIKey:  cfg.APIKey,
@@ -39,7 +40,7 @@ func (a *agent) initOpenAI() (types.LLMProvider, error) {
 	return provider, nil
 }
 
-func (a *agent) initDeepSeek() (types.LLMProvider, error) {
+func (a *agent) initDeepSeek(ctx context.Context) (types.LLMProvider, error) {
 	cfg := a.config.LLM.DeepSeek
 	opts := llm.DeepSeekOptions{
 		APIKey:  cfg.APIKey,
@@ -54,7 +55,7 @@ func (a *agent) initDeepSeek() (types.LLMProvider, error) {
 	return provider, nil
 }
 
-func (a *agent) initVolce() (types.LLMProvider, error) {
+func (a *agent) initVolce(ctx context.Context) (types.LLMProvider, error) {
 	cfg := a.config.LLM.Volce
 	opts := llm.VolceOptions{
 		APIKey:  cfg.APIKey,

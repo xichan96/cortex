@@ -144,6 +144,7 @@ func main() {
 	agentConfig.RetryAttempts = 3          // Retry attempts
 	agentConfig.EnableToolRetry = true     // Enable tool retry
 
+	ctx := context.Background()
 	// Create agent engine
 	agentEngine := engine.NewAgentEngine(llmProvider, agentConfig)
 
@@ -155,7 +156,7 @@ func main() {
 		fmt.Printf("Redis memory initialization error: %v, falling back to simple memory\n", err)
 		memory = providers.NewSimpleMemoryProvider()
 	}
-	agentEngine.SetMemory(memory)
+	agentEngine.SetMemory(ctx, memory)
 
 	// Initialize MongoDB memory (commented out)
 	// sessionID := fmt.Sprintf("session_%d", time.Now().Unix())
@@ -164,13 +165,13 @@ func main() {
 	// 	fmt.Printf("MongoDB memory initialization error: %v, falling back to simple memory\n", err)
 	// 	memory = providers.NewSimpleMemoryProvider()
 	// }
-	// agentEngine.SetMemory(memory)
+	// agentEngine.SetMemory(ctx, memory)
 
 	// Get MCP tools and add to agent engine
 	mcpTools := mcpClient.GetTools()
 	if len(mcpTools) > 0 {
 		fmt.Printf("Found %d AI training tools, adding to agent engine...\n", len(mcpTools))
-		agentEngine.AddTools(mcpTools)
+		agentEngine.AddTools(ctx, mcpTools)
 
 		// Show available tools
 		fmt.Println("\n--- Available AI training tools ---")
@@ -191,7 +192,7 @@ func main() {
 	fmt.Printf("User: %s\n", testQuery)
 	fmt.Printf("Assistant: ")
 
-	stream, err := agentEngine.ExecuteStream(testQuery, nil)
+	stream, err := agentEngine.ExecuteStream(ctx, testQuery, nil)
 	if err != nil {
 		log.Printf("Agent streaming execution error: %v", err)
 		return

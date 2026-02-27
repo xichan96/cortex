@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"context"
 	"math"
 	"testing"
 
@@ -84,7 +85,7 @@ func TestMathTool_Execute_BasicAddition(t *testing.T) {
 		"expression": "2+3",
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -106,7 +107,7 @@ func TestMathTool_Execute_BasicSubtraction(t *testing.T) {
 		"expression": "10-4",
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -124,7 +125,7 @@ func TestMathTool_Execute_BasicMultiplication(t *testing.T) {
 		"expression": "3*4",
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -142,7 +143,7 @@ func TestMathTool_Execute_BasicDivision(t *testing.T) {
 		"expression": "15/3",
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -160,7 +161,7 @@ func TestMathTool_Execute_OperatorPrecedence(t *testing.T) {
 		"expression": "2+3*4",
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -179,7 +180,7 @@ func TestMathTool_Execute_Parentheses(t *testing.T) {
 		"expression": "(2+3)*4",
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -197,7 +198,7 @@ func TestMathTool_Execute_NegativeNumbers(t *testing.T) {
 		"expression": "-5+3",
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -215,7 +216,7 @@ func TestMathTool_Execute_Power(t *testing.T) {
 		"expression": "2^3",
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -233,7 +234,7 @@ func TestMathTool_Execute_Sqrt(t *testing.T) {
 		"expression": "sqrt(16)",
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -251,7 +252,7 @@ func TestMathTool_Execute_Modulo(t *testing.T) {
 		"expression": "17%5",
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -269,7 +270,7 @@ func TestMathTool_Execute_Factorial(t *testing.T) {
 		"expression": "5!",
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -284,11 +285,11 @@ func TestMathTool_Execute_SinRadians(t *testing.T) {
 	tool := NewMathTool()
 
 	input := map[string]interface{}{
-		"expression": "sin(0)",
+		"expression":  "sin(0)",
 		"use_degrees": false,
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -304,11 +305,11 @@ func TestMathTool_Execute_SinDegrees(t *testing.T) {
 	tool := NewMathTool()
 
 	input := map[string]interface{}{
-		"expression": "sin(90)",
+		"expression":  "sin(90)",
 		"use_degrees": true,
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -324,11 +325,11 @@ func TestMathTool_Execute_CosRadians(t *testing.T) {
 	tool := NewMathTool()
 
 	input := map[string]interface{}{
-		"expression": "cos(0)",
+		"expression":  "cos(0)",
 		"use_degrees": false,
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -344,11 +345,11 @@ func TestMathTool_Execute_TanRadians(t *testing.T) {
 	tool := NewMathTool()
 
 	input := map[string]interface{}{
-		"expression": "tan(0)",
+		"expression":  "tan(0)",
 		"use_degrees": false,
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -367,7 +368,7 @@ func TestMathTool_Execute_ComplexExpression(t *testing.T) {
 		"expression": "(2+3)*4-10/2",
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -386,7 +387,7 @@ func TestMathTool_Execute_DecimalNumbers(t *testing.T) {
 		"expression": "3.5+2.5",
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -404,7 +405,7 @@ func TestMathTool_Execute_InvalidExpression(t *testing.T) {
 		"expression": "2**3",
 	}
 
-	_, err := tool.Execute(input)
+	_, err := tool.Execute(context.Background(), input)
 	if err == nil {
 		t.Fatal("Execute should return error for invalid expression")
 	}
@@ -426,7 +427,7 @@ func TestMathTool_Execute_DivisionByZero(t *testing.T) {
 		"expression": "10/0",
 	}
 
-	_, err := tool.Execute(input)
+	_, err := tool.Execute(context.Background(), input)
 	if err == nil {
 		t.Fatal("Execute should return error for division by zero")
 	}
@@ -448,7 +449,7 @@ func TestMathTool_Execute_ModuloByZero(t *testing.T) {
 		"expression": "10%0",
 	}
 
-	_, err := tool.Execute(input)
+	_, err := tool.Execute(context.Background(), input)
 	if err == nil {
 		t.Fatal("Execute should return error for modulo by zero")
 	}
@@ -470,7 +471,7 @@ func TestMathTool_Execute_NegativeSqrt(t *testing.T) {
 		"expression": "sqrt(-1)",
 	}
 
-	_, err := tool.Execute(input)
+	_, err := tool.Execute(context.Background(), input)
 	if err == nil {
 		t.Fatal("Execute should return error for square root of negative number")
 	}
@@ -492,7 +493,7 @@ func TestMathTool_Execute_NegativeFactorial(t *testing.T) {
 		"expression": "(-5)!",
 	}
 
-	_, err := tool.Execute(input)
+	_, err := tool.Execute(context.Background(), input)
 	if err == nil {
 		t.Fatal("Execute should return error for factorial of negative number")
 	}
@@ -514,7 +515,7 @@ func TestMathTool_Execute_NonIntegerFactorial(t *testing.T) {
 		"expression": "5.5!",
 	}
 
-	_, err := tool.Execute(input)
+	_, err := tool.Execute(context.Background(), input)
 	if err == nil {
 		t.Fatal("Execute should return error for factorial of non-integer")
 	}
@@ -536,7 +537,7 @@ func TestMathTool_Execute_EmptyExpression(t *testing.T) {
 		"expression": "",
 	}
 
-	_, err := tool.Execute(input)
+	_, err := tool.Execute(context.Background(), input)
 	if err == nil {
 		t.Fatal("Execute should return error for empty expression")
 	}
@@ -558,7 +559,7 @@ func TestMathTool_Execute_InvalidParameterType(t *testing.T) {
 		"expression": 123,
 	}
 
-	_, err := tool.Execute(input)
+	_, err := tool.Execute(context.Background(), input)
 	if err == nil {
 		t.Fatal("Execute should return error for invalid parameter type")
 	}
@@ -580,7 +581,7 @@ func TestMathTool_Execute_MissingParenthesis(t *testing.T) {
 		"expression": "(2+3",
 	}
 
-	_, err := tool.Execute(input)
+	_, err := tool.Execute(context.Background(), input)
 	if err == nil {
 		t.Fatal("Execute should return error for missing closing parenthesis")
 	}
@@ -602,7 +603,7 @@ func TestMathTool_Execute_UnknownFunction(t *testing.T) {
 		"expression": "unknown(5)",
 	}
 
-	_, err := tool.Execute(input)
+	_, err := tool.Execute(context.Background(), input)
 	if err == nil {
 		t.Fatal("Execute should return error for unknown function")
 	}
@@ -624,7 +625,7 @@ func TestMathTool_Execute_Logarithm(t *testing.T) {
 		"expression": "log(100)",
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -642,7 +643,7 @@ func TestMathTool_Execute_AbsoluteValue(t *testing.T) {
 		"expression": "abs(-5)",
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -660,7 +661,7 @@ func TestMathTool_Execute_NestedExpressions(t *testing.T) {
 		"expression": "sqrt(2^2+3^2)",
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -671,4 +672,3 @@ func TestMathTool_Execute_NestedExpressions(t *testing.T) {
 		t.Errorf("Expected result %f, got %f", expected, resultMap["result"])
 	}
 }
-

@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strconv"
@@ -44,7 +45,11 @@ func (t *MathTool) Schema() map[string]interface{} {
 	}
 }
 
-func (t *MathTool) Execute(input map[string]interface{}) (interface{}, error) {
+func (t *MathTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	expression, ok := input["expression"].(string)
 	if !ok {
 		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("invalid 'expression' parameter: must be a string"))

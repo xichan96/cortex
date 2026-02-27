@@ -83,15 +83,22 @@ func (p *LangChainLLMProvider) handle429Retry(err error, retryCount, maxRetries 
 }
 
 // Chat basic chat functionality
-func (p *LangChainLLMProvider) Chat(messages []types.Message) (types.Message, error) {
+func (p *LangChainLLMProvider) Chat(ctx context.Context, messages []types.Message) (types.Message, error) {
 	// Convert message format
 	langChainMessages := p.convertToLangChainMessages(messages)
 
 	retryCount := 0
 
 	for {
+		// Check context cancellation
+		select {
+		case <-ctx.Done():
+			return types.Message{}, ctx.Err()
+		default:
+		}
+
 		// Call LLM
-		response, err := p.model.GenerateContent(context.Background(), langChainMessages)
+		response, err := p.model.GenerateContent(ctx, langChainMessages)
 		if err != nil {
 			// Handle 429 retry
 			if shouldRetry, waitTime := p.handle429Retry(err, retryCount, p.maxRetries); shouldRetry {
@@ -113,7 +120,7 @@ func (p *LangChainLLMProvider) Chat(messages []types.Message) (types.Message, er
 }
 
 // ChatStream streaming chat functionality
-func (p *LangChainLLMProvider) ChatStream(messages []types.Message) (<-chan types.StreamMessage, error) {
+func (p *LangChainLLMProvider) ChatStream(ctx context.Context, messages []types.Message) (<-chan types.StreamMessage, error) {
 	// Convert message format
 	langChainMessages := p.convertToLangChainMessages(messages)
 
@@ -125,6 +132,13 @@ func (p *LangChainLLMProvider) ChatStream(messages []types.Message) (<-chan type
 		retryCount := 0
 
 		for {
+			// Check context cancellation
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
 			if retryCount > 0 {
 				outputChan <- types.StreamMessage{
 					Type:    "retry",
@@ -133,12 +147,16 @@ func (p *LangChainLLMProvider) ChatStream(messages []types.Message) (<-chan type
 			}
 
 			// Streaming call
-			_, err := p.model.GenerateContent(context.Background(), langChainMessages, llms.WithStreamingFunc(func(ctx context.Context, chunk []byte) error {
-				outputChan <- types.StreamMessage{
+			_, err := p.model.GenerateContent(ctx, langChainMessages, llms.WithStreamingFunc(func(c context.Context, chunk []byte) error {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case outputChan <- types.StreamMessage{
 					Type:    "chunk",
 					Content: string(chunk),
+				}:
+					return nil
 				}
-				return nil
 			}))
 
 			if err != nil {
@@ -171,7 +189,7 @@ func (p *LangChainLLMProvider) ChatStream(messages []types.Message) (<-chan type
 }
 
 // ChatWithTools chat with tools functionality
-func (p *LangChainLLMProvider) ChatWithTools(messages []types.Message, tools []types.Tool) (types.Message, error) {
+func (p *LangChainLLMProvider) ChatWithTools(ctx context.Context, messages []types.Message, tools []types.Tool) (types.Message, error) {
 	// Convert message format
 	langChainMessages := p.convertToLangChainMessages(messages)
 
@@ -181,8 +199,15 @@ func (p *LangChainLLMProvider) ChatWithTools(messages []types.Message, tools []t
 	retryCount := 0
 
 	for {
+		// Check context cancellation
+		select {
+		case <-ctx.Done():
+			return types.Message{}, ctx.Err()
+		default:
+		}
+
 		// Call LLM
-		response, err := p.model.GenerateContent(context.Background(), langChainMessages, llms.WithTools(langChainTools))
+		response, err := p.model.GenerateContent(ctx, langChainMessages, llms.WithTools(langChainTools))
 		if err != nil {
 			// Handle 429 retry
 			if shouldRetry, waitTime := p.handle429Retry(err, retryCount, p.maxRetries); shouldRetry {
@@ -205,7 +230,7 @@ func (p *LangChainLLMProvider) ChatWithTools(messages []types.Message, tools []t
 }
 
 // ChatWithToolsStream streaming chat with tools functionality
-func (p *LangChainLLMProvider) ChatWithToolsStream(messages []types.Message, tools []types.Tool) (<-chan types.StreamMessage, error) {
+func (p *LangChainLLMProvider) ChatWithToolsStream(ctx context.Context, messages []types.Message, tools []types.Tool) (<-chan types.StreamMessage, error) {
 	// Convert message format
 	langChainMessages := p.convertToLangChainMessages(messages)
 
@@ -220,6 +245,13 @@ func (p *LangChainLLMProvider) ChatWithToolsStream(messages []types.Message, too
 		retryCount := 0
 
 		for {
+			// Check context cancellation
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
 			if retryCount > 0 {
 				outputChan <- types.StreamMessage{
 					Type:    "retry",
@@ -234,18 +266,28 @@ func (p *LangChainLLMProvider) ChatWithToolsStream(messages []types.Message, too
 			// Streaming call
 			// Note: We collect all content chunks and filter tool calls from the full response
 			// This is more reliable than trying to detect tool calls in streaming chunks
-			response, err := p.model.GenerateContent(context.Background(), langChainMessages,
+			response, err := p.model.GenerateContent(ctx, langChainMessages,
 				llms.WithTools(langChainTools),
-				llms.WithStreamingFunc(func(ctx context.Context, chunk []byte) error {
+				llms.WithStreamingFunc(func(c context.Context, chunk []byte) error {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					default:
+					}
+
 					chunkStr := string(chunk)
 					contentBuffer.WriteString(chunkStr)
 
 					// Send content chunks immediately for better user experience
 					// Tool calls will be filtered from the full response later
 					if chunkStr != "" {
-						outputChan <- types.StreamMessage{
+						select {
+						case <-ctx.Done():
+							return ctx.Err()
+						case outputChan <- types.StreamMessage{
 							Type:    "chunk",
 							Content: chunkStr,
+						}:
 						}
 					}
 
