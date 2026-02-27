@@ -60,6 +60,6 @@ func GetPooledHTTPClient() *http.Client {
 	transport := GetGlobalTransport()
 	return &http.Client{
 		Transport: transport,
-		Timeout:   30 * time.Second,
+		Timeout:   5 * time.Minute,
 	}
 }
