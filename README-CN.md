@@ -278,6 +278,8 @@ agentEngine.SetMemory(context.Background(), memory)
 - [Basic Example](examples/basic): 基础用法演示。
 - [Chat Web](examples/chat-web): 基于 Gin + React 的完整聊天应用。
 - [MCP Server](examples/mcp-server): 将 Agent 暴露为 MCP 服务。
+- [Agent Skills](examples/skills): 动态加载和使用 Agent 技能。
+- [Task Scheduling](examples/xcron): 使用 xcron 进行任务调度。
 
 ## 贡献
 

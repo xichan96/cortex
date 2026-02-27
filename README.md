@@ -278,6 +278,8 @@ agentEngine.SetMemory(context.Background(), memory)
 - [Basic Example](examples/basic): Fundamental usage patterns.
 - [Chat Web](examples/chat-web): Full-stack chat application (Gin + React).
 - [MCP Server](examples/mcp-server): Expose Agent as an MCP service.
+- [Agent Skills](examples/skills): Dynamic skill loading and usage.
+- [Task Scheduling](examples/xcron): Task scheduling with xcron.
 
 ## Contributing
 
