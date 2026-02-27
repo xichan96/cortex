@@ -52,13 +52,13 @@ func WithStateLess(stateLess bool) StreamableHTTPOption {
 }
 
 // WithSessionIdManager sets a custom session id generator for the server.
-// By default, the server uses InsecureStatefulSessionIdManager (UUID-based; insecure).
+// By default, the server uses StatelessGeneratingSessionIdManager (generates IDs but no local validation).
 // Note: Options are applied in order; the last one wins. If combined with
 // WithStateLess or WithSessionIdManagerResolver, whichever is applied last takes effect.
 func WithSessionIdManager(manager SessionIdManager) StreamableHTTPOption {
 	return func(s *StreamableHTTPServer) {
 		if manager == nil {
-			s.sessionIdManagerResolver = NewDefaultSessionIdManagerResolver(&InsecureStatefulSessionIdManager{})
+			s.sessionIdManagerResolver = NewDefaultSessionIdManagerResolver(&StatelessSessionIdManager{})
 			return
 		}
 		s.sessionIdManagerResolver = NewDefaultSessionIdManagerResolver(manager)
@@ -72,10 +72,20 @@ func WithSessionIdManager(manager SessionIdManager) StreamableHTTPOption {
 func WithSessionIdManagerResolver(resolver SessionIdManagerResolver) StreamableHTTPOption {
 	return func(s *StreamableHTTPServer) {
 		if resolver == nil {
-			s.sessionIdManagerResolver = NewDefaultSessionIdManagerResolver(&InsecureStatefulSessionIdManager{})
+			s.sessionIdManagerResolver = NewDefaultSessionIdManagerResolver(&StatelessSessionIdManager{})
 			return
 		}
 		s.sessionIdManagerResolver = resolver
+	}
+}
+
+// WithStateful enables stateful session management using InsecureStatefulSessionIdManager.
+// This requires sticky sessions in multi-instance deployments.
+func WithStateful(stateful bool) StreamableHTTPOption {
+	return func(s *StreamableHTTPServer) {
+		if stateful {
+			s.sessionIdManagerResolver = NewDefaultSessionIdManagerResolver(&InsecureStatefulSessionIdManager{})
+		}
 	}
 }
 
@@ -134,6 +144,19 @@ func WithTLSCert(certFile, keyFile string) StreamableHTTPOption {
 	}
 }
 
+// WithSessionIdleTTL sets the idle TTL for per-session transport state.
+// When enabled, a background sweeper periodically removes entries from
+// per-session stores (tools, resources, resource templates, log levels,
+// request IDs) for sessions that have been idle longer than the given
+// duration. This prevents memory leaks when clients disconnect without
+// sending a DELETE request. A zero or negative value disables the sweeper
+// (the default).
+func WithSessionIdleTTL(ttl time.Duration) StreamableHTTPOption {
+	return func(s *StreamableHTTPServer) {
+		s.sessionIdleTTL = ttl
+	}
+}
+
 // StreamableHTTPServer implements a Streamable-http based MCP server.
 // It communicates with clients over HTTP protocol, supporting both direct HTTP responses, and SSE streams.
 // https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http
@@ -171,6 +194,7 @@ type StreamableHTTPServer struct {
 	endpointPath             string
 	contextFunc              HTTPContextFunc
 	sessionIdManagerResolver SessionIdManagerResolver
+	sessionIdManager         SessionIdManager // for non-request contexts (sweeper)
 	listenHeartbeatInterval  time.Duration
 	logger                   util.Logger
 	sessionLogLevels         *sessionLogLevelsStore
@@ -178,6 +202,10 @@ type StreamableHTTPServer struct {
 
 	tlsCertFile string
 	tlsKeyFile  string
+
+	sessionIdleTTL    time.Duration
+	sessionLastActive sync.Map // sessionID → *atomic.Int64 (unix nanos)
+	sweeperCancel     context.CancelFunc
 }
 
 // NewStreamableHTTPServer creates a new streamable-http server instance
@@ -187,7 +215,7 @@ func NewStreamableHTTPServer(server *MCPServer, opts ...StreamableHTTPOption) *S
 		sessionTools:             newSessionToolsStore(),
 		sessionLogLevels:         newSessionLogLevelsStore(),
 		endpointPath:             "/mcp",
-		sessionIdManagerResolver: NewDefaultSessionIdManagerResolver(&InsecureStatefulSessionIdManager{}),
+		sessionIdManagerResolver: NewDefaultSessionIdManagerResolver(&StatelessGeneratingSessionIdManager{}),
 		logger:                   util.DefaultLogger(),
 		sessionResources:         newSessionResourcesStore(),
 		sessionResourceTemplates: newSessionResourceTemplatesStore(),
@@ -197,6 +225,20 @@ func NewStreamableHTTPServer(server *MCPServer, opts ...StreamableHTTPOption) *S
 	for _, opt := range opts {
 		opt(s)
 	}
+
+	// Cache the session ID manager for use in non-request contexts (sweeper).
+	// DefaultSessionIdManagerResolver always returns the same manager,
+	// so resolving it once at startup is semantically identical.
+	if r, ok := s.sessionIdManagerResolver.(*DefaultSessionIdManagerResolver); ok {
+		s.sessionIdManager = r.manager
+	}
+
+	if s.sessionIdleTTL > 0 {
+		ctx, cancel := context.WithCancel(context.Background())
+		s.sweeperCancel = cancel
+		s.startSessionSweeper(ctx)
+	}
+
 	return s
 }
 
@@ -256,6 +298,9 @@ func (s *StreamableHTTPServer) Start(addr string) error {
 // Shutdown gracefully stops the server, closing all active sessions
 // and shutting down the HTTP server.
 func (s *StreamableHTTPServer) Shutdown(ctx context.Context) error {
+	if s.sweeperCancel != nil {
+		s.sweeperCancel()
+	}
 
 	// shutdown the server if needed (may use as a http.Handler)
 	s.mu.RLock()
@@ -335,7 +380,7 @@ func (s *StreamableHTTPServer) handlePost(w http.ResponseWriter, r *http.Request
 		sessionID = r.Header.Get(HeaderKeySessionID)
 		isTerminated, err := sessionIdManager.Validate(sessionID)
 		if err != nil {
-			http.Error(w, "Invalid session ID", http.StatusBadRequest)
+			http.Error(w, "Invalid session ID", http.StatusNotFound)
 			return
 		}
 		if isTerminated {
@@ -343,6 +388,8 @@ func (s *StreamableHTTPServer) handlePost(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
+
+	s.touchSession(sessionID)
 
 	// For non-initialize requests, try to reuse existing registered session
 	var session *streamableHttpSession
@@ -433,9 +480,32 @@ func (s *StreamableHTTPServer) handlePost(w http.ResponseWriter, r *http.Request
 
 	// Write response
 	mu.Lock()
-	defer mu.Unlock()
-	// close the done chan before unlock
-	defer close(done)
+
+drainLoop:
+	for {
+		select {
+		case nt := <-session.notificationChannel:
+			if !upgradedHeader {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.Header().Set("Connection", "keep-alive")
+				w.Header().Set("Cache-Control", "no-cache")
+				w.WriteHeader(http.StatusOK)
+				upgradedHeader = true
+			}
+			if err := writeSSEEvent(w, nt); err != nil {
+				s.logger.Errorf("Failed to write SSE event during drain: %v", err)
+			}
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+		default:
+			break drainLoop
+		}
+	}
+
+	// close the done chan before unlocking to signal the goroutine to stop
+	close(done)
+	mu.Unlock()
 	if ctx.Err() != nil {
 		return
 	}
@@ -489,13 +559,21 @@ func (s *StreamableHTTPServer) handleGet(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	sessionID := r.Header.Get(HeaderKeySessionID)
-	// the specification didn't say we should validate the session id
+	// Check streaming support in the responseWriter. This can happen if the responseWriter has been overridden.
+	// If not supported, return 405 early.
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusMethodNotAllowed)
+		return
+	}
 
+	sessionID := r.Header.Get(HeaderKeySessionID)
+	// The MCP specification doesn't require validating session ID for GET requests.
+	// If no session ID is provided by the client, generate one using the configured SessionIdManager
+	// so that custom session id generators are honored consistently across POST/GET flows.
 	if sessionID == "" {
-		// It's a stateless server,
-		// but the MCP server requires a unique ID for registering, so we use a random one
-		sessionID = uuid.New().String()
+		sessionIdManager := s.sessionIdManagerResolver.ResolveSessionIdManager(r)
+		sessionID = sessionIdManager.Generate()
 	}
 
 	// Get or create session atomically to prevent TOCTOU races
@@ -516,17 +594,14 @@ func (s *StreamableHTTPServer) handleGet(w http.ResponseWriter, r *http.Request)
 		defer s.activeSessions.Delete(sessionID)
 	}
 
+	s.touchSession(sessionID)
+
 	// Set the client context before handling the message
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
-		return
-	}
 	flusher.Flush()
 
 	// Start notification handler for this session
@@ -635,6 +710,7 @@ func (s *StreamableHTTPServer) handleGet(w http.ResponseWriter, r *http.Request)
 				return
 			}
 			flusher.Flush()
+			s.touchSession(sessionID)
 		case <-r.Context().Done():
 			return
 		}
@@ -655,13 +731,7 @@ func (s *StreamableHTTPServer) handleDelete(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// remove the session relateddata from the sessionToolsStore
-	s.sessionTools.delete(sessionID)
-	s.sessionResources.delete(sessionID)
-	s.sessionResourceTemplates.delete(sessionID)
-	s.sessionLogLevels.delete(sessionID)
-	// remove current session's requstID information
-	s.sessionRequestIDs.Delete(sessionID)
+	s.cleanupSessionState(r.Context(), sessionID)
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -696,7 +766,7 @@ func (s *StreamableHTTPServer) handleSamplingResponse(w http.ResponseWriter, r *
 	sessionIdManager := s.sessionIdManagerResolver.ResolveSessionIdManager(r)
 	isTerminated, err := sessionIdManager.Validate(sessionID)
 	if err != nil {
-		http.Error(w, "Invalid session ID", http.StatusBadRequest)
+		http.Error(w, "Invalid session ID", http.StatusNotFound)
 		return err
 	}
 	if isTerminated {
@@ -803,6 +873,92 @@ func (s *StreamableHTTPServer) nextRequestID(sessionID string) int64 {
 	actual, _ := s.sessionRequestIDs.LoadOrStore(sessionID, new(atomic.Int64))
 	counter := actual.(*atomic.Int64)
 	return counter.Add(1)
+}
+
+// touchSession records the current time as the last activity for the given session.
+// It is a no-op when the sweeper is disabled (sessionIdleTTL <= 0) or sessionID is empty.
+func (s *StreamableHTTPServer) touchSession(sessionID string) {
+	if sessionID == "" || s.sessionIdleTTL <= 0 {
+		return
+	}
+	now := time.Now().UnixNano()
+	actual, _ := s.sessionLastActive.LoadOrStore(sessionID, new(atomic.Int64))
+	actual.(*atomic.Int64).Store(now)
+}
+
+// cleanupSessionState removes all per-session transport state for the given session ID.
+func (s *StreamableHTTPServer) cleanupSessionState(ctx context.Context, sessionID string) {
+	// Unregister first to stop notification routing before deleting data.
+	s.server.UnregisterSession(ctx, sessionID)
+	s.activeSessions.Delete(sessionID)
+	s.sessionTools.delete(sessionID)
+	s.sessionResources.delete(sessionID)
+	s.sessionResourceTemplates.delete(sessionID)
+	s.sessionLogLevels.delete(sessionID)
+	s.sessionRequestIDs.Delete(sessionID)
+	s.sessionLastActive.Delete(sessionID)
+}
+
+// startSessionSweeper launches a background goroutine that periodically removes
+// transport state for sessions that have been idle longer than sessionIdleTTL.
+func (s *StreamableHTTPServer) startSessionSweeper(ctx context.Context) {
+	interval := max(s.sessionIdleTTL/2, time.Second)
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.sweepExpiredSessions()
+			}
+		}
+	}()
+}
+
+// sweepExpiredSessions iterates all tracked sessions and cleans up those
+// whose last activity exceeds sessionIdleTTL.
+func (s *StreamableHTTPServer) sweepExpiredSessions() {
+	now := time.Now().UnixNano()
+	ttlNanos := s.sessionIdleTTL.Nanoseconds()
+
+	s.sessionLastActive.Range(func(key, value any) bool {
+		sessionID, ok := key.(string)
+		if !ok {
+			s.sessionLastActive.Delete(key)
+			return true
+		}
+		lastActive, ok := value.(*atomic.Int64)
+		if !ok {
+			s.sessionLastActive.Delete(key)
+			return true
+		}
+
+		capturedLastActive := lastActive.Load()
+		if now-capturedLastActive < ttlNanos {
+			return true
+		}
+
+		// Re-check: if lastActive changed since we read it, the session
+		// was touched concurrently — skip it. A small TOCTOU window
+		// remains between this check and cleanup, but it is acceptable
+		// for a distributed best-effort sweeper.
+		if lastActive.Load() != capturedLastActive {
+			return true
+		}
+
+		s.logger.Infof("Sweeping expired session: %s", sessionID)
+		mgr := s.sessionIdManager
+		if mgr == nil {
+			mgr = s.sessionIdManagerResolver.ResolveSessionIdManager(nil)
+		}
+		_, _ = mgr.Terminate(sessionID)
+		s.cleanupSessionState(context.Background(), sessionID)
+		return true
+	})
 }
 
 // --- session ---
@@ -976,6 +1132,8 @@ type streamableHttpSession struct {
 	resourceTemplates   *sessionResourceTemplatesStore
 	upgradeToSSE        atomic.Bool
 	logLevels           *sessionLogLevelsStore
+	clientInfo          atomic.Value // stores session-specific client info
+	clientCapabilities  atomic.Value // stores session-specific client capabilities
 
 	// Sampling support for bidirectional communication
 	samplingRequestChan    chan samplingRequestItem    // server -> client sampling requests
@@ -1053,11 +1211,38 @@ func (s *streamableHttpSession) SetSessionResourceTemplates(templates map[string
 	s.resourceTemplates.set(s.sessionID, templates)
 }
 
+func (s *streamableHttpSession) GetClientInfo() mcp.Implementation {
+	if value := s.clientInfo.Load(); value != nil {
+		if clientInfo, ok := value.(mcp.Implementation); ok {
+			return clientInfo
+		}
+	}
+	return mcp.Implementation{}
+}
+
+func (s *streamableHttpSession) SetClientInfo(clientInfo mcp.Implementation) {
+	s.clientInfo.Store(clientInfo)
+}
+
+func (s *streamableHttpSession) GetClientCapabilities() mcp.ClientCapabilities {
+	if value := s.clientCapabilities.Load(); value != nil {
+		if clientCapabilities, ok := value.(mcp.ClientCapabilities); ok {
+			return clientCapabilities
+		}
+	}
+	return mcp.ClientCapabilities{}
+}
+
+func (s *streamableHttpSession) SetClientCapabilities(clientCapabilities mcp.ClientCapabilities) {
+	s.clientCapabilities.Store(clientCapabilities)
+}
+
 var (
 	_ SessionWithTools             = (*streamableHttpSession)(nil)
 	_ SessionWithResources         = (*streamableHttpSession)(nil)
 	_ SessionWithResourceTemplates = (*streamableHttpSession)(nil)
 	_ SessionWithLogging           = (*streamableHttpSession)(nil)
+	_ SessionWithClientInfo        = (*streamableHttpSession)(nil)
 )
 
 func (s *streamableHttpSession) UpgradeToSSEWhenReceiveNotification() {
@@ -1219,7 +1404,9 @@ var _ SessionWithRoots = (*streamableHttpSession)(nil)
 
 // --- session id manager ---
 
-// SessionIdManagerResolver resolves a SessionIdManager based on the HTTP request
+// SessionIdManagerResolver resolves a SessionIdManager based on the HTTP request.
+// Implementations must handle a nil r, which may be passed from non-request
+// contexts such as the session idle TTL sweeper.
 type SessionIdManagerResolver interface {
 	ResolveSessionIdManager(r *http.Request) SessionIdManager
 }
@@ -1244,7 +1431,7 @@ type DefaultSessionIdManagerResolver struct {
 // NewDefaultSessionIdManagerResolver creates a new DefaultSessionIdManagerResolver with the given SessionIdManager
 func NewDefaultSessionIdManagerResolver(manager SessionIdManager) *DefaultSessionIdManagerResolver {
 	if manager == nil {
-		manager = &InsecureStatefulSessionIdManager{}
+		manager = &StatelessSessionIdManager{}
 	}
 	return &DefaultSessionIdManagerResolver{manager: manager}
 }
@@ -1267,6 +1454,30 @@ func (s *StatelessSessionIdManager) Validate(sessionID string) (isTerminated boo
 }
 
 func (s *StatelessSessionIdManager) Terminate(sessionID string) (isNotAllowed bool, err error) {
+	return false, nil
+}
+
+// StatelessGeneratingSessionIdManager generates session IDs but doesn't validate them locally.
+// This allows session IDs to be generated for clients while working across multiple instances.
+type StatelessGeneratingSessionIdManager struct{}
+
+func (s *StatelessGeneratingSessionIdManager) Generate() string {
+	return idPrefix + uuid.New().String()
+}
+
+func (s *StatelessGeneratingSessionIdManager) Validate(sessionID string) (isTerminated bool, err error) {
+	// Only validate format, not existence - allows cross-instance operation
+	if !strings.HasPrefix(sessionID, idPrefix) {
+		return false, fmt.Errorf("invalid session id: %s", sessionID)
+	}
+	if _, err := uuid.Parse(sessionID[len(idPrefix):]); err != nil {
+		return false, fmt.Errorf("invalid session id: %s", sessionID)
+	}
+	return false, nil
+}
+
+func (s *StatelessGeneratingSessionIdManager) Terminate(sessionID string) (isNotAllowed bool, err error) {
+	// No-op termination since we don't track sessions
 	return false, nil
 }
 
