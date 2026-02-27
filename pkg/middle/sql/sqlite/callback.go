@@ -3,7 +3,6 @@ package sqlite
 import (
 	"errors"
 
-	"github.com/mattn/go-sqlite3"
 	"gorm.io/gorm"
 
 	cerrors "github.com/xichan96/cortex/pkg/errors"
@@ -38,16 +37,6 @@ func WrapErr(err error) error {
 		return cerrors.EC_SQL_DUPLICATE_KEY
 	}
 	return cerrors.WrapWithSkip(4, err)
-}
-
-func IsDuplicateKeyError(err error) bool {
-	var sqliteErr sqlite3.Error
-	if errors.As(err, &sqliteErr) {
-		if sqliteErr.Code == sqlite3.ErrConstraint && (sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique || sqliteErr.ExtendedCode == sqlite3.ErrConstraintPrimaryKey) {
-			return true
-		}
-	}
-	return false
 }
 
 func IsNoFoundError(err error) bool {
