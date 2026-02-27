@@ -83,6 +83,7 @@ go get github.com/xichan96/cortex
 package main
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -107,7 +108,7 @@ func main() {
 	agentEngine := engine.NewAgentEngine(llmProvider, agentConfig)
 
 	// 4. 执行任务
-	result, err := agentEngine.Execute("今天纽约的天气怎么样？", nil)
+	result, err := agentEngine.Execute(context.Background(), "今天纽约的天气怎么样？", nil)
 	if err != nil {
 		fmt.Printf("执行失败: %v\n", err)
 		return
@@ -181,7 +182,7 @@ type MyTool struct{}
 
 func (t *MyTool) Name() string { return "my_tool" }
 func (t *MyTool) Description() string { return "这是一个自定义工具" }
-func (t *MyTool) Execute(input map[string]interface{}) (interface{}, error) {
+func (t *MyTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
     // 业务逻辑...
     return "执行结果", nil
 }
@@ -269,7 +270,7 @@ Cortex 引入了先进的**混合记忆架构 (Hybrid Memory Architecture)**，�
 // 示例：使用 Redis 作为记忆存储
 redisClient := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
 memory := providers.NewRedisMemoryProvider(redisClient, "session-id")
-agentEngine.SetMemory(memory)
+agentEngine.SetMemory(context.Background(), memory)
 ```
 
 ## 示例
