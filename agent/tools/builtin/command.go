@@ -42,7 +42,7 @@ func (t *CommandTool) Schema() map[string]interface{} {
 	}
 }
 
-func (t *CommandTool) Execute(input map[string]interface{}) (interface{}, error) {
+func (t *CommandTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	command, ok := input["command"].(string)
 	if !ok {
 		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("invalid 'command' parameter: must be a string"))
@@ -58,7 +58,7 @@ func (t *CommandTool) Execute(input map[string]interface{}) (interface{}, error)
 		timeout = time.Duration(timeoutVal) * time.Second
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	parts := strings.Fields(command)
@@ -66,7 +66,7 @@ func (t *CommandTool) Execute(input map[string]interface{}) (interface{}, error)
 		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("invalid 'command' parameter: command cannot be empty"))
 	}
 
-	cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
+	cmd := exec.CommandContext(execCtx, parts[0], parts[1:]...)
 
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
@@ -77,7 +77,7 @@ func (t *CommandTool) Execute(input map[string]interface{}) (interface{}, error)
 	output := stdout.String()
 	errOutput := stderr.String()
 
-	if ctx.Err() == context.DeadlineExceeded {
+	if execCtx.Err() == context.DeadlineExceeded {
 		return nil, errors.EC_TOOL_EXECUTION_TIMEOUT.Wrap(fmt.Errorf("command execution timeout after %v", timeout))
 	}
 

@@ -1,6 +1,7 @@
 package file
 
 import (
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,7 +13,7 @@ func New() File {
 	return &fileImpl{}
 }
 
-func (f *fileImpl) IsDirEmpty(dir string) (bool, error) {
+func (f *fileImpl) IsDirEmpty(ctx context.Context, dir string) (bool, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return false, err
@@ -20,7 +21,7 @@ func (f *fileImpl) IsDirEmpty(dir string) (bool, error) {
 	return len(entries) == 0, nil
 }
 
-func (f *fileImpl) ReadDir(dir string) ([]string, error) {
+func (f *fileImpl) ReadDir(ctx context.Context, dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -32,23 +33,23 @@ func (f *fileImpl) ReadDir(dir string) ([]string, error) {
 	return names, nil
 }
 
-func (f *fileImpl) Mkdir(dir string) error {
+func (f *fileImpl) Mkdir(ctx context.Context, dir string) error {
 	return os.MkdirAll(dir, 0755)
 }
 
-func (f *fileImpl) RemoveDir(dir string) error {
+func (f *fileImpl) RemoveDir(ctx context.Context, dir string) error {
 	return os.RemoveAll(dir)
 }
 
-func (f *fileImpl) RemoveFile(file string) error {
+func (f *fileImpl) RemoveFile(ctx context.Context, file string) error {
 	return os.Remove(file)
 }
 
-func (f *fileImpl) Rename(src, dst string) error {
+func (f *fileImpl) Rename(ctx context.Context, src, dst string) error {
 	return os.Rename(src, dst)
 }
 
-func (f *fileImpl) Copy(src, dst string) error {
+func (f *fileImpl) Copy(ctx context.Context, src, dst string) error {
 	srcFile, err := os.Open(src)
 	if err != nil {
 		return err
@@ -65,23 +66,23 @@ func (f *fileImpl) Copy(src, dst string) error {
 	return err
 }
 
-func (f *fileImpl) Symlink(target, link string) error {
+func (f *fileImpl) Symlink(ctx context.Context, target, link string) error {
 	return os.Symlink(target, link)
 }
 
-func (f *fileImpl) ReadLink(link string) (string, error) {
+func (f *fileImpl) ReadLink(ctx context.Context, link string) (string, error) {
 	return os.Readlink(link)
 }
 
-func (f *fileImpl) ReadFile(file string) ([]byte, error) {
+func (f *fileImpl) ReadFile(ctx context.Context, file string) ([]byte, error) {
 	return os.ReadFile(file)
 }
 
-func (f *fileImpl) WriteFile(file string, data []byte) error {
+func (f *fileImpl) WriteFile(ctx context.Context, file string, data []byte) error {
 	return os.WriteFile(file, data, 0644)
 }
 
-func (f *fileImpl) AppendFile(file string, data []byte) error {
+func (f *fileImpl) AppendFile(ctx context.Context, file string, data []byte) error {
 	fd, err := os.OpenFile(file, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		return err
@@ -91,7 +92,7 @@ func (f *fileImpl) AppendFile(file string, data []byte) error {
 	return err
 }
 
-func (f *fileImpl) Exists(file string) (bool, error) {
+func (f *fileImpl) Exists(ctx context.Context, file string) (bool, error) {
 	_, err := os.Stat(file)
 	if err == nil {
 		return true, nil
@@ -102,7 +103,7 @@ func (f *fileImpl) Exists(file string) (bool, error) {
 	return false, err
 }
 
-func (f *fileImpl) IsFile(file string) (bool, error) {
+func (f *fileImpl) IsFile(ctx context.Context, file string) (bool, error) {
 	info, err := os.Stat(file)
 	if err != nil {
 		return false, err
@@ -110,7 +111,7 @@ func (f *fileImpl) IsFile(file string) (bool, error) {
 	return !info.IsDir(), nil
 }
 
-func (f *fileImpl) IsDir(dir string) (bool, error) {
+func (f *fileImpl) IsDir(ctx context.Context, dir string) (bool, error) {
 	info, err := os.Stat(dir)
 	if err != nil {
 		return false, err
@@ -118,15 +119,15 @@ func (f *fileImpl) IsDir(dir string) (bool, error) {
 	return info.IsDir(), nil
 }
 
-func (f *fileImpl) Stat(file string) (os.FileInfo, error) {
+func (f *fileImpl) Stat(ctx context.Context, file string) (os.FileInfo, error) {
 	return os.Stat(file)
 }
 
-func (f *fileImpl) Chmod(file string, mode os.FileMode) error {
+func (f *fileImpl) Chmod(ctx context.Context, file string, mode os.FileMode) error {
 	return os.Chmod(file, mode)
 }
 
-func (f *fileImpl) Walk(root string) ([]string, error) {
+func (f *fileImpl) Walk(ctx context.Context, root string) ([]string, error) {
 	var paths []string
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -138,7 +139,7 @@ func (f *fileImpl) Walk(root string) ([]string, error) {
 	return paths, err
 }
 
-func (f *fileImpl) WalkDir(root string) ([]string, error) {
+func (f *fileImpl) WalkDir(ctx context.Context, root string) ([]string, error) {
 	var paths []string
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -152,7 +153,7 @@ func (f *fileImpl) WalkDir(root string) ([]string, error) {
 	return paths, err
 }
 
-func (f *fileImpl) WalkFile(root string) ([]string, error) {
+func (f *fileImpl) WalkFile(ctx context.Context, root string) ([]string, error) {
 	var paths []string
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -166,7 +167,7 @@ func (f *fileImpl) WalkFile(root string) ([]string, error) {
 	return paths, err
 }
 
-func (f *fileImpl) WalkRel(root string) ([]string, error) {
+func (f *fileImpl) WalkRel(ctx context.Context, root string) ([]string, error) {
 	var paths []string
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -190,6 +191,6 @@ func (f *fileImpl) WalkRel(root string) ([]string, error) {
 	return paths, err
 }
 
-func (f *fileImpl) Glob(pattern string) ([]string, error) {
+func (f *fileImpl) Glob(ctx context.Context, pattern string) ([]string, error) {
 	return filepath.Glob(pattern)
 }

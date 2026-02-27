@@ -75,7 +75,7 @@ func createMCPClient(agentEngine *engine.AgentEngine) (*mcp.Client, error) {
 	mcpTools := mcpClient.GetTools()
 	if len(mcpTools) > 0 {
 		log.Printf("Found %d AI training tools, adding to agent engine...", len(mcpTools))
-		agentEngine.AddTools(mcpTools)
+		agentEngine.AddTools(ctx, mcpTools)
 	}
 
 	return mcpClient, nil

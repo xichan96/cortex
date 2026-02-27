@@ -1,6 +1,9 @@
 package types
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // Tool defines tool interface
 type Tool interface {
@@ -10,7 +13,7 @@ type Tool interface {
 	Schema() map[string]interface{}
 
 	// Tool execution
-	Execute(input map[string]interface{}) (interface{}, error)
+	Execute(ctx context.Context, input map[string]interface{}) (interface{}, error)
 
 	// Tool metadata
 	Metadata() ToolMetadata

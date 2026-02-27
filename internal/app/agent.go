@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"time"
@@ -19,15 +20,15 @@ import (
 
 type Agent interface {
 	// build agent
-	setupLLM() (types.LLMProvider, error)
-	setupMemory(sessionID string) types.MemoryProvider
-	setupTools() ([]types.Tool, error)
-	build(sessionID string) (*engine.AgentEngine, error)
-	Engine(sessionID string) (*engine.AgentEngine, error)
+	setupLLM(ctx context.Context) (types.LLMProvider, error)
+	setupMemory(ctx context.Context, sessionID string) types.MemoryProvider
+	setupTools(ctx context.Context) ([]types.Tool, error)
+	build(ctx context.Context, sessionID string) (*engine.AgentEngine, error)
+	Engine(ctx context.Context, sessionID string) (*engine.AgentEngine, error)
 
 	// trigger methods
-	HttpTrigger() http.Handler
-	McpTrigger() (mcp.Handler, error)
+	HttpTrigger(ctx context.Context) http.Handler
+	McpTrigger(ctx context.Context) (mcp.Handler, error)
 }
 
 type agent struct {
@@ -42,8 +43,8 @@ func NewAgent() Agent {
 	}
 }
 
-func (a *agent) build(sessionID string) (*engine.AgentEngine, error) {
-	llmProvider, err := a.setupLLM()
+func (a *agent) build(ctx context.Context, sessionID string) (*engine.AgentEngine, error) {
+	llmProvider, err := a.setupLLM(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup LLM: %w", err)
 	}
@@ -51,8 +52,9 @@ func (a *agent) build(sessionID string) (*engine.AgentEngine, error) {
 		return nil, fmt.Errorf("LLM provider is nil")
 	}
 
-	memoryProvider := a.setupMemory(sessionID)
-	tools, err := a.setupTools()
+	memoryProvider := a.setupMemory(ctx, sessionID)
+
+	tools, err := a.setupTools(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup tools: %w", err)
 	}
@@ -62,13 +64,14 @@ func (a *agent) build(sessionID string) (*engine.AgentEngine, error) {
 	}
 
 	agentConfig := types.NewAgentConfig()
-	if err := copier.Copy(agentConfig, a.config.Agent); err != nil {
+	// Fix: copier.Copy arguments are (to, from)
+	if err := copier.Copy(agentConfig, &a.config.Agent); err != nil {
 		return nil, fmt.Errorf("failed to copy agent config: %w", err)
 	}
 
 	// Load skills if configured
 	if len(a.config.Skills.Paths) > 0 {
-		loadedSkills, err := skills.LoadSkillsFromDirs(a.logger, a.config.Skills.Paths)
+		loadedSkills, err := skills.LoadSkillsFromDirs(ctx, a.logger, a.config.Skills.Paths)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load skills: %w", err)
 		}
@@ -80,7 +83,7 @@ func (a *agent) build(sessionID string) (*engine.AgentEngine, error) {
 	}
 
 	if a.config.Agent.Timeout != "" {
-		timeout, err := a.config.Agent.TimeoutDuration()
+		timeout, err := time.ParseDuration(a.config.Agent.Timeout)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse timeout: %w", err)
 		}
@@ -88,12 +91,12 @@ func (a *agent) build(sessionID string) (*engine.AgentEngine, error) {
 	}
 
 	engine := engine.NewAgentEngine(llmProvider, agentConfig)
-	engine.SetMemory(memoryProvider)
-	engine.AddTools(tools)
+	engine.SetMemory(ctx, memoryProvider)
+	engine.AddTools(ctx, tools)
 	return engine, nil
 }
 
-func (a *agent) Engine(sessionID string) (*engine.AgentEngine, error) {
+func (a *agent) Engine(ctx context.Context, sessionID string) (*engine.AgentEngine, error) {
 	var v interface{}
 	if err := cache.Local.Get(sessionID, &v); err == nil {
 		if eng, ok := v.(*engine.AgentEngine); ok {
@@ -101,7 +104,7 @@ func (a *agent) Engine(sessionID string) (*engine.AgentEngine, error) {
 		}
 	}
 
-	agentEngine, err := a.build(sessionID)
+	agentEngine, err := a.build(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -110,12 +113,12 @@ func (a *agent) Engine(sessionID string) (*engine.AgentEngine, error) {
 	return agentEngine, nil
 }
 
-func (a *agent) HttpTrigger() http.Handler {
+func (a *agent) HttpTrigger(ctx context.Context) http.Handler {
 	return http.NewHandler()
 }
 
-func (a *agent) McpTrigger() (mcp.Handler, error) {
-	engine, err := a.Engine(uuid.New().String())
+func (a *agent) McpTrigger(ctx context.Context) (mcp.Handler, error) {
+	engine, err := a.Engine(ctx, uuid.New().String())
 	if err != nil {
 		return nil, err
 	}

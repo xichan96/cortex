@@ -269,13 +269,17 @@ func (t *MCPTool) Schema() map[string]interface{} {
 }
 
 // Execute executes the tool
-func (t *MCPTool) Execute(input map[string]interface{}) (interface{}, error) {
+func (t *MCPTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	if t.client == nil {
 		return nil, errors.NewError(errors.EC_MCP_TOOL_NOT_CONNECTED.Code, errors.EC_MCP_TOOL_NOT_CONNECTED.Message)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Use provided context or default timeout if none set
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+	}
 
 	client := t.client
 	return client.CallTool(ctx, t.name, input)

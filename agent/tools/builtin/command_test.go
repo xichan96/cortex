@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -84,7 +85,7 @@ func TestCommandTool_Execute_Success(t *testing.T) {
 		"command": "echo hello",
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -110,7 +111,7 @@ func TestCommandTool_Execute_CommandFailure(t *testing.T) {
 		"command": "false",
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute should not return error for failed command: %v", err)
 	}
@@ -136,7 +137,7 @@ func TestCommandTool_Execute_InvalidCommandType(t *testing.T) {
 		"command": 123,
 	}
 
-	_, err := tool.Execute(input)
+	_, err := tool.Execute(context.Background(), input)
 	if err == nil {
 		t.Fatal("Execute should return error for invalid command type")
 	}
@@ -158,7 +159,7 @@ func TestCommandTool_Execute_EmptyCommand(t *testing.T) {
 		"command": "",
 	}
 
-	_, err := tool.Execute(input)
+	_, err := tool.Execute(context.Background(), input)
 	if err == nil {
 		t.Fatal("Execute should return error for empty command")
 	}
@@ -181,7 +182,7 @@ func TestCommandTool_Execute_WithTimeoutFloat64(t *testing.T) {
 		"timeout": float64(5),
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -204,7 +205,7 @@ func TestCommandTool_Execute_WithTimeoutInt(t *testing.T) {
 		"timeout": 5,
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -227,7 +228,7 @@ func TestCommandTool_Execute_Timeout(t *testing.T) {
 		"timeout": float64(1),
 	}
 
-	_, err := tool.Execute(input)
+	_, err := tool.Execute(context.Background(), input)
 	if err == nil {
 		t.Fatal("Execute should return error for timeout")
 	}
@@ -250,7 +251,7 @@ func TestCommandTool_Execute_DefaultTimeout(t *testing.T) {
 	}
 
 	start := time.Now()
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	duration := time.Since(start)
 
 	if err != nil {
@@ -278,7 +279,7 @@ func TestCommandTool_Execute_CommandWithArgs(t *testing.T) {
 		"command": "echo hello world",
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
@@ -300,7 +301,7 @@ func TestCommandTool_Execute_Stderr(t *testing.T) {
 		"command": "sh -c 'echo error >&2'",
 	}
 
-	result, err := tool.Execute(input)
+	result, err := tool.Execute(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}

@@ -2,6 +2,7 @@ package skills
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,10 +14,14 @@ import (
 )
 
 // LoadSkillsFromDirs scans the provided directories for SKILL.md files and loads them.
-func LoadSkillsFromDirs(l *logger.Logger, dirs []string) ([]Skill, error) {
+func LoadSkillsFromDirs(ctx context.Context, l *logger.Logger, dirs []string) ([]Skill, error) {
 	var skills []Skill
 
 	for _, dir := range dirs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
 		absDir, err := filepath.Abs(dir)
 		if err != nil {
 			if l != nil {
@@ -26,6 +31,9 @@ func LoadSkillsFromDirs(l *logger.Logger, dirs []string) ([]Skill, error) {
 		}
 
 		err = filepath.Walk(absDir, func(path string, info os.FileInfo, err error) error {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			if err != nil {
 				// Log error but continue walking
 				if l != nil {

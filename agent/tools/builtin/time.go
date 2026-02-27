@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -35,7 +36,11 @@ func (t *TimeTool) Schema() map[string]interface{} {
 	}
 }
 
-func (t *TimeTool) Execute(input map[string]interface{}) (interface{}, error) {
+func (t *TimeTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	timezone := "Asia/Hong_Kong"
 	if tz, ok := input["timezone"].(string); ok && tz != "" {
 		timezone = tz

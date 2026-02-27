@@ -93,8 +93,7 @@ func (p *SimpleMemoryProvider) GetMessages(ctx context.Context, limit int) ([]ty
 }
 
 // LoadMemoryVariables loads memory variables (implements MemoryProvider interface)
-func (p *SimpleMemoryProvider) LoadMemoryVariables() (map[string]interface{}, error) {
-	ctx := context.Background()
+func (p *SimpleMemoryProvider) LoadMemoryVariables(ctx context.Context) (map[string]interface{}, error) {
 	p.mu.RLock()
 	limit := p.maxHistoryMessages
 	p.mu.RUnlock()
@@ -110,7 +109,7 @@ func (p *SimpleMemoryProvider) LoadMemoryVariables() (map[string]interface{}, er
 }
 
 // SaveContext saves context (implements MemoryProvider interface)
-func (p *SimpleMemoryProvider) SaveContext(input, output map[string]interface{}) error {
+func (p *SimpleMemoryProvider) SaveContext(ctx context.Context, input, output map[string]interface{}) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if inputMsg, ok := input["input"].(string); ok {
@@ -129,7 +128,7 @@ func (p *SimpleMemoryProvider) SaveContext(input, output map[string]interface{})
 }
 
 // Clear clears memory (implements MemoryProvider interface)
-func (p *SimpleMemoryProvider) Clear() error {
+func (p *SimpleMemoryProvider) Clear(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.messages = make([]types.Message, 0)
@@ -140,11 +139,11 @@ func (p *SimpleMemoryProvider) Clear() error {
 
 // ClearWithContext clears memory with context (for backward compatibility)
 func (p *SimpleMemoryProvider) ClearWithContext(ctx context.Context) error {
-	return p.Clear()
+	return p.Clear(ctx)
 }
 
 // GetChatHistory gets chat history (implements MemoryProvider interface)
-func (p *SimpleMemoryProvider) GetChatHistory() ([]types.Message, error) {
+func (p *SimpleMemoryProvider) GetChatHistory(ctx context.Context) ([]types.Message, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	// Return full history as requested "all conversations will be recorded"
@@ -156,7 +155,7 @@ func (p *SimpleMemoryProvider) GetChatHistory() ([]types.Message, error) {
 }
 
 // CompressMemory compresses old messages into a summary (implements MemoryProvider interface)
-func (p *SimpleMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages int) error {
+func (p *SimpleMemoryProvider) CompressMemory(ctx context.Context, llm types.LLMProvider, maxMessages int) error {
 	if llm == nil {
 		return fmt.Errorf("LLM provider is required for memory compression")
 	}
@@ -215,7 +214,7 @@ Please update the summary to include the new information, keeping it concise but
 %s`, newContent)
 	}
 
-	summaryMsg, err := llm.Chat([]types.Message{
+	summaryMsg, err := llm.Chat(ctx, []types.Message{
 		{
 			Role:    "system",
 			Content: "You are a helpful assistant that summarizes conversation history.",

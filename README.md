@@ -83,6 +83,7 @@ Create a weather-checking AI agent in seconds:
 package main
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -107,7 +108,7 @@ func main() {
 	agentEngine := engine.NewAgentEngine(llmProvider, agentConfig)
 
 	// 4. Execute
-	result, err := agentEngine.Execute("What is the weather in New York?", nil)
+	result, err := agentEngine.Execute(context.Background(), "What is the weather in New York?", nil)
 	if err != nil {
 		fmt.Printf("Execution failed: %v\n", err)
 		return
@@ -181,7 +182,7 @@ type MyTool struct{}
 
 func (t *MyTool) Name() string { return "my_tool" }
 func (t *MyTool) Description() string { return "A custom tool" }
-func (t *MyTool) Execute(input map[string]interface{}) (interface{}, error) {
+func (t *MyTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
     // Business logic...
     return "Result", nil
 }
@@ -269,7 +270,7 @@ Switch storage with a single line of config:
 // Example: Redis Memory
 redisClient := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
 memory := providers.NewRedisMemoryProvider(redisClient, "session-id")
-agentEngine.SetMemory(memory)
+agentEngine.SetMemory(context.Background(), memory)
 ```
 
 ## Examples
@@ -277,6 +278,8 @@ agentEngine.SetMemory(memory)
 - [Basic Example](examples/basic): Fundamental usage patterns.
 - [Chat Web](examples/chat-web): Full-stack chat application (Gin + React).
 - [MCP Server](examples/mcp-server): Expose Agent as an MCP service.
+- [Agent Skills](examples/skills): Dynamic skill loading and usage.
+- [Task Scheduling](examples/xcron): Task scheduling with xcron.
 
 ## Contributing
 

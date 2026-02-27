@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -76,7 +77,7 @@ func (t *SSHTool) Schema() map[string]interface{} {
 	}
 }
 
-func (t *SSHTool) Execute(input map[string]interface{}) (interface{}, error) {
+func (t *SSHTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	username, ok := input["username"].(string)
 	if !ok {
 		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("invalid 'username' parameter: must be a string"))
@@ -144,13 +145,13 @@ func (t *SSHTool) Execute(input map[string]interface{}) (interface{}, error) {
 		cfg.BastionUser = bastionUser
 	}
 
-	conn, err := ssh.NewConnection(cfg)
+	conn, err := ssh.NewConnection(ctx, cfg)
 	if err != nil {
 		return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(fmt.Errorf("failed to establish SSH connection: %w", err))
 	}
 	defer conn.Close()
 
-	stdout, err := conn.Exec(command)
+	stdout, err := conn.Exec(ctx, command)
 	if err != nil {
 		return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(fmt.Errorf("failed to execute command: %w", err))
 	}

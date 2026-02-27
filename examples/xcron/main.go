@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -17,6 +18,7 @@ import (
 	"github.com/xichan96/cortex/agent/tools/builtin"
 	"github.com/xichan96/cortex/agent/tools/scheduler"
 	"github.com/xichan96/cortex/agent/types"
+	clogger "github.com/xichan96/cortex/pkg/logger"
 	"github.com/xichan96/cortex/pkg/xcron"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -39,7 +41,7 @@ func getLLMProvider() (types.LLMProvider, error) {
 }
 
 // loadAndInjectSkills handles skill loading and system prompt injection
-func loadAndInjectSkills(agentConfig *types.AgentConfig) ([]skills.Skill, error) {
+func loadAndInjectSkills(ctx context.Context, agentConfig *types.AgentConfig) ([]skills.Skill, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current working directory: %w", err)
@@ -50,7 +52,7 @@ func loadAndInjectSkills(agentConfig *types.AgentConfig) ([]skills.Skill, error)
 
 	log.Info().Str("path", skillsDir).Msg("Loading skills")
 
-	loadedSkills, err := skills.LoadSkillsFromDirs(nil, []string{skillsDir})
+	loadedSkills, err := skills.LoadSkillsFromDirs(ctx, clogger.GetLogger(), []string{skillsDir})
 	if err != nil {
 		return nil, fmt.Errorf("failed to load skills: %w", err)
 	}
@@ -97,23 +99,23 @@ func main() {
 	agentConfig := types.NewAgentConfig()
 	agentConfig.SystemMessage = "You are a helpful AI assistant with scheduling capabilities. When asked to do something in the future, use the schedule_job tool."
 	agentConfig.Timeout = 120 * time.Second // Increased timeout for long operations
-
+	ctx := context.Background()
 	// Load Skills (Weather, etc.)
-	_, err = loadAndInjectSkills(agentConfig)
+	_, err = loadAndInjectSkills(ctx, agentConfig)
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to load skills (continuing without them)")
 	}
 
 	agentEngine := engine.NewAgentEngine(llmProvider, agentConfig)
-	agentEngine.SetMemory(providers.NewSimpleMemoryProvider())
+	agentEngine.SetMemory(ctx, providers.NewSimpleMemoryProvider())
 
 	// 5. Register Tools
 	// - Command Tool (for Weather skill)
-	agentEngine.AddTool(builtin.NewCommandTool())
+	agentEngine.AddTool(ctx, builtin.NewCommandTool())
 	// - Scheduler Tools (for scheduling tasks)
 	schedTools := scheduler.NewSchedulerTools(sched)
 	for _, t := range schedTools {
-		agentEngine.AddTool(t)
+		agentEngine.AddTool(ctx, t)
 	}
 
 	// 6. Register Agent Task Handler
@@ -124,7 +126,7 @@ func main() {
 
 		// Create a new context or use background
 		// Note: executing agent might take time
-		result, err := agentEngine.Execute(input, nil)
+		result, err := agentEngine.Execute(ctx, input, nil)
 		if err != nil {
 			log.Error().Err(err).Msg("❌ Agent execution failed")
 			return err
@@ -143,7 +145,7 @@ func main() {
 	userRequest := "2min schedule a task to query the weather in guangzhou"
 	log.Info().Str("request", userRequest).Msg("👤 User Request")
 
-	result, err := agentEngine.Execute(userRequest, nil)
+	result, err := agentEngine.Execute(ctx, userRequest, nil)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Agent failed to process initial request")
 	}

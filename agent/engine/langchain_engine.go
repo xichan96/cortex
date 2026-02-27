@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -50,7 +51,7 @@ func NewLangChainAgent(llm types.LLMProvider, systemPrompt string) Agent {
 }
 
 // AddTool adds a tool
-func (e *LangChainAgentEngine) AddTool(tool types.Tool) {
+func (e *LangChainAgentEngine) AddTool(ctx context.Context, tool types.Tool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.tools = append(e.tools, tool)
@@ -82,7 +83,7 @@ func (e *LangChainAgentEngine) BuildAgent() error {
 }
 
 // ExecuteSimple simple execution method (for backward compatibility)
-func (e *LangChainAgentEngine) ExecuteSimple(input string) (string, error) {
+func (e *LangChainAgentEngine) ExecuteSimple(ctx context.Context, input string) (string, error) {
 	e.mu.Lock()
 	e.memory = append(e.memory, types.Message{
 		Role:    "user",
@@ -100,7 +101,7 @@ func (e *LangChainAgentEngine) ExecuteSimple(input string) (string, error) {
 	}
 
 	if len(tools) > 0 {
-		response, err := e.llm.ChatWithTools(memory, tools)
+		response, err := e.llm.ChatWithTools(ctx, memory, tools)
 		if err != nil {
 			return "", errors.NewError(errors.EC_LLM_CALL_FAILED.Code, errors.EC_LLM_CALL_FAILED.Message).Wrap(err)
 		}
@@ -111,13 +112,13 @@ func (e *LangChainAgentEngine) ExecuteSimple(input string) (string, error) {
 		e.mu.Unlock()
 
 		if len(response.ToolCalls) > 0 {
-			return e.handleToolCalls(response)
+			return e.handleToolCalls(ctx, response)
 		}
 
 		return response.Content, nil
 	}
 
-	response, err := e.llm.Chat(memory)
+	response, err := e.llm.Chat(ctx, memory)
 	if err != nil {
 		return "", errors.NewError(errors.EC_LLM_CALL_FAILED.Code, errors.EC_LLM_CALL_FAILED.Message).Wrap(err)
 	}
@@ -131,7 +132,7 @@ func (e *LangChainAgentEngine) ExecuteSimple(input string) (string, error) {
 }
 
 // ExecuteStreamSimple simple streaming execution (for backward compatibility)
-func (e *LangChainAgentEngine) ExecuteStreamSimple(input string) (<-chan string, error) {
+func (e *LangChainAgentEngine) ExecuteStreamSimple(ctx context.Context, input string) (<-chan string, error) {
 	e.mu.Lock()
 	e.memory = append(e.memory, types.Message{
 		Role:    "user",
@@ -153,7 +154,7 @@ func (e *LangChainAgentEngine) ExecuteStreamSimple(input string) (<-chan string,
 	go func() {
 		defer close(outputChan)
 
-		stream, err := e.llm.ChatStream(memory)
+		stream, err := e.llm.ChatStream(ctx, memory)
 		if err != nil {
 			outputChan <- fmt.Sprintf("Error: %v", err)
 			return
@@ -161,12 +162,17 @@ func (e *LangChainAgentEngine) ExecuteStreamSimple(input string) (<-chan string,
 
 		var fullContent strings.Builder
 		for msg := range stream {
-			if msg.Type == "chunk" {
-				outputChan <- msg.Content
-				fullContent.WriteString(msg.Content)
-			} else if msg.Type == "error" {
-				outputChan <- fmt.Sprintf("Error: %s", msg.Error)
+			select {
+			case <-ctx.Done():
 				return
+			default:
+				if msg.Type == "chunk" {
+					outputChan <- msg.Content
+					fullContent.WriteString(msg.Content)
+				} else if msg.Type == "error" {
+					outputChan <- fmt.Sprintf("Error: %s", msg.Error)
+					return
+				}
 			}
 		}
 
@@ -183,7 +189,7 @@ func (e *LangChainAgentEngine) ExecuteStreamSimple(input string) (<-chan string,
 }
 
 // handleToolCalls handles tool calls
-func (e *LangChainAgentEngine) handleToolCalls(response types.Message) (string, error) {
+func (e *LangChainAgentEngine) handleToolCalls(ctx context.Context, response types.Message) (string, error) {
 	results := make([]string, 0, len(response.ToolCalls))
 
 	e.mu.RLock()
@@ -194,13 +200,19 @@ func (e *LangChainAgentEngine) handleToolCalls(response types.Message) (string, 
 	e.mu.RUnlock()
 
 	for _, toolCall := range response.ToolCalls {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		default:
+		}
+
 		tool, exists := toolsMap[toolCall.Function.Name]
 		if !exists {
 			results = append(results, fmt.Sprintf("Tool %s not found", toolCall.Function.Name))
 			continue
 		}
 
-		result, err := tool.Execute(toolCall.Function.Arguments)
+		result, err := tool.Execute(ctx, toolCall.Function.Arguments)
 		if err != nil {
 			results = append(results, fmt.Sprintf("Tool %s execution failed: %v", toolCall.Function.Name, err))
 			continue
@@ -235,7 +247,7 @@ func (e *LangChainAgentEngine) ClearMemory() {
 }
 
 // SetTemperature sets temperature parameter
-func (e *LangChainAgentEngine) SetTemperature(temperature float32) {
+func (e *LangChainAgentEngine) SetTemperature(ctx context.Context, temperature float32) {
 	// LangChain engine will handle temperature parameter through model configuration
 	if cfg, ok := e.llm.(interface{ SetTemperature(float32) }); ok {
 		cfg.SetTemperature(temperature)
@@ -243,80 +255,80 @@ func (e *LangChainAgentEngine) SetTemperature(temperature float32) {
 }
 
 // SetMaxTokens sets maximum tokens
-func (e *LangChainAgentEngine) SetMaxTokens(maxTokens int) {
+func (e *LangChainAgentEngine) SetMaxTokens(ctx context.Context, maxTokens int) {
 	if cfg, ok := e.llm.(interface{ SetMaxTokens(int) }); ok {
 		cfg.SetMaxTokens(maxTokens)
 	}
 }
 
 // SetTopP sets Top P sampling
-func (e *LangChainAgentEngine) SetTopP(topP float32) {
+func (e *LangChainAgentEngine) SetTopP(ctx context.Context, topP float32) {
 	if cfg, ok := e.llm.(interface{ SetTopP(float32) }); ok {
 		cfg.SetTopP(topP)
 	}
 }
 
 // SetFrequencyPenalty sets frequency penalty
-func (e *LangChainAgentEngine) SetFrequencyPenalty(penalty float32) {
+func (e *LangChainAgentEngine) SetFrequencyPenalty(ctx context.Context, penalty float32) {
 	if cfg, ok := e.llm.(interface{ SetFrequencyPenalty(float32) }); ok {
 		cfg.SetFrequencyPenalty(penalty)
 	}
 }
 
 // SetPresencePenalty sets presence penalty
-func (e *LangChainAgentEngine) SetPresencePenalty(penalty float32) {
+func (e *LangChainAgentEngine) SetPresencePenalty(ctx context.Context, penalty float32) {
 	if cfg, ok := e.llm.(interface{ SetPresencePenalty(float32) }); ok {
 		cfg.SetPresencePenalty(penalty)
 	}
 }
 
 // SetStopSequences sets stop sequences
-func (e *LangChainAgentEngine) SetStopSequences(sequences []string) {
+func (e *LangChainAgentEngine) SetStopSequences(ctx context.Context, sequences []string) {
 	if cfg, ok := e.llm.(interface{ SetStopSequences([]string) }); ok {
 		cfg.SetStopSequences(sequences)
 	}
 }
 
 // SetTimeout sets timeout duration
-func (e *LangChainAgentEngine) SetTimeout(timeout time.Duration) {
+func (e *LangChainAgentEngine) SetTimeout(ctx context.Context, timeout time.Duration) {
 	if cfg, ok := e.llm.(interface{ SetTimeout(time.Duration) }); ok {
 		cfg.SetTimeout(timeout)
 	}
 }
 
 // SetRetryAttempts sets retry attempts
-func (e *LangChainAgentEngine) SetRetryAttempts(attempts int) {
+func (e *LangChainAgentEngine) SetRetryAttempts(ctx context.Context, attempts int) {
 	if cfg, ok := e.llm.(interface{ SetRetryAttempts(int) }); ok {
 		cfg.SetRetryAttempts(attempts)
 	}
 }
 
 // SetRetryDelay sets retry delay
-func (e *LangChainAgentEngine) SetRetryDelay(delay time.Duration) {
+func (e *LangChainAgentEngine) SetRetryDelay(ctx context.Context, delay time.Duration) {
 	if cfg, ok := e.llm.(interface{ SetRetryDelay(time.Duration) }); ok {
 		cfg.SetRetryDelay(delay)
 	}
 }
 
 // SetEnableToolRetry sets whether to enable tool retry
-func (e *LangChainAgentEngine) SetEnableToolRetry(enable bool) {
+func (e *LangChainAgentEngine) SetEnableToolRetry(ctx context.Context, enable bool) {
 	// Support determined by specific LLM implementation
 }
 
 // SetConfig sets complete configuration
-func (e *LangChainAgentEngine) SetConfig(config *types.AgentConfig) {
+func (e *LangChainAgentEngine) SetConfig(ctx context.Context, config *types.AgentConfig) {
 	if config == nil {
 		return
 	}
-	e.SetTemperature(config.Temperature)
-	e.SetMaxTokens(config.MaxTokens)
-	e.SetTopP(config.TopP)
-	e.SetFrequencyPenalty(config.FrequencyPenalty)
-	e.SetPresencePenalty(config.PresencePenalty)
-	e.SetStopSequences(config.StopSequences)
-	e.SetTimeout(config.Timeout)
-	e.SetRetryAttempts(config.RetryAttempts)
-	e.SetRetryDelay(config.RetryDelay)
+	e.SetTemperature(ctx, config.Temperature)
+	e.SetMaxTokens(ctx, config.MaxTokens)
+	e.SetTopP(ctx, config.TopP)
+	e.SetFrequencyPenalty(ctx, config.FrequencyPenalty)
+	e.SetPresencePenalty(ctx, config.PresencePenalty)
+	e.SetStopSequences(ctx, config.StopSequences)
+	e.SetTimeout(ctx, config.Timeout)
+	e.SetRetryAttempts(ctx, config.RetryAttempts)
+	e.SetRetryDelay(ctx, config.RetryDelay)
 	e.mu.Lock()
 	e.maxHistoryMessages = config.MaxHistoryMessages
 
@@ -336,7 +348,7 @@ func (e *LangChainAgentEngine) SetConfig(config *types.AgentConfig) {
 }
 
 // SetRateLimiter sets the rate limiter (not implemented for LangChain engine)
-func (e *LangChainAgentEngine) SetRateLimiter(limiter ratelimit.RateLimiter) {
+func (e *LangChainAgentEngine) SetRateLimiter(ctx context.Context, limiter ratelimit.RateLimiter) {
 	// LangChain engine does not implement rate limiting
 }
 
@@ -366,17 +378,17 @@ func (e *LangChainAgentEngine) limitMemoryLocked() {
 }
 
 // SetMemory sets memory system (LangChain engine uses internal memory management)
-func (e *LangChainAgentEngine) SetMemory(memory types.MemoryProvider) {
+func (e *LangChainAgentEngine) SetMemory(ctx context.Context, memory types.MemoryProvider) {
 	// LangChain engine uses internal memory management, this method is not implemented
 }
 
 // SetOutputParser sets output parser
-func (e *LangChainAgentEngine) SetOutputParser(parser types.OutputParser) {
+func (e *LangChainAgentEngine) SetOutputParser(ctx context.Context, parser types.OutputParser) {
 	// Support for output parser determined by specific implementation
 }
 
 // AddTools adds tools in batch
-func (e *LangChainAgentEngine) AddTools(tools []types.Tool) {
+func (e *LangChainAgentEngine) AddTools(ctx context.Context, tools []types.Tool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.tools = append(e.tools, tools...)
@@ -386,13 +398,13 @@ func (e *LangChainAgentEngine) AddTools(tools []types.Tool) {
 }
 
 // Execute executes the agent (implements Agent interface)
-func (e *LangChainAgentEngine) Execute(input string, previousRequests []types.ToolCallData) (*AgentResult, error) {
+func (e *LangChainAgentEngine) Execute(ctx context.Context, input string, previousRequests []types.ToolCallData) (*AgentResult, error) {
 	startTime := time.Now()
 	logger.LogExecution("LangChainAgentEngine.Execute", 0, "Starting execution",
 		slog.String("input", truncateString(input, 100)))
 
 	// Adapt to Agent interface, ignore previousRequests parameter
-	output, err := e.ExecuteSimple(input)
+	output, err := e.ExecuteSimple(ctx, input)
 	if err != nil {
 		logger.LogError("LangChainAgentEngine.Execute", err)
 		return nil, err
@@ -408,9 +420,9 @@ func (e *LangChainAgentEngine) Execute(input string, previousRequests []types.To
 }
 
 // ExecuteStream streams agent execution (implements Agent interface)
-func (e *LangChainAgentEngine) ExecuteStream(input string, previousRequests []types.ToolCallData) (<-chan StreamResult, error) {
+func (e *LangChainAgentEngine) ExecuteStream(ctx context.Context, input string, previousRequests []types.ToolCallData) (<-chan StreamResult, error) {
 	// Adapt to Agent interface, ignore previousRequests parameter
-	outputChan, err := e.ExecuteStreamSimple(input)
+	outputChan, err := e.ExecuteStreamSimple(ctx, input)
 	if err != nil {
 		return nil, err
 	}
@@ -421,14 +433,24 @@ func (e *LangChainAgentEngine) ExecuteStream(input string, previousRequests []ty
 		defer close(resultChan)
 
 		for content := range outputChan {
-			resultChan <- StreamResult{
-				Type:    "chunk",
-				Content: content,
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				resultChan <- StreamResult{
+					Type:    "chunk",
+					Content: content,
+				}
 			}
 		}
 
-		resultChan <- StreamResult{
-			Type: "end",
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			resultChan <- StreamResult{
+				Type: "end",
+			}
 		}
 	}()
 
@@ -436,6 +458,6 @@ func (e *LangChainAgentEngine) ExecuteStream(input string, previousRequests []ty
 }
 
 // Stop stops the agent engine (LangChain engine requires no special stop operation)
-func (e *LangChainAgentEngine) Stop() {
+func (e *LangChainAgentEngine) Stop(ctx context.Context) {
 	// LangChain engine requires no special stop operation
 }

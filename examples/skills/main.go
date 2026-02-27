@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/xichan96/cortex/agent/skills"
 	"github.com/xichan96/cortex/agent/tools/builtin"
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/pkg/logger"
 )
 
 // getLLMProvider creates an LLM provider (using Volcengine configuration)
@@ -35,7 +37,7 @@ func getLLMProvider() (types.LLMProvider, error) {
 }
 
 // loadAndInjectSkills handles skill loading and system prompt injection
-func loadAndInjectSkills(agentConfig *types.AgentConfig) ([]skills.Skill, error) {
+func loadAndInjectSkills(ctx context.Context, agentConfig *types.AgentConfig) ([]skills.Skill, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get current working directory: %w", err)
@@ -49,7 +51,7 @@ func loadAndInjectSkills(agentConfig *types.AgentConfig) ([]skills.Skill, error)
 
 	fmt.Printf("Loading skills from: %s\n", skillsDir)
 
-	loadedSkills, err := skills.LoadSkillsFromDirs(nil, []string{skillsDir})
+	loadedSkills, err := skills.LoadSkillsFromDirs(ctx, logger.GetLogger(), []string{skillsDir})
 	if err != nil {
 		return nil, fmt.Errorf("failed to load skills: %w", err)
 	}
@@ -94,8 +96,9 @@ func main() {
 	agentConfig.EnableToolRetry = true
 	agentConfig.LogSilent = true // Enable silent mode for logger
 
+	ctx := context.Background()
 	// 3. Load Skills and update System Prompt
-	loadedSkills, err := loadAndInjectSkills(agentConfig)
+	loadedSkills, err := loadAndInjectSkills(ctx, agentConfig)
 	if err != nil {
 		log.Fatalf("Skill loading error: %v", err)
 	}
@@ -112,12 +115,12 @@ func main() {
 
 	// 5. Initialize Memory (Explicitly using SimpleMemoryProvider)
 	memory := providers.NewSimpleMemoryProvider()
-	agentEngine.SetMemory(memory)
+	agentEngine.SetMemory(ctx, memory)
 
 	// 6. Register Essential Tools
 	// The agent needs 'read_file' to read skill definitions, and 'command' to execute skill instructions.
-	agentEngine.AddTool(builtin.NewFileTool())
-	agentEngine.AddTool(builtin.NewCommandTool())
+	agentEngine.AddTool(ctx, builtin.NewFileTool())
+	agentEngine.AddTool(ctx, builtin.NewCommandTool())
 
 	fmt.Println("\n=== Final System Prompt ===")
 	fmt.Println(agentConfig.SystemMessage)
@@ -141,7 +144,7 @@ func main() {
 		}
 
 		// Check for skills execution plan
-		plan, err := planner.Plan(userInput)
+		plan, err := planner.Plan(ctx, userInput)
 		if err == nil && len(plan.Steps) > 0 {
 			fmt.Println("\n[Planner] Identified skills execution plan:")
 			var skillsContext strings.Builder
@@ -165,7 +168,7 @@ func main() {
 		fmt.Printf("Assistant: ")
 
 		// Use streaming execution
-		stream, err := agentEngine.ExecuteStream(userInput, nil) // passing nil for tool_choice
+		stream, err := agentEngine.ExecuteStream(ctx, userInput, nil) // passing nil for tool_choice
 		if err != nil {
 			log.Printf("Execution error: %v", err)
 			continue

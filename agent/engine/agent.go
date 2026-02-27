@@ -22,31 +22,31 @@ import (
 // Agent agent engine interface
 type Agent interface {
 	// Configuration setting methods
-	SetMemory(memory types.MemoryProvider)
-	SetOutputParser(parser types.OutputParser)
-	SetTemperature(temperature float32)
-	SetMaxTokens(maxTokens int)
-	SetTopP(topP float32)
-	SetFrequencyPenalty(penalty float32)
-	SetPresencePenalty(penalty float32)
-	SetStopSequences(sequences []string)
-	SetTimeout(timeout time.Duration)
-	SetRetryAttempts(attempts int)
-	SetRetryDelay(delay time.Duration)
-	SetEnableToolRetry(enable bool)
-	SetConfig(config *types.AgentConfig)
-	SetRateLimiter(limiter ratelimit.RateLimiter)
+	SetMemory(ctx context.Context, memory types.MemoryProvider)
+	SetOutputParser(ctx context.Context, parser types.OutputParser)
+	SetTemperature(ctx context.Context, temperature float32)
+	SetMaxTokens(ctx context.Context, maxTokens int)
+	SetTopP(ctx context.Context, topP float32)
+	SetFrequencyPenalty(ctx context.Context, penalty float32)
+	SetPresencePenalty(ctx context.Context, penalty float32)
+	SetStopSequences(ctx context.Context, sequences []string)
+	SetTimeout(ctx context.Context, timeout time.Duration)
+	SetRetryAttempts(ctx context.Context, attempts int)
+	SetRetryDelay(ctx context.Context, delay time.Duration)
+	SetEnableToolRetry(ctx context.Context, enable bool)
+	SetConfig(ctx context.Context, config *types.AgentConfig)
+	SetRateLimiter(ctx context.Context, limiter ratelimit.RateLimiter)
 
 	// Tool management methods
-	AddTool(tool types.Tool)
-	AddTools(tools []types.Tool)
+	AddTool(ctx context.Context, tool types.Tool)
+	AddTools(ctx context.Context, tools []types.Tool)
 
 	// Execution methods
-	Execute(input string, previousRequests []types.ToolCallData) (*AgentResult, error)
-	ExecuteStream(input string, previousRequests []types.ToolCallData) (<-chan StreamResult, error)
+	Execute(ctx context.Context, input string, previousRequests []types.ToolCallData) (*AgentResult, error)
+	ExecuteStream(ctx context.Context, input string, previousRequests []types.ToolCallData) (<-chan StreamResult, error)
 
 	// Lifecycle management
-	Stop()
+	Stop(ctx context.Context)
 }
 
 // AgentEngine agent engine
@@ -123,7 +123,7 @@ func NewAgent(model types.LLMProvider, config *types.AgentConfig) Agent {
 // ==================== Configuration Management Methods ====================
 
 // SetMemory sets the memory system
-func (ae *AgentEngine) SetMemory(memory types.MemoryProvider) {
+func (ae *AgentEngine) SetMemory(ctx context.Context, memory types.MemoryProvider) {
 	ae.mu.Lock()
 	defer ae.mu.Unlock()
 	ae.memory = memory
@@ -136,7 +136,7 @@ func (ae *AgentEngine) SetMemory(memory types.MemoryProvider) {
 }
 
 // SetOutputParser sets the output parser
-func (ae *AgentEngine) SetOutputParser(parser types.OutputParser) {
+func (ae *AgentEngine) SetOutputParser(ctx context.Context, parser types.OutputParser) {
 	ae.mu.Lock()
 	defer ae.mu.Unlock()
 	ae.outputParser = parser
@@ -153,77 +153,77 @@ func (ae *AgentEngine) setConfigValue(updateFunc func()) {
 }
 
 // SetTemperature sets the temperature parameter
-func (ae *AgentEngine) SetTemperature(temperature float32) {
+func (ae *AgentEngine) SetTemperature(ctx context.Context, temperature float32) {
 	ae.setConfigValue(func() {
 		ae.config.Temperature = temperature
 	})
 }
 
 // SetMaxTokens sets the maximum tokens
-func (ae *AgentEngine) SetMaxTokens(maxTokens int) {
+func (ae *AgentEngine) SetMaxTokens(ctx context.Context, maxTokens int) {
 	ae.setConfigValue(func() {
 		ae.config.MaxTokens = maxTokens
 	})
 }
 
 // SetTopP sets Top P sampling
-func (ae *AgentEngine) SetTopP(topP float32) {
+func (ae *AgentEngine) SetTopP(ctx context.Context, topP float32) {
 	ae.setConfigValue(func() {
 		ae.config.TopP = topP
 	})
 }
 
 // SetFrequencyPenalty sets frequency penalty
-func (ae *AgentEngine) SetFrequencyPenalty(penalty float32) {
+func (ae *AgentEngine) SetFrequencyPenalty(ctx context.Context, penalty float32) {
 	ae.setConfigValue(func() {
 		ae.config.FrequencyPenalty = penalty
 	})
 }
 
 // SetPresencePenalty sets presence penalty
-func (ae *AgentEngine) SetPresencePenalty(penalty float32) {
+func (ae *AgentEngine) SetPresencePenalty(ctx context.Context, penalty float32) {
 	ae.setConfigValue(func() {
 		ae.config.PresencePenalty = penalty
 	})
 }
 
 // SetStopSequences sets stop sequences
-func (ae *AgentEngine) SetStopSequences(sequences []string) {
+func (ae *AgentEngine) SetStopSequences(ctx context.Context, sequences []string) {
 	ae.setConfigValue(func() {
 		ae.config.StopSequences = sequences
 	})
 }
 
 // SetTimeout sets timeout duration
-func (ae *AgentEngine) SetTimeout(timeout time.Duration) {
+func (ae *AgentEngine) SetTimeout(ctx context.Context, timeout time.Duration) {
 	ae.setConfigValue(func() {
 		ae.config.Timeout = timeout
 	})
 }
 
 // SetRetryAttempts sets retry attempts
-func (ae *AgentEngine) SetRetryAttempts(attempts int) {
+func (ae *AgentEngine) SetRetryAttempts(ctx context.Context, attempts int) {
 	ae.setConfigValue(func() {
 		ae.config.RetryAttempts = attempts
 	})
 }
 
 // SetRetryDelay sets retry delay
-func (ae *AgentEngine) SetRetryDelay(delay time.Duration) {
+func (ae *AgentEngine) SetRetryDelay(ctx context.Context, delay time.Duration) {
 	ae.setConfigValue(func() {
 		ae.config.RetryDelay = delay
 	})
 }
 
 // SetEnableToolRetry sets whether to enable tool retry
-func (ae *AgentEngine) SetEnableToolRetry(enable bool) {
+func (ae *AgentEngine) SetEnableToolRetry(ctx context.Context, enable bool) {
 	ae.setConfigValue(func() {
 		ae.config.EnableToolRetry = enable
 	})
 }
 
 // SetConfig sets the complete configuration
-func (ae *AgentEngine) SetConfig(config *types.AgentConfig) {
+func (ae *AgentEngine) SetConfig(ctx context.Context, config *types.AgentConfig) {
 	ae.mu.Lock()
 	defer ae.mu.Unlock()
 	if config == nil {
@@ -239,14 +239,14 @@ func (ae *AgentEngine) SetConfig(config *types.AgentConfig) {
 }
 
 // SetRateLimiter sets the rate limiter
-func (ae *AgentEngine) SetRateLimiter(limiter ratelimit.RateLimiter) {
+func (ae *AgentEngine) SetRateLimiter(ctx context.Context, limiter ratelimit.RateLimiter) {
 	ae.mu.Lock()
 	defer ae.mu.Unlock()
 	ae.rateLimiter = limiter
 }
 
 // AddTool adds a tool
-func (ae *AgentEngine) AddTool(tool types.Tool) {
+func (ae *AgentEngine) AddTool(ctx context.Context, tool types.Tool) {
 	ae.mu.Lock()
 	defer ae.mu.Unlock()
 
@@ -258,7 +258,7 @@ func (ae *AgentEngine) AddTool(tool types.Tool) {
 // ==================== Tool Management Methods ====================
 
 // AddTools adds multiple tools
-func (ae *AgentEngine) AddTools(tools []types.Tool) {
+func (ae *AgentEngine) AddTools(ctx context.Context, tools []types.Tool) {
 	ae.mu.Lock()
 	defer ae.mu.Unlock()
 
@@ -274,13 +274,14 @@ func (ae *AgentEngine) AddTools(tools []types.Tool) {
 // Execute executes the agent task (supports multi-round iteration)
 // Processes user input with tool calling and multi-round iteration, returning the complete execution result
 // Parameters:
+//   - ctx: context for cancellation
 //   - input: user input text
 //   - previousRequests: previous tool call request history
 //
 // Returns:
 //   - execution result containing output, tool calls, and intermediate steps
 //   - error information
-func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallData) (*AgentResult, error) {
+func (ae *AgentEngine) Execute(ctx context.Context, input string, previousRequests []types.ToolCallData) (*AgentResult, error) {
 	if !ae.isRunning.CompareAndSwap(false, true) {
 		return nil, errors.EC_AGENT_BUSY
 	}
@@ -295,23 +296,23 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 
 	ae.mu.RLock()
 	limiter := ae.rateLimiter
-	ctx := ae.ctx
 	ae.mu.RUnlock()
 
 	if limiter != nil {
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		// Create a separate context for rate limiter to avoid cancelling the main context
+		limitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		if err := limiter.Wait(ctx); err != nil {
+		if err := limiter.Wait(limitCtx); err != nil {
 			logger.LogError("Execute", err, slog.String("phase", "rate_limit"))
 			return nil, errors.NewError(errors.EC_SYSTEM_OVERLOAD.Code, "rate limit exceeded").Wrap(err)
 		}
 	}
 
 	// Pre-allocate slice capacity to reduce memory reallocations
-	messages, err := ae.prepareMessages(input, previousRequests)
+	messages, err := ae.prepareMessages(ctx, input, previousRequests)
 	if err != nil {
 		logger.LogError("Execute", err, slog.String("phase", "prepare_messages"))
 		return nil, errors.NewError(errors.EC_PREPARE_MESSAGES_FAILED.Code, errors.EC_PREPARE_MESSAGES_FAILED.Message).Wrap(err)
@@ -331,10 +332,16 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 
 	// Iterate until no tool calls or maximum iterations reached
 	for iteration < maxIterations {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
 		logger.LogExecution("Execute", iteration, fmt.Sprintf("Starting iteration %d/%d", iteration+1, maxIterations))
 
 		// Execute single iteration
-		result, continueIterating, err := ae.executeIteration(messages, iteration)
+		result, continueIterating, err := ae.executeIteration(ctx, messages, iteration)
 		if err != nil {
 			logger.LogError("Execute", err, slog.Int("iteration", iteration+1))
 			return nil, errors.NewError(errors.EC_ITERATION_FAILED.Code, fmt.Sprintf("iteration %d failed", iteration+1)).Wrap(err)
@@ -380,7 +387,7 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 	if ae.memory != nil && finalResult != nil {
 		inputMap := map[string]interface{}{"input": input}
 		outputMap := map[string]interface{}{"output": finalResult.Output}
-		if err := ae.memory.SaveContext(inputMap, outputMap); err != nil {
+		if err := ae.memory.SaveContext(ctx, inputMap, outputMap); err != nil {
 			logger.LogError("Execute", err, slog.String("phase", "save_context"))
 			// Do not interrupt execution as main flow is complete
 		} else {
@@ -395,7 +402,7 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 			ae.mu.RUnlock()
 
 			if enableCompress && compressThreshold > 0 {
-				history, err := ae.memory.GetChatHistory()
+				history, err := ae.memory.GetChatHistory(ctx)
 				if err == nil && len(history) > compressThreshold {
 					ae.mu.RLock()
 					llm := ae.model
@@ -408,7 +415,7 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 									logger.LogError("Execute", fmt.Errorf("panic in compress memory async: %v", r))
 								}
 							}()
-							if err := ae.memory.CompressMemory(llm, compressThreshold); err != nil {
+							if err := ae.memory.CompressMemory(context.Background(), llm, compressThreshold); err != nil {
 								logger.LogError("Execute", err, slog.String("phase", "compress_memory_async"))
 							} else {
 								logger.Info("Memory compressed successfully",
@@ -428,13 +435,14 @@ func (ae *AgentEngine) Execute(input string, previousRequests []types.ToolCallDa
 // ExecuteStream executes the agent task with streaming (supports multi-round iteration)
 // Processes user input with real-time streaming output and multi-round tool calling
 // Parameters:
+//   - ctx: context for cancellation
 //   - input: user input text
 //   - previousRequests: previous tool call request history
 //
 // Returns:
 //   - streaming result channel for real-time content delivery during execution
 //   - error information (only during initialization)
-func (ae *AgentEngine) ExecuteStream(input string, previousRequests []types.ToolCallData) (<-chan StreamResult, error) {
+func (ae *AgentEngine) ExecuteStream(ctx context.Context, input string, previousRequests []types.ToolCallData) (<-chan StreamResult, error) {
 	if !ae.isRunning.CompareAndSwap(false, true) {
 		return nil, errors.EC_AGENT_BUSY
 	}
@@ -450,16 +458,16 @@ func (ae *AgentEngine) ExecuteStream(input string, previousRequests []types.Tool
 
 		ae.mu.RLock()
 		limiter := ae.rateLimiter
-		ctx := ae.ctx
 		ae.mu.RUnlock()
 
 		if limiter != nil {
 			if ctx == nil {
 				ctx = context.Background()
 			}
-			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			// Create a separate context for rate limiter
+			limitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
-			if err := limiter.Wait(ctx); err != nil {
+			if err := limiter.Wait(limitCtx); err != nil {
 				logger.LogError("ExecuteStream", err, slog.String("phase", "rate_limit"))
 				resultChan <- StreamResult{
 					Type:  "error",
@@ -480,7 +488,7 @@ func (ae *AgentEngine) ExecuteStream(input string, previousRequests []types.Tool
 		}()
 
 		// Prepare initial messages
-		messages, err := ae.prepareMessages(input, previousRequests)
+		messages, err := ae.prepareMessages(ctx, input, previousRequests)
 		if err != nil {
 			logger.LogError("ExecuteStream", err, slog.String("phase", "prepare_messages"))
 			resultChan <- StreamResult{
@@ -491,7 +499,7 @@ func (ae *AgentEngine) ExecuteStream(input string, previousRequests []types.Tool
 		}
 
 		// Stream iterative execution
-		ae.executeStreamWithIterations(messages, resultChan)
+		ae.executeStreamWithIterations(ctx, messages, resultChan)
 
 		logger.LogExecution("ExecuteStream", 0, "Stream execution completed", slog.Duration("total_duration", time.Since(startTime)))
 	}()
@@ -502,17 +510,18 @@ func (ae *AgentEngine) ExecuteStream(input string, previousRequests []types.Tool
 // prepareMessages prepares messages
 // Builds a complete message list including system messages, chat history, tool call context, and user input
 // Parameters:
+//   - ctx: context
 //   - input: user input
 //   - previousRequests: previous tool call requests
 //
 // Returns:
 //   - built message list
 //   - error information
-func (ae *AgentEngine) prepareMessages(input string, previousRequests []types.ToolCallData) ([]types.Message, error) {
+func (ae *AgentEngine) prepareMessages(ctx context.Context, input string, previousRequests []types.ToolCallData) ([]types.Message, error) {
 	var history []types.Message
 	var historyErr error
 	if ae.memory != nil {
-		history, historyErr = ae.memory.GetChatHistory()
+		history, historyErr = ae.memory.GetChatHistory(ctx)
 		if historyErr != nil {
 			return nil, errors.NewError(errors.EC_MEMORY_HISTORY_FAILED.Code, errors.EC_MEMORY_HISTORY_FAILED.Message).Wrap(historyErr)
 		}
@@ -578,6 +587,7 @@ func (ae *AgentEngine) buildContextFromPreviousRequests(requests []types.ToolCal
 // executeIteration executes a single iteration
 // Processes one round of LLM calling and tool execution, supporting caching and error handling
 // Parameters:
+//   - ctx: context for cancellation
 //   - messages: current round messages
 //   - iteration: current iteration index
 //
@@ -585,7 +595,7 @@ func (ae *AgentEngine) buildContextFromPreviousRequests(requests []types.ToolCal
 //   - execution result
 //   - whether to continue iteration
 //   - error information
-func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int) (*AgentResult, bool, error) {
+func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Message, iteration int) (*AgentResult, bool, error) {
 	ae.mu.RLock()
 	maxIterations := 10
 	timeout := time.Duration(0)
@@ -596,7 +606,6 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 		toolExecutionTimeout = ae.config.ToolExecutionTimeout
 	}
 	tools := ae.tools
-	ctx := ae.ctx
 	ae.mu.RUnlock()
 	startTime := time.Now()
 	logger.LogExecution("executeIteration", iteration, fmt.Sprintf("Starting iteration %d/%d", iteration+1, maxIterations))
@@ -615,7 +624,7 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 		return nil, false, errors.NewError(errors.EC_LLM_CALL_FAILED.Code, "LLM model provider is nil")
 	}
 
-	response, err := ae.model.ChatWithTools(messages, tools)
+	response, err := ae.model.ChatWithTools(ctx, messages, tools)
 	if err != nil {
 		logger.LogError("executeIteration", err, slog.Int("iteration", iteration))
 		return nil, false, errors.NewError(errors.EC_CHAT_FAILED.Code, "failed to chat with tools").Wrap(err)
@@ -697,7 +706,7 @@ func (ae *AgentEngine) executeIteration(messages []types.Message, iteration int)
 				}
 			} else {
 				// Execute tool with timeout
-				toolResult, err = ae.executeToolWithTimeout(tool, toolCall.Function.Arguments, toolExecutionTimeout)
+				toolResult, err = ae.executeToolWithTimeout(ctx, tool, toolCall.Function.Arguments, toolExecutionTimeout)
 				duration := time.Since(toolStartTime)
 
 				if err != nil {
@@ -835,7 +844,7 @@ func (ae *AgentEngine) buildNextMessages(previousMessages []types.Message, resul
 // ==================== Streaming Execution Methods ====================
 
 // executeStreamWithIterations executes streaming iterations (supports multi-round tool calling)
-func (ae *AgentEngine) executeStreamWithIterations(initialMessages []types.Message, resultChan chan<- StreamResult) {
+func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialMessages []types.Message, resultChan chan<- StreamResult) {
 	messages := initialMessages
 	finalResult := &AgentResult{}
 
@@ -851,12 +860,22 @@ func (ae *AgentEngine) executeStreamWithIterations(initialMessages []types.Messa
 	intermediateSteps := make([]types.ToolCallData, 0, estimatedToolCalls)
 
 	for iteration := 0; iteration < maxIterations; iteration++ {
+		select {
+		case <-ctx.Done():
+			resultChan <- StreamResult{
+				Type:  "error",
+				Error: ctx.Err(),
+			}
+			return
+		default:
+		}
+
 		iterationStartTime := time.Now()
 		logger.LogExecution("executeStreamWithIterations", iteration,
 			fmt.Sprintf("Starting streaming iteration %d/%d", iteration+1, maxIterations))
 
 		// Execute single round iteration with streaming
-		iterationResult, hasMore, err := ae.executeStreamIteration(messages, resultChan, iteration)
+		iterationResult, hasMore, err := ae.executeStreamIteration(ctx, messages, resultChan, iteration)
 		if err != nil {
 			logger.LogError("executeStreamWithIterations", err, slog.Int("iteration", iteration+1))
 			resultChan <- StreamResult{
@@ -892,7 +911,7 @@ func (ae *AgentEngine) executeStreamWithIterations(initialMessages []types.Messa
 	if ae.memory != nil && len(initialMessages) > 0 {
 		input := map[string]interface{}{"input": initialMessages[len(initialMessages)-1].Content}
 		output := map[string]interface{}{"output": finalResult.Output}
-		if err := ae.memory.SaveContext(input, output); err != nil {
+		if err := ae.memory.SaveContext(ctx, input, output); err != nil {
 			logger.LogError("executeStreamWithIterations", err, slog.String("phase", "save_context"))
 			// Do not interrupt execution as main flow is complete
 		} else {
@@ -907,7 +926,7 @@ func (ae *AgentEngine) executeStreamWithIterations(initialMessages []types.Messa
 			ae.mu.RUnlock()
 
 			if enableCompress && compressThreshold > 0 {
-				history, err := ae.memory.GetChatHistory()
+				history, err := ae.memory.GetChatHistory(ctx)
 				if err == nil && len(history) > compressThreshold {
 					ae.mu.RLock()
 					llm := ae.model
@@ -920,7 +939,7 @@ func (ae *AgentEngine) executeStreamWithIterations(initialMessages []types.Messa
 									logger.LogError("executeStreamWithIterations", fmt.Errorf("panic in compress memory async: %v", r))
 								}
 							}()
-							if err := ae.memory.CompressMemory(llm, compressThreshold); err != nil {
+							if err := ae.memory.CompressMemory(context.Background(), llm, compressThreshold); err != nil {
 								logger.LogError("executeStreamWithIterations", err, slog.String("phase", "compress_memory_async"))
 							} else {
 								logger.Info("Memory compressed successfully",
@@ -951,6 +970,7 @@ func (ae *AgentEngine) executeStreamWithIterations(initialMessages []types.Messa
 // executeStreamIteration executes a single streaming iteration
 // Processes one round of streaming LLM calling and tool execution, supporting real-time content delivery
 // Parameters:
+//   - ctx: context for cancellation
 //   - messages: current round messages
 //   - resultChan: streaming result channel
 //   - iteration: current iteration index
@@ -959,7 +979,7 @@ func (ae *AgentEngine) executeStreamWithIterations(initialMessages []types.Messa
 //   - execution result
 //   - whether to continue iteration
 //   - error information
-func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultChan chan<- StreamResult, iteration int) (*AgentResult, bool, error) {
+func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []types.Message, resultChan chan<- StreamResult, iteration int) (*AgentResult, bool, error) {
 	result := &AgentResult{}
 
 	ae.mu.RLock()
@@ -972,7 +992,6 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 		timeout = ae.config.Timeout
 		toolExecutionTimeout = ae.config.ToolExecutionTimeout
 	}
-	ctx := ae.ctx
 	ae.mu.RUnlock()
 
 	// Create context with timeout if configured
@@ -989,7 +1008,7 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 		return nil, false, errors.NewError(errors.EC_STREAM_CHAT_FAILED.Code, "LLM model provider is nil")
 	}
 
-	stream, err := ae.model.ChatWithToolsStream(messages, tools)
+	stream, err := ae.model.ChatWithToolsStream(ctx, messages, tools)
 	if err != nil {
 		return nil, false, errors.NewError(errors.EC_STREAM_CHAT_FAILED.Code, "failed to chat with tools stream").Wrap(err)
 	}
@@ -1110,7 +1129,7 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 				}
 			} else {
 				// Execute tool with timeout
-				toolResult, err = ae.executeToolWithTimeout(tool, toolCall.ToolInput, toolExecutionTimeout)
+				toolResult, err = ae.executeToolWithTimeout(ctx, tool, toolCall.ToolInput, toolExecutionTimeout)
 				duration := time.Since(toolStartTime)
 
 				if err != nil {
@@ -1171,48 +1190,41 @@ func (ae *AgentEngine) executeStreamIteration(messages []types.Message, resultCh
 // Note: The goroutine will continue running after timeout, but will naturally complete.
 // This is an acceptable trade-off since the Tool interface doesn't support context cancellation.
 // The goroutine will finish and clean up resources automatically, preventing leaks.
-func (ae *AgentEngine) executeToolWithTimeout(tool types.Tool, args map[string]interface{}, timeout time.Duration) (interface{}, error) {
-	if timeout <= 0 {
-		// No timeout, execute directly
-		return tool.Execute(args)
+func (ae *AgentEngine) executeToolWithTimeout(ctx context.Context, tool types.Tool, args map[string]interface{}, timeout time.Duration) (interface{}, error) {
+	// Create context with timeout if specified
+	var cancel context.CancelFunc
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
 
+	// Use goroutine to allow execution to be interrupted by context
 	type result struct {
 		value interface{}
 		err   error
 	}
-
 	resultChan := make(chan result, 1)
-	// Use buffered channel to prevent goroutine leak if timeout occurs
-	go func() {
-		var value interface{}
-		var err error
 
+	go func() {
 		defer func() {
-			// Recover from any panic in tool execution
 			if r := recover(); r != nil {
-				err = fmt.Errorf("tool execution panic: %v", r)
-				value = nil
-			}
-			// Non-blocking send (buffered channel)
-			// This ensures we always try to send the result, even if timeout occurred
-			select {
-			case resultChan <- result{value: value, err: err}:
-			default:
-				// Channel already closed or receiver gone (timeout occurred), ignore
+				resultChan <- result{value: nil, err: fmt.Errorf("tool execution panic: %v", r)}
 			}
 		}()
 
-		value, err = tool.Execute(args)
+		// Pass context to tool execution
+		val, err := tool.Execute(ctx, args)
+		resultChan <- result{value: val, err: err}
 	}()
 
 	select {
 	case res := <-resultChan:
 		return res.value, res.err
-	case <-time.After(timeout):
-		// Timeout occurred, but goroutine will continue and complete naturally
-		// This is acceptable since tool interface doesn't support cancellation
-		return nil, errors.EC_TOOL_EXECUTION_TIMEOUT.Wrap(fmt.Errorf("tool execution timeout after %v", timeout))
+	case <-ctx.Done():
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, errors.EC_TOOL_EXECUTION_TIMEOUT.Wrap(fmt.Errorf("tool execution timeout after %v", timeout))
+		}
+		return nil, ctx.Err()
 	}
 }
 
@@ -1564,7 +1576,7 @@ func (ae *AgentEngine) detectCircularDependencies(graph map[string][]string) err
 
 // Stop stops the agent engine
 // Safely stops the agent engine and releases resources
-func (ae *AgentEngine) Stop() {
+func (ae *AgentEngine) Stop(ctx context.Context) {
 	ae.mu.Lock()
 	defer ae.mu.Unlock()
 

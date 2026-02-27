@@ -36,7 +36,7 @@ func (w *LangChainToolWrapper) Call(ctx context.Context, input string) (string, 
 	}
 
 	// Execute the tool
-	result, err := w.tool.Execute(args)
+	result, err := w.tool.Execute(ctx, args)
 	if err != nil {
 		return "", err
 	}

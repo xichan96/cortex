@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -14,13 +15,15 @@ func TestSSH(t *testing.T) {
 		Port:     22,
 		Timeout:  time.Minute,
 	}
-	conn, err := NewConnection(cfg)
-	defer conn.Close()
+	ctx := context.Background()
+	conn, err := NewConnection(ctx, cfg)
 	if err != nil {
 		t.Error(err)
+		return
 	}
+	defer conn.Close()
 	cmd := "sudo docker ps"
-	result, err := conn.Exec(cmd)
+	result, err := conn.Exec(ctx, cmd)
 	if err != nil {
 		t.Error(err)
 		return
@@ -36,13 +39,15 @@ func TestContainerSSH(t *testing.T) {
 		Port:     2222,
 		Timeout:  time.Minute,
 	}
-	conn, err := NewConnection(cfg)
-	defer conn.Close()
+	ctx := context.Background()
+	conn, err := NewConnection(ctx, cfg)
 	if err != nil {
 		t.Error(err)
+		return
 	}
+	defer conn.Close()
 	cmd := "pwd\nls\nls"
-	result, err := conn.Exec(cmd)
+	result, err := conn.Exec(ctx, cmd)
 	if err != nil {
 		t.Error(err)
 		return

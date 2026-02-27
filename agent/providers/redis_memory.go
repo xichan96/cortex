@@ -138,8 +138,7 @@ func (p *RedisMemoryProvider) GetMessages(ctx context.Context, limit int) ([]typ
 	return messages, nil
 }
 
-func (p *RedisMemoryProvider) LoadMemoryVariables() (map[string]interface{}, error) {
-	ctx := context.Background()
+func (p *RedisMemoryProvider) LoadMemoryVariables(ctx context.Context) (map[string]interface{}, error) {
 	p.mu.RLock()
 	maxHistoryMessages := p.maxHistoryMessages
 	p.mu.RUnlock()
@@ -152,8 +151,7 @@ func (p *RedisMemoryProvider) LoadMemoryVariables() (map[string]interface{}, err
 	}, nil
 }
 
-func (p *RedisMemoryProvider) SaveContext(input, output map[string]interface{}) error {
-	ctx := context.Background()
+func (p *RedisMemoryProvider) SaveContext(ctx context.Context, input, output map[string]interface{}) error {
 	if inputMsg, ok := input["input"].(string); ok {
 		if err := p.AddMessage(ctx, types.Message{
 			Role:    "user",
@@ -173,14 +171,12 @@ func (p *RedisMemoryProvider) SaveContext(input, output map[string]interface{}) 
 	return nil
 }
 
-func (p *RedisMemoryProvider) Clear() error {
-	ctx := context.Background()
+func (p *RedisMemoryProvider) Clear(ctx context.Context) error {
 	key := p.getKey()
 	return p.client.Del(ctx, key).Err()
 }
 
-func (p *RedisMemoryProvider) GetChatHistory() ([]types.Message, error) {
-	ctx := context.Background()
+func (p *RedisMemoryProvider) GetChatHistory(ctx context.Context) ([]types.Message, error) {
 	key := p.getKey()
 	// Fetch all messages (0 to -1)
 	results, err := p.client.LRange(ctx, key, 0, -1).Result()
@@ -211,14 +207,13 @@ func (p *RedisMemoryProvider) GetChatHistory() ([]types.Message, error) {
 }
 
 // CompressMemory compresses old messages into a summary (implements MemoryProvider interface)
-func (p *RedisMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages int) error {
+func (p *RedisMemoryProvider) CompressMemory(ctx context.Context, llm types.LLMProvider, maxMessages int) error {
 	if llm == nil {
 		return fmt.Errorf("LLM provider is required for memory compression")
 	}
 
 	p.mu.Lock()
 
-	ctx := context.Background()
 	key := p.getKey()
 	summaryKey := key + ":summary"
 
@@ -316,7 +311,7 @@ Please update the summary to include the new information, keeping it concise but
 %s`, newContent)
 	}
 
-	summaryMsg, err := llm.Chat([]types.Message{
+	summaryMsg, err := llm.Chat(ctx, []types.Message{
 		{
 			Role:    "system",
 			Content: "You are a helpful assistant that summarizes conversation history.",
@@ -349,10 +344,15 @@ Please update the summary to include the new information, keeping it concise but
 		"last_summarized_timestamp": newTimestamp,
 		"updated_at":                time.Now().Unix(),
 	}
+
 	newSummaryJSON, err := json.Marshal(newSummaryData)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to marshal summary data: %w", err)
 	}
 
-	return p.client.Set(ctx, summaryKey, newSummaryJSON, 0).Err()
+	if err := p.client.Set(ctx, summaryKey, newSummaryJSON, 0).Err(); err != nil {
+		return fmt.Errorf("failed to save summary to Redis: %w", err)
+	}
+
+	return nil
 }

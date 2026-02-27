@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"time"
@@ -40,7 +41,7 @@ func (t *PingTool) Schema() map[string]interface{} {
 	}
 }
 
-func (t *PingTool) Execute(input map[string]interface{}) (interface{}, error) {
+func (t *PingTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	address, ok := input["address"].(string)
 	if !ok {
 		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("invalid 'address' parameter: must be a string"))
@@ -56,7 +57,8 @@ func (t *PingTool) Execute(input map[string]interface{}) (interface{}, error) {
 		timeout = time.Duration(timeoutVal) * time.Second
 	}
 
-	conn, err := net.DialTimeout("tcp", address, timeout)
+	d := net.Dialer{Timeout: timeout}
+	conn, err := d.DialContext(ctx, "tcp", address)
 	if err != nil {
 		return map[string]interface{}{
 			"connected": false,

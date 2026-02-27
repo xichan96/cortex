@@ -1,6 +1,7 @@
 package file
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,8 +11,8 @@ var tmpDir = "/tmp"
 
 func TestIsDirEmpty(t *testing.T) {
 	f := New()
-
-	empty, err := f.IsDirEmpty(tmpDir)
+	ctx := context.Background()
+	empty, err := f.IsDirEmpty(ctx, tmpDir)
 	if err != nil {
 		t.Fatalf("IsDirEmpty failed: %v", err)
 	}
@@ -22,7 +23,7 @@ func TestIsDirEmpty(t *testing.T) {
 	testFile := filepath.Join(tmpDir, "test.txt")
 	os.WriteFile(testFile, []byte("test"), 0644)
 
-	empty, err = f.IsDirEmpty(tmpDir)
+	empty, err = f.IsDirEmpty(ctx, tmpDir)
 	if err != nil {
 		t.Fatalf("IsDirEmpty failed: %v", err)
 	}
@@ -33,8 +34,8 @@ func TestIsDirEmpty(t *testing.T) {
 
 func TestReadDir(t *testing.T) {
 	f := New()
-
-	names, err := f.ReadDir(tmpDir)
+	ctx := context.Background()
+	names, err := f.ReadDir(ctx, tmpDir)
 	if err != nil {
 		t.Fatalf("ReadDir failed: %v", err)
 	}
@@ -45,7 +46,7 @@ func TestReadDir(t *testing.T) {
 	os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte("test"), 0644)
 	os.WriteFile(filepath.Join(tmpDir, "file2.txt"), []byte("test"), 0644)
 
-	names, err = f.ReadDir(tmpDir)
+	names, err = f.ReadDir(ctx, tmpDir)
 	if err != nil {
 		t.Fatalf("ReadDir failed: %v", err)
 	}
@@ -56,15 +57,15 @@ func TestReadDir(t *testing.T) {
 
 func TestMkdir(t *testing.T) {
 	f := New()
-
+	ctx := context.Background()
 	newDir := filepath.Join(tmpDir, "newdir")
 
-	err := f.Mkdir(newDir)
+	err := f.Mkdir(ctx, newDir)
 	if err != nil {
 		t.Fatalf("Mkdir failed: %v", err)
 	}
 
-	exists, _ := f.Exists(newDir)
+	exists, _ := f.Exists(ctx, newDir)
 	if !exists {
 		t.Error("Directory was not created")
 	}
@@ -72,16 +73,16 @@ func TestMkdir(t *testing.T) {
 
 func TestRemoveDir(t *testing.T) {
 	f := New()
-
+	ctx := context.Background()
 	testDir := filepath.Join(tmpDir, "testdir")
 	os.MkdirAll(testDir, 0755)
 
-	err := f.RemoveDir(testDir)
+	err := f.RemoveDir(ctx, testDir)
 	if err != nil {
 		t.Fatalf("RemoveDir failed: %v", err)
 	}
 
-	exists, _ := f.Exists(testDir)
+	exists, _ := f.Exists(ctx, testDir)
 	if exists {
 		t.Error("Directory was not removed")
 	}
@@ -89,16 +90,16 @@ func TestRemoveDir(t *testing.T) {
 
 func TestRemoveFile(t *testing.T) {
 	f := New()
-
+	ctx := context.Background()
 	testFile := filepath.Join(tmpDir, "test.txt")
 	os.WriteFile(testFile, []byte("test"), 0644)
 
-	err := f.RemoveFile(testFile)
+	err := f.RemoveFile(ctx, testFile)
 	if err != nil {
 		t.Fatalf("RemoveFile failed: %v", err)
 	}
 
-	exists, _ := f.Exists(testFile)
+	exists, _ := f.Exists(ctx, testFile)
 	if exists {
 		t.Error("File was not removed")
 	}
@@ -106,22 +107,22 @@ func TestRemoveFile(t *testing.T) {
 
 func TestRename(t *testing.T) {
 	f := New()
-
+	ctx := context.Background()
 	src := filepath.Join(tmpDir, "src.txt")
 	dst := filepath.Join(tmpDir, "dst.txt")
 	os.WriteFile(src, []byte("test"), 0644)
 
-	err := f.Rename(src, dst)
+	err := f.Rename(ctx, src, dst)
 	if err != nil {
 		t.Fatalf("Rename failed: %v", err)
 	}
 
-	srcExists, _ := f.Exists(src)
+	srcExists, _ := f.Exists(ctx, src)
 	if srcExists {
 		t.Error("Source file still exists")
 	}
 
-	dstExists, _ := f.Exists(dst)
+	dstExists, _ := f.Exists(ctx, dst)
 	if !dstExists {
 		t.Error("Destination file was not created")
 	}
@@ -129,18 +130,18 @@ func TestRename(t *testing.T) {
 
 func TestCopy(t *testing.T) {
 	f := New()
-
+	ctx := context.Background()
 	src := filepath.Join(tmpDir, "src.txt")
 	dst := filepath.Join(tmpDir, "dst.txt")
 	content := []byte("test content")
 	os.WriteFile(src, content, 0644)
 
-	err := f.Copy(src, dst)
+	err := f.Copy(ctx, src, dst)
 	if err != nil {
 		t.Fatalf("Copy failed: %v", err)
 	}
 
-	dstContent, err := f.ReadFile(dst)
+	dstContent, err := f.ReadFile(ctx, dst)
 	if err != nil {
 		t.Fatalf("ReadFile failed: %v", err)
 	}
@@ -152,17 +153,17 @@ func TestCopy(t *testing.T) {
 
 func TestSymlink(t *testing.T) {
 	f := New()
-
+	ctx := context.Background()
 	target := filepath.Join(tmpDir, "target.txt")
 	link := filepath.Join(tmpDir, "link.txt")
 	os.WriteFile(target, []byte("test"), 0644)
 
-	err := f.Symlink(target, link)
+	err := f.Symlink(ctx, target, link)
 	if err != nil {
 		t.Fatalf("Symlink failed: %v", err)
 	}
 
-	linkTarget, err := f.ReadLink(link)
+	linkTarget, err := f.ReadLink(ctx, link)
 	if err != nil {
 		t.Fatalf("ReadLink failed: %v", err)
 	}
@@ -174,13 +175,13 @@ func TestSymlink(t *testing.T) {
 
 func TestReadLink(t *testing.T) {
 	f := New()
-
+	ctx := context.Background()
 	target := filepath.Join(tmpDir, "target.txt")
 	link := filepath.Join(tmpDir, "link.txt")
 	os.WriteFile(target, []byte("test"), 0644)
 	os.Symlink(target, link)
 
-	linkTarget, err := f.ReadLink(link)
+	linkTarget, err := f.ReadLink(ctx, link)
 	if err != nil {
 		t.Fatalf("ReadLink failed: %v", err)
 	}
@@ -192,12 +193,12 @@ func TestReadLink(t *testing.T) {
 
 func TestReadFile(t *testing.T) {
 	f := New()
-
+	ctx := context.Background()
 	testFile := filepath.Join(tmpDir, "test.txt")
 	content := []byte("test content")
 	os.WriteFile(testFile, content, 0644)
 
-	data, err := f.ReadFile(testFile)
+	data, err := f.ReadFile(ctx, testFile)
 	if err != nil {
 		t.Fatalf("ReadFile failed: %v", err)
 	}
@@ -209,11 +210,11 @@ func TestReadFile(t *testing.T) {
 
 func TestWriteFile(t *testing.T) {
 	f := New()
-
+	ctx := context.Background()
 	testFile := filepath.Join(tmpDir, "test.txt")
 	content := []byte("test content")
 
-	err := f.WriteFile(testFile, content)
+	err := f.WriteFile(ctx, testFile, content)
 	if err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
@@ -230,22 +231,22 @@ func TestWriteFile(t *testing.T) {
 
 func TestAppendFile(t *testing.T) {
 	f := New()
-
+	ctx := context.Background()
 	testFile := filepath.Join(tmpDir, "test.txt")
 	content1 := []byte("first ")
 	content2 := []byte("second")
 
-	err := f.WriteFile(testFile, content1)
+	err := f.WriteFile(ctx, testFile, content1)
 	if err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	err = f.AppendFile(testFile, content2)
+	err = f.AppendFile(ctx, testFile, content2)
 	if err != nil {
 		t.Fatalf("AppendFile failed: %v", err)
 	}
 
-	data, err := f.ReadFile(testFile)
+	data, err := f.ReadFile(ctx, testFile)
 	if err != nil {
 		t.Fatalf("ReadFile failed: %v", err)
 	}
@@ -258,10 +259,10 @@ func TestAppendFile(t *testing.T) {
 
 func TestExists(t *testing.T) {
 	f := New()
-
+	ctx := context.Background()
 	testFile := filepath.Join(tmpDir, "test.txt")
 
-	exists, err := f.Exists(testFile)
+	exists, err := f.Exists(ctx, testFile)
 	if err != nil {
 		t.Fatalf("Exists failed: %v", err)
 	}
@@ -271,7 +272,7 @@ func TestExists(t *testing.T) {
 
 	os.WriteFile(testFile, []byte("test"), 0644)
 
-	exists, err = f.Exists(testFile)
+	exists, err = f.Exists(ctx, testFile)
 	if err != nil {
 		t.Fatalf("Exists failed: %v", err)
 	}
@@ -282,14 +283,14 @@ func TestExists(t *testing.T) {
 
 func TestIsFile(t *testing.T) {
 	f := New()
-
+	ctx := context.Background()
 	testFile := filepath.Join(tmpDir, "test.txt")
 	testDir := filepath.Join(tmpDir, "testdir")
 
 	os.WriteFile(testFile, []byte("test"), 0644)
 	os.MkdirAll(testDir, 0755)
 
-	isFile, err := f.IsFile(testFile)
+	isFile, err := f.IsFile(ctx, testFile)
 	if err != nil {
 		t.Fatalf("IsFile failed: %v", err)
 	}
@@ -297,7 +298,7 @@ func TestIsFile(t *testing.T) {
 		t.Error("Expected file")
 	}
 
-	isFile, err = f.IsFile(testDir)
+	isFile, err = f.IsFile(ctx, testDir)
 	if err != nil {
 		t.Fatalf("IsFile failed: %v", err)
 	}
@@ -308,14 +309,14 @@ func TestIsFile(t *testing.T) {
 
 func TestIsDir(t *testing.T) {
 	f := New()
-
+	ctx := context.Background()
 	testFile := filepath.Join(tmpDir, "test.txt")
 	testDir := filepath.Join(tmpDir, "testdir")
 
 	os.WriteFile(testFile, []byte("test"), 0644)
 	os.MkdirAll(testDir, 0755)
 
-	isDir, err := f.IsDir(testDir)
+	isDir, err := f.IsDir(ctx, testDir)
 	if err != nil {
 		t.Fatalf("IsDir failed: %v", err)
 	}
@@ -323,7 +324,7 @@ func TestIsDir(t *testing.T) {
 		t.Error("Expected directory")
 	}
 
-	isDir, err = f.IsDir(testFile)
+	isDir, err = f.IsDir(ctx, testFile)
 	if err != nil {
 		t.Fatalf("IsDir failed: %v", err)
 	}
@@ -334,11 +335,11 @@ func TestIsDir(t *testing.T) {
 
 func TestStat(t *testing.T) {
 	f := New()
-
+	ctx := context.Background()
 	testFile := filepath.Join(tmpDir, "test.txt")
 	os.WriteFile(testFile, []byte("test"), 0644)
 
-	info, err := f.Stat(testFile)
+	info, err := f.Stat(ctx, testFile)
 	if err != nil {
 		t.Fatalf("Stat failed: %v", err)
 	}
@@ -354,11 +355,11 @@ func TestStat(t *testing.T) {
 
 func TestChmod(t *testing.T) {
 	f := New()
-
+	ctx := context.Background()
 	testFile := filepath.Join(tmpDir, "test.txt")
 	os.WriteFile(testFile, []byte("test"), 0644)
 
-	err := f.Chmod(testFile, 0755)
+	err := f.Chmod(ctx, testFile, 0755)
 	if err != nil {
 		t.Fatalf("Chmod failed: %v", err)
 	}
@@ -375,12 +376,12 @@ func TestChmod(t *testing.T) {
 
 func TestWalk(t *testing.T) {
 	f := New()
-
+	ctx := context.Background()
 	os.MkdirAll(filepath.Join(tmpDir, "subdir"), 0755)
 	os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte("test"), 0644)
 	os.WriteFile(filepath.Join(tmpDir, "subdir", "file2.txt"), []byte("test"), 0644)
 
-	paths, err := f.Walk(tmpDir)
+	paths, err := f.Walk(ctx, tmpDir)
 	if err != nil {
 		t.Fatalf("Walk failed: %v", err)
 	}
@@ -392,11 +393,11 @@ func TestWalk(t *testing.T) {
 
 func TestWalkDir(t *testing.T) {
 	f := New()
-
+	ctx := context.Background()
 	os.MkdirAll(filepath.Join(tmpDir, "subdir"), 0755)
 	os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte("test"), 0644)
 
-	paths, err := f.WalkDir(tmpDir)
+	paths, err := f.WalkDir(ctx, tmpDir)
 	if err != nil {
 		t.Fatalf("WalkDir failed: %v", err)
 	}
@@ -406,7 +407,7 @@ func TestWalkDir(t *testing.T) {
 	}
 
 	for _, path := range paths {
-		isDir, _ := f.IsDir(path)
+		isDir, _ := f.IsDir(ctx, path)
 		if !isDir {
 			t.Errorf("Expected directory, got file: %s", path)
 		}
@@ -415,12 +416,12 @@ func TestWalkDir(t *testing.T) {
 
 func TestWalkFile(t *testing.T) {
 	f := New()
-
+	ctx := context.Background()
 	os.MkdirAll(filepath.Join(tmpDir, "subdir"), 0755)
 	os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte("test"), 0644)
 	os.WriteFile(filepath.Join(tmpDir, "subdir", "file2.txt"), []byte("test"), 0644)
 
-	paths, err := f.WalkFile(tmpDir)
+	paths, err := f.WalkFile(ctx, tmpDir)
 	if err != nil {
 		t.Fatalf("WalkFile failed: %v", err)
 	}
@@ -430,7 +431,7 @@ func TestWalkFile(t *testing.T) {
 	}
 
 	for _, path := range paths {
-		isFile, _ := f.IsFile(path)
+		isFile, _ := f.IsFile(ctx, path)
 		if !isFile {
 			t.Errorf("Expected file, got directory: %s", path)
 		}
@@ -439,12 +440,12 @@ func TestWalkFile(t *testing.T) {
 
 func TestWalkRel(t *testing.T) {
 	f := New()
-
+	ctx := context.Background()
 	os.MkdirAll(filepath.Join(tmpDir, "subdir"), 0755)
 	os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte("test"), 0644)
 	os.WriteFile(filepath.Join(tmpDir, "subdir", "file2.txt"), []byte("test"), 0644)
 
-	paths, err := f.WalkRel(tmpDir)
+	paths, err := f.WalkRel(ctx, tmpDir)
 	if err != nil {
 		t.Fatalf("WalkRel failed: %v", err)
 	}
@@ -462,13 +463,13 @@ func TestWalkRel(t *testing.T) {
 
 func TestGlob(t *testing.T) {
 	f := New()
-
+	ctx := context.Background()
 	os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte("test"), 0644)
 	os.WriteFile(filepath.Join(tmpDir, "file2.txt"), []byte("test"), 0644)
 	os.WriteFile(filepath.Join(tmpDir, "file3.go"), []byte("test"), 0644)
 
 	pattern := filepath.Join(tmpDir, "*.txt")
-	matches, err := f.Glob(pattern)
+	matches, err := f.Glob(ctx, pattern)
 	if err != nil {
 		t.Fatalf("Glob failed: %v", err)
 	}

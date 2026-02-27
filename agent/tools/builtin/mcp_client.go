@@ -72,7 +72,7 @@ func (t *MCPClientTool) Schema() map[string]interface{} {
 	}
 }
 
-func (t *MCPClientTool) Execute(input map[string]interface{}) (interface{}, error) {
+func (t *MCPClientTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	action, ok := input["action"].(string)
 	if !ok {
 		return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("action is required"))
@@ -80,26 +80,26 @@ func (t *MCPClientTool) Execute(input map[string]interface{}) (interface{}, erro
 
 	switch action {
 	case "connect":
-		return t.connect(input)
+		return t.connect(ctx, input)
 	case "list_tools":
-		return t.listTools()
+		return t.listTools(ctx)
 	case "call_tool":
-		return t.callTool(input)
+		return t.callTool(ctx, input)
 	case "disconnect":
-		return t.disconnect()
+		return t.disconnect(ctx)
 	default:
 		return nil, errors.EC_PARAMETER_INVALID.Wrap(fmt.Errorf("unknown action: %s", action))
 	}
 }
 
-func (t *MCPClientTool) connect(input map[string]interface{}) (interface{}, error) {
+func (t *MCPClientTool) connect(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	// If already connected, disconnect first
 	if t.client != nil && t.client.IsConnected() {
 		// We could check if parameters are same, but for safety/simplicity, we reconnect
-		if err := t.client.Disconnect(context.Background()); err != nil {
+		if err := t.client.Disconnect(ctx); err != nil {
 			// Log error but continue
 		}
 	}
@@ -133,10 +133,10 @@ func (t *MCPClientTool) connect(input map[string]interface{}) (interface{}, erro
 		timeout = time.Duration(val) * time.Second
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	connectCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	if err := client.Connect(ctx); err != nil {
+	if err := client.Connect(connectCtx); err != nil {
 		return nil, err
 	}
 
@@ -148,7 +148,7 @@ func (t *MCPClientTool) connect(input map[string]interface{}) (interface{}, erro
 	}, nil
 }
 
-func (t *MCPClientTool) disconnect() (interface{}, error) {
+func (t *MCPClientTool) disconnect(ctx context.Context) (interface{}, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -156,10 +156,10 @@ func (t *MCPClientTool) disconnect() (interface{}, error) {
 		return map[string]interface{}{"status": "disconnected", "message": "no active connection"}, nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	disconnectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	err := t.client.Disconnect(ctx)
+	err := t.client.Disconnect(disconnectCtx)
 	t.client = nil
 	if err != nil {
 		return nil, err
@@ -167,7 +167,7 @@ func (t *MCPClientTool) disconnect() (interface{}, error) {
 	return map[string]interface{}{"status": "disconnected"}, nil
 }
 
-func (t *MCPClientTool) listTools() (interface{}, error) {
+func (t *MCPClientTool) listTools(ctx context.Context) (interface{}, error) {
 	t.mu.RLock()
 	client := t.client
 	t.mu.RUnlock()
@@ -188,7 +188,7 @@ func (t *MCPClientTool) listTools() (interface{}, error) {
 	return toolList, nil
 }
 
-func (t *MCPClientTool) callTool(input map[string]interface{}) (interface{}, error) {
+func (t *MCPClientTool) callTool(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	t.mu.RLock()
 	client := t.client
 	t.mu.RUnlock()
@@ -214,10 +214,10 @@ func (t *MCPClientTool) callTool(input map[string]interface{}) (interface{}, err
 		timeout = time.Duration(val) * time.Second
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	return client.CallTool(ctx, toolName, arguments)
+	return client.CallTool(callCtx, toolName, arguments)
 }
 
 func (t *MCPClientTool) Metadata() types.ToolMetadata {

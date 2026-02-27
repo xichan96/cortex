@@ -149,8 +149,7 @@ func (p *MongoDBMemoryProvider) GetMessages(ctx context.Context, limit int) ([]t
 	return messages, nil
 }
 
-func (p *MongoDBMemoryProvider) LoadMemoryVariables() (map[string]interface{}, error) {
-	ctx := context.Background()
+func (p *MongoDBMemoryProvider) LoadMemoryVariables(ctx context.Context) (map[string]interface{}, error) {
 	p.mu.RLock()
 	maxHistoryMessages := p.maxHistoryMessages
 	p.mu.RUnlock()
@@ -163,8 +162,7 @@ func (p *MongoDBMemoryProvider) LoadMemoryVariables() (map[string]interface{}, e
 	}, nil
 }
 
-func (p *MongoDBMemoryProvider) SaveContext(input, output map[string]interface{}) error {
-	ctx := context.Background()
+func (p *MongoDBMemoryProvider) SaveContext(ctx context.Context, input, output map[string]interface{}) error {
 	if inputMsg, ok := input["input"].(string); ok {
 		if err := p.AddMessage(ctx, types.Message{
 			Role:    "user",
@@ -184,14 +182,12 @@ func (p *MongoDBMemoryProvider) SaveContext(input, output map[string]interface{}
 	return nil
 }
 
-func (p *MongoDBMemoryProvider) Clear() error {
-	ctx := context.Background()
+func (p *MongoDBMemoryProvider) Clear(ctx context.Context) error {
 	filter := bson.M{"session_id": p.sessionID}
 	return p.getCollection().DeleteAll(ctx, filter)
 }
 
-func (p *MongoDBMemoryProvider) GetChatHistory() ([]types.Message, error) {
-	ctx := context.Background()
+func (p *MongoDBMemoryProvider) GetChatHistory(ctx context.Context) ([]types.Message, error) {
 	p.mu.RLock()
 	sessionID := p.sessionID
 	p.mu.RUnlock()
@@ -217,14 +213,13 @@ func (p *MongoDBMemoryProvider) GetChatHistory() ([]types.Message, error) {
 }
 
 // CompressMemory compresses old messages into a summary (implements MemoryProvider interface)
-func (p *MongoDBMemoryProvider) CompressMemory(llm types.LLMProvider, maxMessages int) error {
+func (p *MongoDBMemoryProvider) CompressMemory(ctx context.Context, llm types.LLMProvider, maxMessages int) error {
 	if llm == nil {
 		return fmt.Errorf("LLM provider is required for memory compression")
 	}
 
 	p.mu.Lock()
 
-	ctx := context.Background()
 	sessionID := p.sessionID
 
 	// 1. Get current summary state
@@ -296,7 +291,7 @@ Please update the summary to include the new information, keeping it concise but
 %s`, newContent)
 	}
 
-	summaryMsg, err := llm.Chat([]types.Message{
+	summaryMsg, err := llm.Chat(ctx, []types.Message{
 		{
 			Role:    "system",
 			Content: "You are a helpful assistant that summarizes conversation history.",

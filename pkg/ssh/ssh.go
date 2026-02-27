@@ -45,7 +45,7 @@ type connection struct {
 	cancel     context.CancelFunc
 }
 
-func NewConnection(cfg Cfg) (Connection, error) {
+func NewConnection(ctx context.Context, cfg Cfg) (Connection, error) {
 	cfg, err := validateOptions(cfg)
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to validate ssh connection parameters")
@@ -242,12 +242,18 @@ func (c *connection) session() (*ssh.Session, error) {
 	return sess, nil
 }
 
-func (c *connection) Exec(cmd string) (stdout string, err error) {
+func (c *connection) Exec(ctx context.Context, cmd string) (stdout string, err error) {
 	sess, err := c.session()
 	if err != nil {
 		return "", errors.Wrap(err, "failed to get SSH session")
 	}
 	defer sess.Close()
+
+	go func() {
+		<-ctx.Done()
+		_ = sess.Signal(ssh.SIGKILL)
+		_ = sess.Close()
+	}()
 
 	exitCode := 0
 

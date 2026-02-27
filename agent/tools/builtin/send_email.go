@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/xichan96/cortex/agent/types"
@@ -53,7 +54,7 @@ func (t *EmailTool) Schema() map[string]interface{} {
 	}
 }
 
-func (t *EmailTool) Execute(input map[string]interface{}) (interface{}, error) {
+func (t *EmailTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	to, ok := input["to"].([]interface{})
 	if !ok {
 		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("invalid 'to' parameter: must be an array"))
@@ -103,7 +104,7 @@ func (t *EmailTool) Execute(input map[string]interface{}) (interface{}, error) {
 		return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("'message' parameter cannot be empty"))
 	}
 
-	err := email.Do(t.cfg, toEmails, &email.Content{
+	err := email.Do(ctx, t.cfg, toEmails, &email.Content{
 		Title:   subject,
 		Type:    contentType,
 		Message: message,

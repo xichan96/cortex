@@ -84,7 +84,7 @@ func (t *ScheduleJobTool) Schema() map[string]interface{} {
 	}
 }
 
-func (t *ScheduleJobTool) Execute(input map[string]interface{}) (interface{}, error) {
+func (t *ScheduleJobTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	name, ok := input["name"].(string)
 	if !ok || name == "" {
 		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("name is required"))
@@ -123,10 +123,12 @@ func (t *ScheduleJobTool) Execute(input map[string]interface{}) (interface{}, er
 		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("invalid job type: %s", jobTypeStr))
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Use the provided context, but ensure we have a timeout for the scheduling operation itself
+	// The job execution will happen asynchronously, so this timeout is just for adding the job to the scheduler
+	scheduleCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	id, err := t.scheduler.AddJob(ctx, name, jobType, schedule, xcron.TaskType(taskType), payload, 0)
+	id, err := t.scheduler.AddJob(scheduleCtx, name, jobType, schedule, xcron.TaskType(taskType), payload, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -177,8 +179,8 @@ func (t *ListJobsTool) Schema() map[string]interface{} {
 	}
 }
 
-func (t *ListJobsTool) Execute(input map[string]interface{}) (interface{}, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (t *ListJobsTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	listCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	limit := 50
@@ -192,7 +194,7 @@ func (t *ListJobsTool) Execute(input map[string]interface{}) (interface{}, error
 	}
 
 	// Default to listing first 50 jobs
-	jobs, _, err := t.scheduler.ListJobs(ctx, offset, limit)
+	jobs, _, err := t.scheduler.ListJobs(listCtx, offset, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -250,16 +252,16 @@ func (t *DeleteJobTool) Schema() map[string]interface{} {
 	}
 }
 
-func (t *DeleteJobTool) Execute(input map[string]interface{}) (interface{}, error) {
+func (t *DeleteJobTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	jobID, ok := input["job_id"].(string)
 	if !ok || jobID == "" {
 		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("job_id is required"))
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	deleteCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	if err := t.scheduler.RemoveJob(ctx, jobID); err != nil {
+	if err := t.scheduler.RemoveJob(deleteCtx, jobID); err != nil {
 		return nil, err
 	}
 
