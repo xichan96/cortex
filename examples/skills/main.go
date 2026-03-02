@@ -188,6 +188,16 @@ func main() {
 		}
 		fmt.Println() // Newline after stream
 
+		// Display usage statistics
+		if finalResult != nil {
+			fmt.Printf("\n--- Token Usage ---\n")
+			fmt.Printf("Prompt: %d, Completion: %d, Total: %d\n",
+				finalResult.Usage.PromptTokens,
+				finalResult.Usage.CompletionTokens,
+				finalResult.Usage.TotalTokens)
+			fmt.Println("-------------------")
+		}
+
 		// Display tool calls if any occurred
 		if finalResult != nil && len(finalResult.ToolCalls) > 0 {
 			fmt.Println("\n--- Tool Call Details ---")
@@ -199,6 +209,14 @@ func main() {
 			fmt.Println("-------------------------")
 		}
 	}
+
+	// Display total usage statistics
+	totalUsage := agentEngine.GetTotalUsage()
+	fmt.Println("\n=== Final Token Usage ===")
+	fmt.Printf("Total Prompt Tokens: %d\n", totalUsage.PromptTokens)
+	fmt.Printf("Total Completion Tokens: %d\n", totalUsage.CompletionTokens)
+	fmt.Printf("Total Tokens: %d\n", totalUsage.TotalTokens)
+	fmt.Println("=========================")
 
 	fmt.Println("Goodbye!")
 }

@@ -109,10 +109,11 @@ func (p *LangChainLLMProvider) Chat(ctx context.Context, messages []types.Messag
 
 			// Not a 429 error or max retries exceeded
 			return types.Message{}, err
-		}
-
+		} // Convert response
 		if len(response.Choices) > 0 {
-			return p.convertMessageFromLangChain(response.Choices[0]), nil
+			msg := p.convertMessageFromLangChain(response.Choices[0])
+			msg.Usage = *p.extractUsage(response)
+			return msg, nil
 		}
 
 		return types.Message{}, errors.EC_LLM_NO_RESPONSE
@@ -147,7 +148,9 @@ func (p *LangChainLLMProvider) ChatStream(ctx context.Context, messages []types.
 			}
 
 			// Streaming call
-			_, err := p.model.GenerateContent(ctx, langChainMessages, llms.WithStreamingFunc(func(c context.Context, chunk []byte) error {
+			var response *llms.ContentResponse
+			var err error
+			response, err = p.model.GenerateContent(ctx, langChainMessages, llms.WithStreamingFunc(func(c context.Context, chunk []byte) error {
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
@@ -180,7 +183,8 @@ func (p *LangChainLLMProvider) ChatStream(ctx context.Context, messages []types.
 			}
 
 			// Successfully completed, send end signal
-			outputChan <- types.StreamMessage{Type: "end"}
+			usage := p.extractUsage(response)
+			outputChan <- types.StreamMessage{Type: "end", Usage: usage}
 			break
 		}
 	}()
@@ -222,7 +226,9 @@ func (p *LangChainLLMProvider) ChatWithTools(ctx context.Context, messages []typ
 
 		// Convert response
 		if len(response.Choices) > 0 {
-			return p.convertMessageFromLangChain(response.Choices[0]), nil
+			msg := p.convertMessageFromLangChain(response.Choices[0])
+			msg.Usage = *p.extractUsage(response)
+			return msg, nil
 		}
 
 		return types.Message{}, errors.EC_LLM_NO_RESPONSE
@@ -350,7 +356,8 @@ func (p *LangChainLLMProvider) ChatWithToolsStream(ctx context.Context, messages
 			}
 
 			// Successfully completed, send end signal
-			outputChan <- types.StreamMessage{Type: "end"}
+			usage := p.extractUsage(fullResponse)
+			outputChan <- types.StreamMessage{Type: "end", Usage: usage}
 			break
 		}
 	}()
@@ -370,6 +377,72 @@ func (p *LangChainLLMProvider) GetModelMetadata() types.ModelMetadata {
 		Version:   "1.0.0",
 		MaxTokens: 4096,
 	}
+}
+
+// extractUsage extracts token usage from response
+func (p *LangChainLLMProvider) extractUsage(response *llms.ContentResponse) *types.Usage {
+	usage := &types.Usage{}
+	if response == nil || len(response.Choices) == 0 {
+		return usage
+	}
+
+	choice := response.Choices[0]
+	if choice.GenerationInfo == nil {
+		return usage
+	}
+
+	// Helper function to extract int value
+	getInt := func(v interface{}) int {
+		switch val := v.(type) {
+		case int:
+			return val
+		case float64:
+			return int(val)
+		case float32:
+			return int(val)
+		case int64:
+			return int(val)
+		default:
+			return 0
+		}
+	}
+
+	// Check for "token_usage" map (common in some providers)
+	if usageData, ok := choice.GenerationInfo["token_usage"]; ok {
+		if usageMap, ok := usageData.(map[string]interface{}); ok {
+			if v, ok := usageMap["prompt_tokens"]; ok {
+				usage.PromptTokens = getInt(v)
+			}
+			if v, ok := usageMap["completion_tokens"]; ok {
+				usage.CompletionTokens = getInt(v)
+			}
+			if v, ok := usageMap["total_tokens"]; ok {
+				usage.TotalTokens = getInt(v)
+			}
+			return usage
+		}
+	}
+
+	// Check for direct keys in GenerationInfo (common in others)
+	if v, ok := choice.GenerationInfo["PromptTokens"]; ok {
+		usage.PromptTokens = getInt(v)
+	} else if v, ok := choice.GenerationInfo["prompt_tokens"]; ok {
+		usage.PromptTokens = getInt(v)
+	}
+
+	if v, ok := choice.GenerationInfo["CompletionTokens"]; ok {
+		usage.CompletionTokens = getInt(v)
+	} else if v, ok := choice.GenerationInfo["completion_tokens"]; ok {
+		usage.CompletionTokens = getInt(v)
+	}
+
+	if v, ok := choice.GenerationInfo["TotalTokens"]; ok {
+		usage.TotalTokens = getInt(v)
+	} else if v, ok := choice.GenerationInfo["total_tokens"]; ok {
+		usage.TotalTokens = getInt(v)
+	}
+
+	return usage
 }
 
 // convertToLangChainMessages converts message format

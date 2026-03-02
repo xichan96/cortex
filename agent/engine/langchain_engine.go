@@ -24,6 +24,7 @@ type LangChainAgentEngine struct {
 	systemPrompt       string
 	memory             []types.Message
 	maxHistoryMessages int
+	totalUsage         types.Usage
 }
 
 // NewLangChainAgentEngine creates a new LangChain agent engine
@@ -107,6 +108,9 @@ func (e *LangChainAgentEngine) ExecuteSimple(ctx context.Context, input string) 
 		}
 
 		e.mu.Lock()
+		e.totalUsage.PromptTokens += response.Usage.PromptTokens
+		e.totalUsage.CompletionTokens += response.Usage.CompletionTokens
+		e.totalUsage.TotalTokens += response.Usage.TotalTokens
 		e.memory = append(e.memory, response)
 		e.limitMemoryLocked()
 		e.mu.Unlock()
@@ -124,6 +128,9 @@ func (e *LangChainAgentEngine) ExecuteSimple(ctx context.Context, input string) 
 	}
 
 	e.mu.Lock()
+	e.totalUsage.PromptTokens += response.Usage.PromptTokens
+	e.totalUsage.CompletionTokens += response.Usage.CompletionTokens
+	e.totalUsage.TotalTokens += response.Usage.TotalTokens
 	e.memory = append(e.memory, response)
 	e.limitMemoryLocked()
 	e.mu.Unlock()
@@ -162,6 +169,13 @@ func (e *LangChainAgentEngine) ExecuteStreamSimple(ctx context.Context, input st
 
 		var fullContent strings.Builder
 		for msg := range stream {
+			if msg.Usage != nil {
+				e.mu.Lock()
+				e.totalUsage.PromptTokens += msg.Usage.PromptTokens
+				e.totalUsage.CompletionTokens += msg.Usage.CompletionTokens
+				e.totalUsage.TotalTokens += msg.Usage.TotalTokens
+				e.mu.Unlock()
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -414,8 +428,11 @@ func (e *LangChainAgentEngine) Execute(ctx context.Context, input string, previo
 	logger.LogExecution("LangChainAgentEngine.Execute", 0, "Execution completed",
 		slog.Duration("duration", executionTime))
 
+	// Note: ExecuteSimple has already updated e.totalUsage
+
 	return &AgentResult{
 		Output: output,
+		Usage:  e.GetTotalUsage(), // Return current total usage as this run's usage (simplified)
 	}, nil
 }
 
@@ -460,4 +477,11 @@ func (e *LangChainAgentEngine) ExecuteStream(ctx context.Context, input string, 
 // Stop stops the agent engine (LangChain engine requires no special stop operation)
 func (e *LangChainAgentEngine) Stop(ctx context.Context) {
 	// LangChain engine requires no special stop operation
+}
+
+// GetTotalUsage gets total token usage
+func (e *LangChainAgentEngine) GetTotalUsage() types.Usage {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.totalUsage
 }
