@@ -3,12 +3,11 @@ package builtin
 import (
 	"context"
 	"fmt"
-	"os/exec"
-	"strings"
 	"time"
 
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
+	"github.com/xichan96/cortex/pkg/shell"
 )
 
 type CommandTool struct{}
@@ -61,21 +60,8 @@ func (t *CommandTool) Execute(ctx context.Context, input map[string]interface{})
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	parts := strings.Fields(command)
-	if len(parts) == 0 {
-		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("invalid 'command' parameter: command cannot be empty"))
-	}
-
-	cmd := exec.CommandContext(execCtx, parts[0], parts[1:]...)
-
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-
-	output := stdout.String()
-	errOutput := stderr.String()
+	sh := shell.NewShell(nil)
+	stdout, stderr, err := sh.Exec(execCtx, command)
 
 	if execCtx.Err() == context.DeadlineExceeded {
 		return nil, errors.EC_TOOL_EXECUTION_TIMEOUT.Wrap(fmt.Errorf("command execution timeout after %v", timeout))
@@ -84,9 +70,9 @@ func (t *CommandTool) Execute(ctx context.Context, input map[string]interface{})
 	if err != nil {
 		return map[string]interface{}{
 			"command":   command,
-			"exit_code": cmd.ProcessState.ExitCode(),
-			"stdout":    output,
-			"stderr":    errOutput,
+			"exit_code": shell.ExitCode(err),
+			"stdout":    stdout,
+			"stderr":    stderr,
 			"error":     err.Error(),
 		}, nil
 	}
@@ -94,8 +80,8 @@ func (t *CommandTool) Execute(ctx context.Context, input map[string]interface{})
 	return map[string]interface{}{
 		"command":   command,
 		"exit_code": 0,
-		"stdout":    output,
-		"stderr":    errOutput,
+		"stdout":    stdout,
+		"stderr":    stderr,
 	}, nil
 }
 

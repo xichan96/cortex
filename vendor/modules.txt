@@ -38,6 +38,9 @@ github.com/bytedance/sonic/utf8
 # github.com/cespare/xxhash/v2 v2.3.0
 ## explicit; go 1.11
 github.com/cespare/xxhash/v2
+# github.com/charmbracelet/x/exp/slice v0.0.0-20260301212224-50d5c240f29a
+## explicit; go 1.24.0
+github.com/charmbracelet/x/exp/slice
 # github.com/chenzhuoyu/base64x v0.0.0-20221115062448-fe3a3abad311
 ## explicit; go 1.15
 github.com/chenzhuoyu/base64x
@@ -51,6 +54,9 @@ github.com/dgryski/go-rendezvous
 ## explicit; go 1.13
 github.com/dlclark/regexp2
 github.com/dlclark/regexp2/syntax
+# github.com/dustin/go-humanize v1.0.1
+## explicit; go 1.16
+github.com/dustin/go-humanize
 # github.com/gabriel-vasile/mimetype v1.4.2
 ## explicit; go 1.20
 github.com/gabriel-vasile/mimetype
@@ -128,6 +134,9 @@ github.com/klauspost/compress/zstd/internal/xxhash
 # github.com/klauspost/cpuid/v2 v2.2.9
 ## explicit; go 1.20
 github.com/klauspost/cpuid/v2
+# github.com/klauspost/pgzip v1.2.6
+## explicit
+github.com/klauspost/pgzip
 # github.com/kr/fs v0.1.0
 ## explicit
 github.com/kr/fs
@@ -170,6 +179,13 @@ github.com/pelletier/go-toml/v2/internal/characters
 github.com/pelletier/go-toml/v2/internal/danger
 github.com/pelletier/go-toml/v2/internal/tracker
 github.com/pelletier/go-toml/v2/unstable
+# github.com/pierrec/lz4/v4 v4.1.22
+## explicit; go 1.14
+github.com/pierrec/lz4/v4
+github.com/pierrec/lz4/v4/internal/lz4block
+github.com/pierrec/lz4/v4/internal/lz4errors
+github.com/pierrec/lz4/v4/internal/lz4stream
+github.com/pierrec/lz4/v4/internal/xxh32
 # github.com/pkg/errors v0.9.1
 ## explicit
 github.com/pkg/errors
@@ -247,6 +263,32 @@ github.com/twitchyliquid64/golang-asm/objabi
 github.com/twitchyliquid64/golang-asm/src
 github.com/twitchyliquid64/golang-asm/sys
 github.com/twitchyliquid64/golang-asm/unsafeheader
+# github.com/u-root/u-root v0.14.1-0.20250807200646-5e7721023dc7
+## explicit; go 1.24.0
+github.com/u-root/u-root/pkg/core
+github.com/u-root/u-root/pkg/core/base64
+github.com/u-root/u-root/pkg/core/cat
+github.com/u-root/u-root/pkg/core/chmod
+github.com/u-root/u-root/pkg/core/cp
+github.com/u-root/u-root/pkg/core/find
+github.com/u-root/u-root/pkg/core/gzip
+github.com/u-root/u-root/pkg/core/ls
+github.com/u-root/u-root/pkg/core/mkdir
+github.com/u-root/u-root/pkg/core/mktemp
+github.com/u-root/u-root/pkg/core/mv
+github.com/u-root/u-root/pkg/core/rm
+github.com/u-root/u-root/pkg/core/shasum
+github.com/u-root/u-root/pkg/core/tar
+github.com/u-root/u-root/pkg/core/touch
+github.com/u-root/u-root/pkg/core/xargs
+github.com/u-root/u-root/pkg/gzip
+github.com/u-root/u-root/pkg/ls
+github.com/u-root/u-root/pkg/tarutil
+github.com/u-root/u-root/pkg/upath
+github.com/u-root/u-root/pkg/uroot/unixflag
+# github.com/u-root/uio v0.0.0-20240224005618-d2acac8f3701
+## explicit; go 1.21
+github.com/u-root/uio/uio
 # github.com/ugorji/go/codec v1.2.11
 ## explicit; go 1.11
 github.com/ugorji/go/codec
@@ -359,8 +401,12 @@ golang.org/x/sync/singleflight
 # golang.org/x/sys v0.37.0
 ## explicit; go 1.24.0
 golang.org/x/sys/cpu
+golang.org/x/sys/plan9
 golang.org/x/sys/unix
 golang.org/x/sys/windows
+# golang.org/x/term v0.36.0
+## explicit; go 1.24.0
+golang.org/x/term
 # golang.org/x/text v0.30.0
 ## explicit; go 1.24.0
 golang.org/x/text/cases
@@ -423,3 +469,13 @@ gorm.io/gorm/utils/tests
 # gorm.io/plugin/dbresolver v1.6.2
 ## explicit; go 1.18
 gorm.io/plugin/dbresolver
+# mvdan.cc/sh/moreinterp v0.0.0-20250902163504-3cf4fd5717a5
+## explicit; go 1.24.0
+mvdan.cc/sh/moreinterp/coreutils
+# mvdan.cc/sh/v3 v3.12.0
+## explicit; go 1.23.0
+mvdan.cc/sh/v3/expand
+mvdan.cc/sh/v3/fileutil
+mvdan.cc/sh/v3/interp
+mvdan.cc/sh/v3/pattern
+mvdan.cc/sh/v3/syntax
