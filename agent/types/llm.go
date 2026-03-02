@@ -34,6 +34,14 @@ type Message struct {
 	ToolCalls  []ToolCall    `json:"tool_calls,omitempty"`
 	ToolCallID string        `json:"tool_call_id,omitempty"`
 	Parts      []MessagePart `json:"parts,omitempty"` // Multi-modal content support
+	Usage      Usage         `json:"usage,omitempty"` // Token usage information
+}
+
+// Usage token usage information
+type Usage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
 }
 
 // MessagePart message part interface
@@ -83,6 +91,7 @@ type StreamMessage struct {
 	Content   string     `json:"content,omitempty"`
 	Error     string     `json:"error,omitempty"`
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	Usage     *Usage     `json:"usage,omitempty"`
 }
 
 // MemoryProvider memory system interface

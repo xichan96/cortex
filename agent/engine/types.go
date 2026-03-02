@@ -39,6 +39,7 @@ type AgentResult struct {
 	Output            string                  `json:"output"`
 	ToolCalls         []types.ToolCallRequest `json:"tool_calls"`
 	IntermediateSteps []types.ToolCallData    `json:"intermediate_steps"`
+	Usage             types.Usage             `json:"usage"`
 }
 
 // toolCacheEntry tool cache entry with LRU support

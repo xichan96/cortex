@@ -47,6 +47,9 @@ type Agent interface {
 
 	// Lifecycle management
 	Stop(ctx context.Context)
+
+	// Usage tracking
+	GetTotalUsage() types.Usage
 }
 
 // AgentEngine agent engine
@@ -79,6 +82,9 @@ type AgentEngine struct {
 
 	// Rate limiting
 	rateLimiter ratelimit.RateLimiter // Rate limiter for request throttling
+
+	// Usage tracking
+	totalUsage types.Usage // Total token usage
 }
 
 // NewAgentEngine creates a new agent engine
@@ -245,6 +251,13 @@ func (ae *AgentEngine) SetRateLimiter(ctx context.Context, limiter ratelimit.Rat
 	ae.rateLimiter = limiter
 }
 
+// GetTotalUsage gets the total token usage
+func (ae *AgentEngine) GetTotalUsage() types.Usage {
+	ae.mu.RLock()
+	defer ae.mu.RUnlock()
+	return ae.totalUsage
+}
+
 // AddTool adds a tool
 func (ae *AgentEngine) AddTool(ctx context.Context, tool types.Tool) {
 	ae.mu.Lock()
@@ -329,6 +342,7 @@ func (ae *AgentEngine) Execute(ctx context.Context, input string, previousReques
 
 	// Initialize finalResult to prevent nil pointer panic
 	finalResult = &AgentResult{Output: ""}
+	totalUsage := types.Usage{}
 
 	// Iterate until no tool calls or maximum iterations reached
 	for iteration < maxIterations {
@@ -347,8 +361,14 @@ func (ae *AgentEngine) Execute(ctx context.Context, input string, previousReques
 			return nil, errors.NewError(errors.EC_ITERATION_FAILED.Code, fmt.Sprintf("iteration %d failed", iteration+1)).Wrap(err)
 		}
 
+		// Accumulate usage
+		totalUsage.PromptTokens += result.Usage.PromptTokens
+		totalUsage.CompletionTokens += result.Usage.CompletionTokens
+		totalUsage.TotalTokens += result.Usage.TotalTokens
+
 		// Save final result
 		finalResult = result
+		finalResult.Usage = totalUsage
 
 		// If no tool calls or continuation not needed, end
 		if !continueIterating || len(result.ToolCalls) == 0 {
@@ -632,6 +652,7 @@ func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Me
 
 	result := &AgentResult{
 		Output: response.Content,
+		Usage:  response.Usage,
 	}
 
 	// Handle tool calls
@@ -887,6 +908,9 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 
 		// Accumulate final result
 		finalResult.Output = iterationResult.Output
+		finalResult.Usage.PromptTokens += iterationResult.Usage.PromptTokens
+		finalResult.Usage.CompletionTokens += iterationResult.Usage.CompletionTokens
+		finalResult.Usage.TotalTokens += iterationResult.Usage.TotalTokens
 		toolCalls = append(toolCalls, iterationResult.ToolCalls...)
 		intermediateSteps = append(intermediateSteps, iterationResult.IntermediateSteps...)
 
@@ -957,9 +981,17 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 	finalResult.ToolCalls = toolCalls
 	finalResult.IntermediateSteps = intermediateSteps
 
+	// Update total usage
+	ae.mu.Lock()
+	ae.totalUsage.PromptTokens += finalResult.Usage.PromptTokens
+	ae.totalUsage.CompletionTokens += finalResult.Usage.CompletionTokens
+	ae.totalUsage.TotalTokens += finalResult.Usage.TotalTokens
+	ae.mu.Unlock()
+
 	logger.LogExecution("executeStreamWithIterations", 0, "Stream execution completed successfully",
 		slog.Int("total_iterations", len(toolCalls)),
-		slog.Int("total_tools", len(toolCalls)))
+		slog.Int("total_tools", len(toolCalls)),
+		slog.Int("total_tokens", finalResult.Usage.TotalTokens))
 
 	resultChan <- StreamResult{
 		Type:   "end",
@@ -1018,6 +1050,9 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 	outputBuilder.Grow(2048)
 
 	for msg := range stream {
+		if msg.Usage != nil {
+			result.Usage = *msg.Usage
+		}
 		switch msg.Type {
 		case "chunk":
 			outputBuilder.WriteString(msg.Content)
