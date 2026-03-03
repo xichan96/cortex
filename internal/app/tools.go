@@ -9,6 +9,7 @@ import (
 	"github.com/xichan96/cortex/agent/tools/builtin/math"
 	"github.com/xichan96/cortex/agent/tools/builtin/net"
 	"github.com/xichan96/cortex/agent/tools/builtin/runtime"
+	"github.com/xichan96/cortex/agent/tools/builtin/system"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/internal/config"
 	"github.com/xichan96/cortex/pkg/email"
@@ -62,7 +63,7 @@ func (a *agent) initBuiltinTools() []types.Tool {
 	}
 
 	if cfg.Time.Enabled {
-		tools = append(tools, runtime.NewTimeTool())
+		tools = append(tools, system.NewTimeTool())
 	}
 
 	if cfg.Email.Enabled {
