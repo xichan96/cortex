@@ -1,4 +1,4 @@
-package builtin
+package net
 
 import (
 	"context"
@@ -166,6 +166,6 @@ func (t *SSHTool) Metadata() types.ToolMetadata {
 	return types.ToolMetadata{
 		SourceNodeName: "ssh",
 		IsFromToolkit:  false,
-		ToolType:       "builtin",
+		ToolType:       "net",
 	}
 }

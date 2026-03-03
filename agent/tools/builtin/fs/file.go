@@ -1,4 +1,4 @@
-package builtin
+package fs
 
 import (
 	"context"
@@ -10,11 +10,12 @@ import (
 )
 
 type FileTool struct {
-	file file.File
+	workspace string
+	file     file.File
 }
 
-func NewFileTool() types.Tool {
-	return &FileTool{file: file.New()}
+func NewFileTool(workspace string) types.Tool {
+	return &FileTool{workspace: defaultWorkspace(workspace), file: file.New()}
 }
 
 func (t *FileTool) Name() string {
@@ -26,65 +27,41 @@ func (t *FileTool) Description() string {
 }
 
 func (t *FileTool) Schema() map[string]interface{} {
-	return map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"operation": map[string]interface{}{
-				"type":        "string",
-				"description": "File operation type",
-				"enum": []string{
-					"read_file",
-					"write_file",
-					"append_file",
-					"create_dir",
-					"delete_file",
-					"delete_dir",
-					"list_dir",
-					"exists",
-					"copy",
-					"move",
-					"is_file",
-					"is_dir",
-				},
-			},
-			"path": map[string]interface{}{
-				"type":        "string",
-				"description": "File or directory path",
-			},
-			"content": map[string]interface{}{
-				"type":        "string",
-				"description": "File content (required for write_file and append_file)",
-			},
-			"target_path": map[string]interface{}{
-				"type":        "string",
-				"description": "Target path (required for copy and move operations)",
+	return schemaObject(map[string]interface{}{
+		"operation": map[string]interface{}{
+			"type":        "string",
+			"description": "File operation type",
+			"enum": []string{
+				"read_file", "write_file", "append_file", "create_dir",
+				"delete_file", "delete_dir", "list_dir", "exists",
+				"copy", "move", "is_file", "is_dir",
 			},
 		},
-		"required": []string{"operation", "path"},
-	}
+		"path":        map[string]interface{}{"type": "string", "description": "File or directory path"},
+		"content":     map[string]interface{}{"type": "string", "description": "File content (required for write_file and append_file)"},
+		"target_path": map[string]interface{}{"type": "string", "description": "Target path (required for copy and move operations)"},
+	}, []string{"operation", "path"})
 }
 
 func (t *FileTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-
 	operation, ok := input["operation"].(string)
 	if !ok {
 		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("invalid 'operation' parameter: must be a string"))
 	}
-
 	path, ok := input["path"].(string)
-	if !ok {
-		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("invalid 'path' parameter: must be a string"))
+	if !ok || path == "" {
+		return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("'path' parameter is required"))
 	}
-	if path == "" {
-		return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("'path' parameter cannot be empty"))
+	safePath, err := SafePath(t.workspace, path)
+	if err != nil {
+		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(err)
 	}
-
 	switch operation {
 	case "read_file":
-		data, err := t.file.ReadFile(ctx, path)
+		data, err := t.file.ReadFile(ctx, safePath)
 		if err != nil {
 			return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(fmt.Errorf("failed to read file: %w", err))
 		}
@@ -98,7 +75,7 @@ func (t *FileTool) Execute(ctx context.Context, input map[string]interface{}) (i
 		if !ok {
 			return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("'content' parameter is required for write_file operation"))
 		}
-		err := t.file.WriteFile(ctx, path, []byte(content))
+		err := t.file.WriteFile(ctx, safePath, []byte(content))
 		if err != nil {
 			return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(fmt.Errorf("failed to write file: %w", err))
 		}
@@ -109,35 +86,35 @@ func (t *FileTool) Execute(ctx context.Context, input map[string]interface{}) (i
 		if !ok {
 			return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("'content' parameter is required for append_file operation"))
 		}
-		err := t.file.AppendFile(ctx, path, []byte(content))
+		err := t.file.AppendFile(ctx, safePath, []byte(content))
 		if err != nil {
 			return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(fmt.Errorf("failed to append file: %w", err))
 		}
 		return fmt.Sprintf("Content appended successfully to: %s", path), nil
 
 	case "create_dir":
-		err := t.file.Mkdir(ctx, path)
+		err := t.file.Mkdir(ctx, safePath)
 		if err != nil {
 			return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(fmt.Errorf("failed to create directory: %w", err))
 		}
 		return fmt.Sprintf("Directory created successfully: %s", path), nil
 
 	case "delete_file":
-		err := t.file.RemoveFile(ctx, path)
+		err := t.file.RemoveFile(ctx, safePath)
 		if err != nil {
 			return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(fmt.Errorf("failed to delete file: %w", err))
 		}
 		return fmt.Sprintf("File deleted successfully: %s", path), nil
 
 	case "delete_dir":
-		err := t.file.RemoveDir(ctx, path)
+		err := t.file.RemoveDir(ctx, safePath)
 		if err != nil {
 			return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(fmt.Errorf("failed to delete directory: %w", err))
 		}
 		return fmt.Sprintf("Directory deleted successfully: %s", path), nil
 
 	case "list_dir":
-		entries, err := t.file.ReadDir(ctx, path)
+		entries, err := t.file.ReadDir(ctx, safePath)
 		if err != nil {
 			return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(fmt.Errorf("failed to list directory: %w", err))
 		}
@@ -147,7 +124,7 @@ func (t *FileTool) Execute(ctx context.Context, input map[string]interface{}) (i
 		}, nil
 
 	case "exists":
-		exists, err := t.file.Exists(ctx, path)
+		exists, err := t.file.Exists(ctx, safePath)
 		if err != nil {
 			return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(fmt.Errorf("failed to check existence: %w", err))
 		}
@@ -161,7 +138,11 @@ func (t *FileTool) Execute(ctx context.Context, input map[string]interface{}) (i
 		if !ok || targetPath == "" {
 			return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("'target_path' parameter is required for copy operation"))
 		}
-		err := t.file.Copy(ctx, path, targetPath)
+		safeTarget, err := SafePath(t.workspace, targetPath)
+		if err != nil {
+			return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(err)
+		}
+		err = t.file.Copy(ctx, safePath, safeTarget)
 		if err != nil {
 			return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(fmt.Errorf("failed to copy file: %w", err))
 		}
@@ -172,14 +153,18 @@ func (t *FileTool) Execute(ctx context.Context, input map[string]interface{}) (i
 		if !ok || targetPath == "" {
 			return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("'target_path' parameter is required for move operation"))
 		}
-		err := t.file.Rename(ctx, path, targetPath)
+		safeTarget, err := SafePath(t.workspace, targetPath)
+		if err != nil {
+			return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(err)
+		}
+		err = t.file.Rename(ctx, safePath, safeTarget)
 		if err != nil {
 			return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(fmt.Errorf("failed to move file: %w", err))
 		}
 		return fmt.Sprintf("File moved successfully from %s to %s", path, targetPath), nil
 
 	case "is_file":
-		isFile, err := t.file.IsFile(ctx, path)
+		isFile, err := t.file.IsFile(ctx, safePath)
 		if err != nil {
 			return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(fmt.Errorf("failed to check if path is file: %w", err))
 		}
@@ -189,7 +174,7 @@ func (t *FileTool) Execute(ctx context.Context, input map[string]interface{}) (i
 		}, nil
 
 	case "is_dir":
-		isDir, err := t.file.IsDir(ctx, path)
+		isDir, err := t.file.IsDir(ctx, safePath)
 		if err != nil {
 			return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(fmt.Errorf("failed to check if path is directory: %w", err))
 		}
@@ -204,9 +189,5 @@ func (t *FileTool) Execute(ctx context.Context, input map[string]interface{}) (i
 }
 
 func (t *FileTool) Metadata() types.ToolMetadata {
-	return types.ToolMetadata{
-		SourceNodeName: "file",
-		IsFromToolkit:  false,
-		ToolType:       "builtin",
-	}
+	return metadataFS("file")
 }

@@ -1,4 +1,4 @@
-package builtin
+package email
 
 import (
 	"context"
@@ -120,6 +120,6 @@ func (t *EmailTool) Metadata() types.ToolMetadata {
 	return types.ToolMetadata{
 		SourceNodeName: "email",
 		IsFromToolkit:  false,
-		ToolType:       "builtin",
+		ToolType:       "email",
 	}
 }

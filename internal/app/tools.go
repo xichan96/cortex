@@ -4,7 +4,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/xichan96/cortex/agent/tools/builtin"
+	emailtool "github.com/xichan96/cortex/agent/tools/builtin/email"
+	"github.com/xichan96/cortex/agent/tools/builtin/fs"
+	"github.com/xichan96/cortex/agent/tools/builtin/math"
+	"github.com/xichan96/cortex/agent/tools/builtin/net"
+	"github.com/xichan96/cortex/agent/tools/builtin/runtime"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/internal/config"
 	"github.com/xichan96/cortex/pkg/email"
@@ -38,27 +42,27 @@ func (a *agent) initBuiltinTools() []types.Tool {
 	cfg := a.config.Tools.Builtin
 
 	if cfg.SSH.Enabled {
-		tools = append(tools, builtin.NewSSHTool())
+		tools = append(tools, net.NewSSHTool())
 	}
 
 	if cfg.File.Enabled {
-		tools = append(tools, builtin.NewFileTool())
+		tools = append(tools, fs.NewFileTool(""))
 	}
 
 	if cfg.Command.Enabled {
-		tools = append(tools, builtin.NewCommandTool())
+		tools = append(tools, runtime.NewCommandTool())
 	}
 
 	if cfg.Math.Enabled {
-		tools = append(tools, builtin.NewMathTool())
+		tools = append(tools, math.NewMathTool())
 	}
 
 	if cfg.Ping.Enabled {
-		tools = append(tools, builtin.NewPingTool())
+		tools = append(tools, net.NewPingTool())
 	}
 
 	if cfg.Time.Enabled {
-		tools = append(tools, builtin.NewTimeTool())
+		tools = append(tools, runtime.NewTimeTool())
 	}
 
 	if cfg.Email.Enabled {
@@ -69,7 +73,7 @@ func (a *agent) initBuiltinTools() []types.Tool {
 			Host:    cfg.Email.Config.Host,
 			Port:    cfg.Email.Config.Port,
 		}
-		tools = append(tools, builtin.NewEmailTool(emailCfg))
+		tools = append(tools, emailtool.NewEmailTool(emailCfg))
 	}
 
 	return tools

@@ -1,4 +1,4 @@
-package builtin
+package mcp
 
 import (
 	"context"
@@ -11,13 +11,11 @@ import (
 	"github.com/xichan96/cortex/pkg/mcp"
 )
 
-// MCPClientTool allows the agent to interact with an MCP server
 type MCPClientTool struct {
 	client *mcp.Client
 	mu     sync.RWMutex
 }
 
-// NewMCPClientTool creates a new MCP client tool
 func NewMCPClientTool() types.Tool {
 	return &MCPClientTool{}
 }
@@ -96,12 +94,8 @@ func (t *MCPClientTool) connect(ctx context.Context, input map[string]interface{
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// If already connected, disconnect first
 	if t.client != nil && t.client.IsConnected() {
-		// We could check if parameters are same, but for safety/simplicity, we reconnect
-		if err := t.client.Disconnect(ctx); err != nil {
-			// Log error but continue
-		}
+		_ = t.client.Disconnect(ctx)
 	}
 
 	serverURL, ok := input["server_url"].(string)
@@ -224,6 +218,6 @@ func (t *MCPClientTool) Metadata() types.ToolMetadata {
 	return types.ToolMetadata{
 		SourceNodeName: t.Name(),
 		IsFromToolkit:  false,
-		ToolType:       "builtin",
+		ToolType:       "mcp",
 	}
 }

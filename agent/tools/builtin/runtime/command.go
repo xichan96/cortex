@@ -1,4 +1,4 @@
-package builtin
+package runtime
 
 import (
 	"context"
@@ -36,6 +36,10 @@ func (t *CommandTool) Schema() map[string]interface{} {
 				"type":        "integer",
 				"description": "Command execution timeout in seconds (default: 30)",
 			},
+			"background": map[string]interface{}{
+				"type":        "boolean",
+				"description": "If true, run command in background; use job_output to get output, job_kill to terminate",
+			},
 		},
 		"required": []string{"command"},
 	}
@@ -48,6 +52,17 @@ func (t *CommandTool) Execute(ctx context.Context, input map[string]interface{})
 	}
 	if command == "" {
 		return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("'command' parameter cannot be empty"))
+	}
+
+	if background, _ := input["background"].(bool); background {
+		bs, err := defaultBgManager.Start(ctx, "", nil, command)
+		if err != nil {
+			return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(err)
+		}
+		return map[string]interface{}{
+			"shell_id": bs.ID,
+			"message":  "Started background command. Use job_output to check output, job_kill to terminate.",
+		}, nil
 	}
 
 	timeout := 30 * time.Second
@@ -89,6 +104,6 @@ func (t *CommandTool) Metadata() types.ToolMetadata {
 	return types.ToolMetadata{
 		SourceNodeName: "command",
 		IsFromToolkit:  false,
-		ToolType:       "builtin",
+		ToolType:       "runtime",
 	}
 }

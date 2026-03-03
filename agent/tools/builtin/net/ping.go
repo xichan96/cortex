@@ -1,4 +1,4 @@
-package builtin
+package net
 
 import (
 	"context"
@@ -79,6 +79,6 @@ func (t *PingTool) Metadata() types.ToolMetadata {
 	return types.ToolMetadata{
 		SourceNodeName: "net",
 		IsFromToolkit:  false,
-		ToolType:       "builtin",
+		ToolType:       "net",
 	}
 }

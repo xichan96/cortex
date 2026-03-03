@@ -1,4 +1,4 @@
-package builtin
+package runtime
 
 import (
 	"context"
@@ -65,6 +65,6 @@ func (t *TimeTool) Metadata() types.ToolMetadata {
 	return types.ToolMetadata{
 		SourceNodeName: "time",
 		IsFromToolkit:  false,
-		ToolType:       "builtin",
+		ToolType:       "system",
 	}
 }

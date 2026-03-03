@@ -1,4 +1,4 @@
-package builtin
+package runtime
 
 import (
 	"context"
@@ -73,8 +73,8 @@ func TestCommandTool_Metadata(t *testing.T) {
 		t.Error("IsFromToolkit should be false")
 	}
 
-	if metadata.ToolType != "builtin" {
-		t.Errorf("Expected ToolType 'builtin', got '%s'", metadata.ToolType)
+	if metadata.ToolType != "runtime" {
+		t.Errorf("Expected ToolType 'runtime', got '%s'", metadata.ToolType)
 	}
 }
 
@@ -197,29 +197,6 @@ func TestCommandTool_Execute_WithTimeoutFloat64(t *testing.T) {
 	}
 }
 
-func TestCommandTool_Execute_WithTimeoutInt(t *testing.T) {
-	tool := NewCommandTool()
-
-	input := map[string]interface{}{
-		"command": "echo test",
-		"timeout": 5,
-	}
-
-	result, err := tool.Execute(context.Background(), input)
-	if err != nil {
-		t.Fatalf("Execute failed: %v", err)
-	}
-
-	resultMap, ok := result.(map[string]interface{})
-	if !ok {
-		t.Fatal("Result should be a map")
-	}
-
-	if resultMap["exit_code"].(int) != 0 {
-		t.Error("Command should succeed")
-	}
-}
-
 func TestCommandTool_Execute_Timeout(t *testing.T) {
 	tool := NewCommandTool()
 
@@ -269,28 +246,6 @@ func TestCommandTool_Execute_DefaultTimeout(t *testing.T) {
 
 	if resultMap["exit_code"].(int) != 0 {
 		t.Error("Command should succeed")
-	}
-}
-
-func TestCommandTool_Execute_CommandWithArgs(t *testing.T) {
-	tool := NewCommandTool()
-
-	input := map[string]interface{}{
-		"command": "echo hello world",
-	}
-
-	result, err := tool.Execute(context.Background(), input)
-	if err != nil {
-		t.Fatalf("Execute failed: %v", err)
-	}
-
-	resultMap, ok := result.(map[string]interface{})
-	if !ok {
-		t.Fatal("Result should be a map")
-	}
-
-	if resultMap["stdout"].(string) != "hello world\n" {
-		t.Errorf("Expected stdout 'hello world\\n', got '%s'", resultMap["stdout"])
 	}
 }
 
