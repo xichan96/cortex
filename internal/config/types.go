@@ -67,6 +67,14 @@ type BuiltinConfig struct {
 	Math    ToolConfig      `yaml:"math"`
 	Ping    ToolConfig      `yaml:"ping"`
 	Time    ToolConfig      `yaml:"time"`
+	Docker  DockerToolConfig `yaml:"docker"`
+}
+
+type DockerToolConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Host    string `yaml:"host"`
+	Socket  string `yaml:"socket"`
+	Port    int    `yaml:"port"`
 }
 
 type ToolConfig struct {
