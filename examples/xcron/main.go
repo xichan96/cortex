@@ -15,8 +15,8 @@ import (
 	"github.com/xichan96/cortex/agent/llm"
 	"github.com/xichan96/cortex/agent/providers"
 	"github.com/xichan96/cortex/agent/skills"
-	"github.com/xichan96/cortex/agent/tools/builtin"
-	"github.com/xichan96/cortex/agent/tools/scheduler"
+	"github.com/xichan96/cortex/agent/tools/builtin/runtime"
+	"github.com/xichan96/cortex/agent/tools/builtin/scheduler"
 	"github.com/xichan96/cortex/agent/types"
 	clogger "github.com/xichan96/cortex/pkg/logger"
 	"github.com/xichan96/cortex/pkg/xcron"
@@ -111,7 +111,7 @@ func main() {
 
 	// 5. Register Tools
 	// - Command Tool (for Weather skill)
-	agentEngine.AddTool(ctx, builtin.NewCommandTool())
+	agentEngine.AddTool(ctx, runtime.NewCommandTool())
 	// - Scheduler Tools (for scheduling tasks)
 	schedTools := scheduler.NewSchedulerTools(sched)
 	for _, t := range schedTools {

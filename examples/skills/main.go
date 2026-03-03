@@ -14,7 +14,8 @@ import (
 	"github.com/xichan96/cortex/agent/llm"
 	"github.com/xichan96/cortex/agent/providers"
 	"github.com/xichan96/cortex/agent/skills"
-	"github.com/xichan96/cortex/agent/tools/builtin"
+	"github.com/xichan96/cortex/agent/tools/builtin/fs"
+	"github.com/xichan96/cortex/agent/tools/builtin/runtime"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/logger"
 )
@@ -119,8 +120,8 @@ func main() {
 
 	// 6. Register Essential Tools
 	// The agent needs 'read_file' to read skill definitions, and 'command' to execute skill instructions.
-	agentEngine.AddTool(ctx, builtin.NewFileTool())
-	agentEngine.AddTool(ctx, builtin.NewCommandTool())
+	agentEngine.AddTool(ctx, fs.NewFileTool(""))
+	agentEngine.AddTool(ctx, runtime.NewCommandTool())
 
 	fmt.Println("\n=== Final System Prompt ===")
 	fmt.Println(agentConfig.SystemMessage)

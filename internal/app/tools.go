@@ -3,10 +3,18 @@ package app
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
-	"github.com/xichan96/cortex/agent/tools/builtin"
+	emailtool "github.com/xichan96/cortex/agent/tools/builtin/email"
+	dockerpkg "github.com/xichan96/cortex/agent/tools/builtin/docker"
+	"github.com/xichan96/cortex/agent/tools/builtin/fs"
+	"github.com/xichan96/cortex/agent/tools/builtin/math"
+	"github.com/xichan96/cortex/agent/tools/builtin/net"
+	"github.com/xichan96/cortex/agent/tools/builtin/runtime"
+	"github.com/xichan96/cortex/agent/tools/builtin/system"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/internal/config"
+	"github.com/xichan96/cortex/pkg/docker"
 	"github.com/xichan96/cortex/pkg/email"
 	"github.com/xichan96/cortex/pkg/mcp"
 )
@@ -38,27 +46,50 @@ func (a *agent) initBuiltinTools() []types.Tool {
 	cfg := a.config.Tools.Builtin
 
 	if cfg.SSH.Enabled {
-		tools = append(tools, builtin.NewSSHTool())
+		tools = append(tools, net.NewSSHTool())
 	}
 
 	if cfg.File.Enabled {
-		tools = append(tools, builtin.NewFileTool())
+		tools = append(tools, fs.NewFileTool(""))
 	}
 
 	if cfg.Command.Enabled {
-		tools = append(tools, builtin.NewCommandTool())
+		tools = append(tools, runtime.NewCommandTool())
 	}
 
 	if cfg.Math.Enabled {
-		tools = append(tools, builtin.NewMathTool())
+		tools = append(tools, math.NewMathTool())
 	}
 
 	if cfg.Ping.Enabled {
-		tools = append(tools, builtin.NewPingTool())
+		tools = append(tools, net.NewPingTool())
 	}
 
 	if cfg.Time.Enabled {
-		tools = append(tools, builtin.NewTimeTool())
+		tools = append(tools, system.NewTimeTool())
+	}
+
+	if cfg.Docker.Enabled {
+		host := cfg.Docker.Host
+		if host == "" {
+			host = "127.0.0.1"
+		}
+		port := cfg.Docker.Port
+		if port == 0 {
+			port = 2375
+		}
+		dc := docker.ClientConfig{
+			DockerConfig: &docker.DockerConfig{
+				Socket: cfg.Docker.Socket,
+				Port:   port,
+			},
+		}
+		client, err := docker.NewClient(host, dc)
+		if err != nil {
+			a.logger.Warn("Docker client init failed, skip docker tools", slog.Any("error", err))
+		} else {
+			tools = append(tools, dockerpkg.NewDockerTools(client)...)
+		}
 	}
 
 	if cfg.Email.Enabled {
@@ -69,7 +100,7 @@ func (a *agent) initBuiltinTools() []types.Tool {
 			Host:    cfg.Email.Config.Host,
 			Port:    cfg.Email.Config.Port,
 		}
-		tools = append(tools, builtin.NewEmailTool(emailCfg))
+		tools = append(tools, emailtool.NewEmailTool(emailCfg))
 	}
 
 	return tools

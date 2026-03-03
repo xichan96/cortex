@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/client"
+	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
@@ -61,7 +62,11 @@ func (c *Client) Connect(ctx context.Context) error {
 
 	switch c.transport {
 	case "http", "httpStreamable":
-		c.mcpClient, err = client.NewStreamableHttpClient(c.serverURL)
+		opts := []transport.StreamableHTTPCOption{}
+		if len(c.headers) > 0 {
+			opts = append(opts, transport.WithHTTPHeaders(c.headers))
+		}
+		c.mcpClient, err = client.NewStreamableHttpClient(c.serverURL, opts...)
 	case "sse":
 		c.mcpClient, err = client.NewSSEMCPClient(c.serverURL, client.WithHeaders(c.headers))
 	default:
