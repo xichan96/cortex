@@ -31,7 +31,7 @@ type Client struct {
 // NewClient creates a new MCP client
 func NewClient(url string, transport string, headers map[string]string) *Client {
 	if transport == "" {
-		transport = "sse" // default to SSE
+		transport = "http" // default to http
 	}
 	if headers == nil {
 		headers = make(map[string]string)
