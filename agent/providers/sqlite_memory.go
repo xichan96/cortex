@@ -192,16 +192,24 @@ func (p *SQLiteMemoryProvider) LoadMemoryVariables(ctx context.Context) (map[str
 
 func (p *SQLiteMemoryProvider) SaveContext(ctx context.Context, input, output map[string]interface{}) error {
 	if inputMsg, ok := input["input"].(string); ok {
+		role, _ := input["role"].(string)
+		if role == "" {
+			role = "user"
+		}
 		if err := p.AddMessage(ctx, types.Message{
-			Role:    "user",
+			Role:    role,
 			Content: inputMsg,
 		}); err != nil {
 			return err
 		}
 	}
 	if outputMsg, ok := output["output"].(string); ok {
+		role, _ := output["role"].(string)
+		if role == "" {
+			role = "assistant"
+		}
 		if err := p.AddMessage(ctx, types.Message{
-			Role:    "assistant",
+			Role:    role,
 			Content: outputMsg,
 		}); err != nil {
 			return err

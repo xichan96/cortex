@@ -3,11 +3,15 @@ package ssh
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 )
 
 func TestSSH(t *testing.T) {
+	if os.Getenv("CORTEX_SSH_TEST") == "" {
+		t.Skip("CORTEX_SSH_TEST is not set")
+	}
 	cfg := Cfg{
 		Username: "root",
 		Password: "123456",
@@ -32,6 +36,9 @@ func TestSSH(t *testing.T) {
 }
 
 func TestContainerSSH(t *testing.T) {
+	if os.Getenv("CORTEX_SSH_TEST") == "" {
+		t.Skip("CORTEX_SSH_TEST is not set")
+	}
 	cfg := Cfg{
 		Username: "root",
 		Password: "1",

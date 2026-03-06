@@ -113,14 +113,22 @@ func (p *SimpleMemoryProvider) SaveContext(ctx context.Context, input, output ma
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if inputMsg, ok := input["input"].(string); ok {
+		role, _ := input["role"].(string)
+		if role == "" {
+			role = "user"
+		}
 		p.messages = append(p.messages, types.Message{
-			Role:    "user",
+			Role:    role,
 			Content: inputMsg,
 		})
 	}
 	if outputMsg, ok := output["output"].(string); ok {
+		role, _ := output["role"].(string)
+		if role == "" {
+			role = "assistant"
+		}
 		p.messages = append(p.messages, types.Message{
-			Role:    "assistant",
+			Role:    role,
 			Content: outputMsg,
 		})
 	}

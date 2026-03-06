@@ -405,7 +405,17 @@ func (ae *AgentEngine) Execute(ctx context.Context, input string, previousReques
 
 	// Save to memory system
 	if ae.memory != nil && finalResult != nil {
-		inputMap := map[string]interface{}{"input": input}
+		ae.mu.RLock()
+		chatRole := ""
+		if ae.config != nil {
+			chatRole = ae.config.ChatMessageRole
+		}
+		ae.mu.RUnlock()
+
+		if chatRole == "" {
+			chatRole = "user"
+		}
+		inputMap := map[string]interface{}{"input": input, "role": chatRole}
 		outputMap := map[string]interface{}{"output": finalResult.Output}
 		if err := ae.memory.SaveContext(ctx, inputMap, outputMap); err != nil {
 			logger.LogError("Execute", err, slog.String("phase", "save_context"))
@@ -933,7 +943,17 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 
 	// Save to memory system
 	if ae.memory != nil && len(initialMessages) > 0 {
-		input := map[string]interface{}{"input": initialMessages[len(initialMessages)-1].Content}
+		ae.mu.RLock()
+		chatRole := ""
+		if ae.config != nil {
+			chatRole = ae.config.ChatMessageRole
+		}
+		ae.mu.RUnlock()
+
+		if chatRole == "" {
+			chatRole = "user"
+		}
+		input := map[string]interface{}{"input": initialMessages[len(initialMessages)-1].Content, "role": chatRole}
 		output := map[string]interface{}{"output": finalResult.Output}
 		if err := ae.memory.SaveContext(ctx, input, output); err != nil {
 			logger.LogError("executeStreamWithIterations", err, slog.String("phase", "save_context"))

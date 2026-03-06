@@ -13,7 +13,7 @@ import (
 	"github.com/xichan96/cortex/pkg/logger"
 )
 
-type TaskHandler func(ctx context.Context, payload string) error
+type TaskHandler func(ctx context.Context, job *Job) error
 
 type Scheduler struct {
 	cron      *cron.Cron
@@ -106,7 +106,7 @@ func (s *Scheduler) Stop() {
 	close(s.stopCh)
 }
 
-func (s *Scheduler) AddJob(ctx context.Context, name string, jobType JobType, schedule string, taskType TaskType, payload interface{}, maxRetries int) (string, error) {
+func (s *Scheduler) AddJob(ctx context.Context, name string, jobType JobType, schedule string, taskType TaskType, payload interface{}, sessionID string, maxRetries int) (string, error) {
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
@@ -116,6 +116,7 @@ func (s *Scheduler) AddJob(ctx context.Context, name string, jobType JobType, sc
 		ID:         uuid.New().String(),
 		Name:       name,
 		Type:       jobType,
+		SessionID:  sessionID,
 		Schedule:   schedule,
 		Status:     JobStatusPending,
 		Payload:    string(payloadBytes),
@@ -274,6 +275,7 @@ func (s *Scheduler) createJobWrapper(job *Job) func() {
 		}
 
 		// Execute with retry logic
+		logger.Info("🔄 Executing job", slog.String("job_id", currentJob.ID), slog.String("type", string(currentJob.Type)), slog.String("task_type", string(currentJob.TaskType)))
 		err = s.executeWithRetry(ctx, handler, currentJob)
 
 		now := time.Now()
@@ -319,7 +321,7 @@ func (s *Scheduler) executeWithRetry(ctx context.Context, handler TaskHandler, j
 		if i > 0 {
 			time.Sleep(time.Duration(i) * 100 * time.Millisecond) // Simple backoff
 		}
-		if err := handler(ctx, job.Payload); err == nil {
+		if err := handler(ctx, job); err == nil {
 			return nil
 		} else {
 			lastErr = err

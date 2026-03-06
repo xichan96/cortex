@@ -99,6 +99,7 @@ type ToolActionStep struct {
 type AgentConfig struct {
 	MaxIterations           int           `json:"maxIterations"`
 	SystemMessage           string        `json:"systemMessage"`
+	ChatMessageRole         string        `json:"chatMessageRole,omitempty"`
 	Temperature             float32       `json:"temperature"`             // 温度参数 (0.0-1.0)
 	MaxTokens               int           `json:"maxTokens"`               // 最大token数
 	TopP                    float32       `json:"topP"`                    // Top P采样
@@ -123,6 +124,7 @@ func NewAgentConfig() *AgentConfig {
 	return &AgentConfig{
 		MaxIterations:           10,
 		SystemMessage:           "",
+		ChatMessageRole:         "",
 		Temperature:             0.7,
 		MaxTokens:               4096,
 		TopP:                    1.0,
