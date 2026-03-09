@@ -42,6 +42,7 @@ type Job struct {
 	ID         string     `gorm:"primaryKey" json:"id"`
 	Name       string     `json:"name"`
 	Type       JobType    `json:"type"`
+	SessionID  string     `json:"session_id" gorm:"index"`
 	Schedule   string     `json:"schedule"` // Cron expr, duration string, or timestamp
 	Status     JobStatus  `json:"status"`
 	Payload    string     `json:"payload"` // JSON encoded data
@@ -78,15 +79,18 @@ type JobPayload struct {
 	Data     map[string]string `json:"data"`
 }
 
-// AgentPayload defines the structure for agent-driven tasks (Reference: OpenClaw)
+// AgentPayload defines the structure for agent-driven tasks
 type AgentPayload struct {
-	Message        string `json:"message"`
-	Model          string `json:"model,omitempty"`
-	Thinking       string `json:"thinking,omitempty"`
-	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+	Message        string   `json:"message"`
+	Model          string   `json:"model,omitempty"`
+	Thinking       string   `json:"thinking,omitempty"`
+	TimeoutSeconds int      `json:"timeout_seconds,omitempty"`
+	MaxIterations  int      `json:"max_iterations,omitempty"`
+	Tools          []string `json:"tools,omitempty"`
+	Skills         []string `json:"skills,omitempty"`
 }
 
-// SystemPayload defines the structure for system events (Reference: OpenClaw)
+// SystemPayload defines the structure for system events
 type SystemPayload struct {
 	Event string `json:"event"`
 	Text  string `json:"text"`

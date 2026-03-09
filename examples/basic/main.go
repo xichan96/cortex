@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"time"
@@ -10,7 +11,6 @@ import (
 	"github.com/xichan96/cortex/agent/llm"
 	"github.com/xichan96/cortex/agent/providers"
 	"github.com/xichan96/cortex/agent/types"
-	"github.com/xichan96/cortex/pkg/mcp"
 	"github.com/xichan96/cortex/pkg/middle/redis"
 	// "github.com/xichan96/cortex/pkg/mongodb"
 )
@@ -28,32 +28,6 @@ func getLLMProvider() (types.LLMProvider, error) {
 		return nil, fmt.Errorf("Failed to create OpenAI client: %w", err)
 	}
 	return llmProvider, nil
-}
-
-// initMCPClient initializes the MCP client and connects to the AI training service
-func initMCPClient() (*mcp.Client, error) {
-	// AI training service MCP configuration
-	mcpURL := "https://ai.cn/api/train/mcp/sse"
-
-	// Using HTTP transport mode (supports both HTTP streamable and SSE modes)
-	transport := "http"
-	headers := map[string]string{
-		"Content-Type": "application/json; charset=utf-8",
-	}
-
-	fmt.Printf("Connecting to AI training service MCP: %s (transport: %s)\n", mcpURL, transport)
-
-	// Create MCP client
-	client := mcp.NewClient(mcpURL, transport, headers)
-
-	// Connect to MCP server
-	ctx := context.Background()
-	if err := client.Connect(ctx); err != nil {
-		return nil, fmt.Errorf("Failed to connect to MCP server: %w", err)
-	}
-
-	fmt.Println("Successfully connected to AI training service MCP")
-	return client, nil
 }
 
 // initRedisMemory initializes Redis client and creates Redis memory provider
@@ -119,14 +93,6 @@ func main() {
 		return
 	}
 
-	// Initialize MCP client
-	mcpClient, err := initMCPClient()
-	if err != nil {
-		fmt.Printf("MCP initialization error: %v\n", err)
-		return
-	}
-	defer mcpClient.Disconnect(context.Background())
-
 	// Create agent configuration - using new NewAgentConfig constructor
 	agentConfig := types.NewAgentConfig()
 
@@ -142,20 +108,20 @@ func main() {
 	agentConfig.PresencePenalty = 0.1      // Presence penalty
 	agentConfig.Timeout = 30 * time.Second // Timeout duration
 	agentConfig.RetryAttempts = 3          // Retry attempts
-	agentConfig.EnableToolRetry = true     // Enable tool retry
+	// agentConfig.EnableToolRetry = true     // Enable tool retry
 
 	ctx := context.Background()
 	// Create agent engine
 	agentEngine := engine.NewAgentEngine(llmProvider, agentConfig)
 
 	// Initialize Redis memory
-	// memory := providers.NewSimpleMemoryProvider()
-	sessionID := fmt.Sprintf("session_%d", time.Now().Unix())
-	memory, err := initRedisMemory(sessionID)
-	if err != nil {
-		fmt.Printf("Redis memory initialization error: %v, falling back to simple memory\n", err)
-		memory = providers.NewSimpleMemoryProvider()
-	}
+	memory := providers.NewSimpleMemoryProvider()
+	// sessionID := fmt.Sprintf("session_%d", time.Now().Unix())
+	// memory, err := initRedisMemory(sessionID)
+	// if err != nil {
+	// 	fmt.Printf("Redis memory initialization error: %v, falling back to simple memory\n", err)
+	// 	memory = providers.NewSimpleMemoryProvider()
+	// }
 	agentEngine.SetMemory(ctx, memory)
 
 	// Initialize MongoDB memory (commented out)
@@ -167,38 +133,40 @@ func main() {
 	// }
 	// agentEngine.SetMemory(ctx, memory)
 
-	// Get MCP tools and add to agent engine
-	mcpTools := mcpClient.GetTools()
-	if len(mcpTools) > 0 {
-		fmt.Printf("Found %d AI training tools, adding to agent engine...\n", len(mcpTools))
-		agentEngine.AddTools(ctx, mcpTools)
-
-		// Show available tools
-		fmt.Println("\n--- Available AI training tools ---")
-		for _, tool := range mcpTools {
-			fmt.Printf("- %s: %s\n", tool.Name(), tool.Description())
-		}
-	}
-
-	fmt.Printf("Agent created with %d tools\n", len(mcpTools))
+	fmt.Printf("Agent created with 0 tools\n")
 	fmt.Printf("Agent configuration: Temperature=%.1f, MaxTokens=%d, Timeout=%v\n",
 		agentConfig.Temperature, agentConfig.MaxTokens, agentConfig.Timeout)
 
 	// Test basic chat (may use tools)
 	fmt.Println("\n--- Basic Chat Test (Integrated with AI Training Tools) ---")
-	testQuery := "What is the reason for this task failure: https://xxx/034dc32bc01ae400/task/03957acd221a6d00"
+	testQuery := "what is the image about?"
+	// imageURL := "https://screenshot.jpeg"
+
+	// Base64 image example (1x1 red pixel)
+	base64Image := ""
+	imageData, _ := base64.StdEncoding.DecodeString(base64Image)
 
 	// Using streaming execution
-	fmt.Printf("User: %s\n", testQuery)
+	fmt.Printf("User: %s (with base64 image)\n", testQuery)
 	fmt.Printf("Assistant: ")
 
-	stream, err := agentEngine.ExecuteStream(ctx, testQuery, nil)
+	// Create multi-modal input
+	input := types.NewAgentInputWithParts([]types.MessagePart{
+		types.TextPart{Text: testQuery},
+		// types.ImageURLPart{URL: imageURL},
+		types.ImageDataPart{
+			Data:     imageData,
+			MIMEType: "image/png",
+		},
+	})
+
+	stream, err := agentEngine.ExecuteStream(ctx, input, nil)
 	if err != nil {
 		log.Printf("Agent streaming execution error: %v", err)
 		return
 	}
 
-	var finalResult *engine.AgentResult
+	var finalResult *types.AgentResult
 	var isFirstChunk = true
 	for result := range stream {
 		switch result.Type {

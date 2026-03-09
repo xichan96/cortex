@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/xichan96/cortex/agent/engine"
+	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
 	"github.com/xichan96/cortex/pkg/logger"
 )
@@ -89,7 +90,7 @@ func (h *handler) ChatAPI(c *gin.Context, engine *engine.AgentEngine, req *Messa
 		return
 	}
 
-	result, err := engine.Execute(c.Request.Context(), req.Message, nil)
+	result, err := engine.Execute(c.Request.Context(), types.NewAgentInput(req.Message), nil)
 	if err != nil {
 		ec := h.handleError(err)
 		logger.LogError("ChatAPI", err,
@@ -122,7 +123,7 @@ func (h *handler) StreamChatAPI(c *gin.Context, engine *engine.AgentEngine, req 
 	c.Header("Connection", "keep-alive")
 
 	ctx := c.Request.Context()
-	stream, err := engine.ExecuteStream(ctx, req.Message, nil)
+	stream, err := engine.ExecuteStream(ctx, types.NewAgentInput(req.Message), nil)
 	if err != nil {
 		ec := h.handleError(err)
 		logger.LogError("StreamChatAPI", err,

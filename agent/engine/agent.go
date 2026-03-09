@@ -42,8 +42,8 @@ type Agent interface {
 	AddTools(ctx context.Context, tools []types.Tool)
 
 	// Execution methods
-	Execute(ctx context.Context, input string, previousRequests []types.ToolCallData) (*AgentResult, error)
-	ExecuteStream(ctx context.Context, input string, previousRequests []types.ToolCallData) (<-chan StreamResult, error)
+	Execute(ctx context.Context, input types.AgentInput, previousRequests []types.ToolCallData) (*types.AgentResult, error)
+	ExecuteStream(ctx context.Context, input types.AgentInput, previousRequests []types.ToolCallData) (<-chan types.StreamResult, error)
 
 	// Lifecycle management
 	Stop(ctx context.Context)
@@ -74,11 +74,11 @@ type AgentEngine struct {
 	cancel    context.CancelFunc // Cancel function
 
 	// Performance optimization
-	toolCache     map[string]*toolCacheEntry // Tool execution result cache
+	toolCache     map[string]*types.ToolCacheEntry // Tool execution result cache
 	toolCacheMu   sync.RWMutex               // Cache read-write lock
 	toolCacheSize int                        // Cache size limit
-	toolCacheHead *toolCacheEntry            // LRU list head (most recently used)
-	toolCacheTail *toolCacheEntry            // LRU list tail (least recently used)
+	toolCacheHead *types.ToolCacheEntry            // LRU list head (most recently used)
+	toolCacheTail *types.ToolCacheEntry            // LRU list tail (least recently used)
 
 	// Rate limiting
 	rateLimiter ratelimit.RateLimiter // Rate limiter for request throttling
@@ -106,8 +106,8 @@ func NewAgentEngine(model types.LLMProvider, config *types.AgentConfig) *AgentEn
 		config:        config,
 		tools:         make([]types.Tool, 0),
 		toolsMap:      make(map[string]types.Tool),
-		toolCache:     make(map[string]*toolCacheEntry),
-		toolCacheSize: DefaultCacheSize, // Using constant-defined cache size
+		toolCache:     make(map[string]*types.ToolCacheEntry),
+		toolCacheSize: types.DefaultCacheSize, // Using constant-defined cache size
 		ctx:           ctx,
 		cancel:        cancel,
 		rateLimiter:   ratelimit.NewTokenBucketLimiter(10, 10), // 10 req/s default
@@ -288,13 +288,13 @@ func (ae *AgentEngine) AddTools(ctx context.Context, tools []types.Tool) {
 // Processes user input with tool calling and multi-round iteration, returning the complete execution result
 // Parameters:
 //   - ctx: context for cancellation
-//   - input: user input text
+//   - input: user input
 //   - previousRequests: previous tool call request history
 //
 // Returns:
 //   - execution result containing output, tool calls, and intermediate steps
 //   - error information
-func (ae *AgentEngine) Execute(ctx context.Context, input string, previousRequests []types.ToolCallData) (*AgentResult, error) {
+func (ae *AgentEngine) Execute(ctx context.Context, input types.AgentInput, previousRequests []types.ToolCallData) (*types.AgentResult, error) {
 	if !ae.isRunning.CompareAndSwap(false, true) {
 		return nil, errors.EC_AGENT_BUSY
 	}
@@ -304,7 +304,7 @@ func (ae *AgentEngine) Execute(ctx context.Context, input string, previousReques
 	// Add execution tracking
 	startTime := time.Now()
 	logger.LogExecution("Execute", 0, "Starting agent execution",
-		slog.String("input", truncateString(input, 100)),
+		slog.String("input", types.TruncateString(input.String(), 100)),
 		slog.Int("previousRequests", len(previousRequests)))
 
 	ae.mu.RLock()
@@ -331,7 +331,7 @@ func (ae *AgentEngine) Execute(ctx context.Context, input string, previousReques
 		return nil, errors.NewError(errors.EC_PREPARE_MESSAGES_FAILED.Code, errors.EC_PREPARE_MESSAGES_FAILED.Message).Wrap(err)
 	}
 
-	var finalResult *AgentResult
+	var finalResult *types.AgentResult
 	iteration := 0
 	ae.mu.RLock()
 	maxIterations := 10
@@ -341,7 +341,7 @@ func (ae *AgentEngine) Execute(ctx context.Context, input string, previousReques
 	ae.mu.RUnlock()
 
 	// Initialize finalResult to prevent nil pointer panic
-	finalResult = &AgentResult{Output: ""}
+	finalResult = &types.AgentResult{Output: ""}
 	totalUsage := types.Usage{}
 
 	// Iterate until no tool calls or maximum iterations reached
@@ -383,7 +383,7 @@ func (ae *AgentEngine) Execute(ctx context.Context, input string, previousReques
 		// Avoid too fast execution - only delay if there are more iterations
 		if iteration < maxIterations {
 			logger.LogExecution("Execute", iteration, "Preparing next iteration")
-			time.Sleep(IterationDelay)
+			time.Sleep(types.IterationDelay)
 		} else {
 			logger.LogExecution("Execute", iteration, "Reached maximum iterations")
 		}
@@ -405,7 +405,17 @@ func (ae *AgentEngine) Execute(ctx context.Context, input string, previousReques
 
 	// Save to memory system
 	if ae.memory != nil && finalResult != nil {
-		inputMap := map[string]interface{}{"input": input}
+		ae.mu.RLock()
+		chatRole := ""
+		if ae.config != nil {
+			chatRole = ae.config.ChatMessageRole
+		}
+		ae.mu.RUnlock()
+
+		if chatRole == "" {
+			chatRole = "user"
+		}
+		inputMap := map[string]interface{}{"input": input.String(), "role": chatRole}
 		outputMap := map[string]interface{}{"output": finalResult.Output}
 		if err := ae.memory.SaveContext(ctx, inputMap, outputMap); err != nil {
 			logger.LogError("Execute", err, slog.String("phase", "save_context"))
@@ -456,25 +466,25 @@ func (ae *AgentEngine) Execute(ctx context.Context, input string, previousReques
 // Processes user input with real-time streaming output and multi-round tool calling
 // Parameters:
 //   - ctx: context for cancellation
-//   - input: user input text
+//   - input: user input
 //   - previousRequests: previous tool call request history
 //
 // Returns:
 //   - streaming result channel for real-time content delivery during execution
 //   - error information (only during initialization)
-func (ae *AgentEngine) ExecuteStream(ctx context.Context, input string, previousRequests []types.ToolCallData) (<-chan StreamResult, error) {
+func (ae *AgentEngine) ExecuteStream(ctx context.Context, input types.AgentInput, previousRequests []types.ToolCallData) (<-chan types.StreamResult, error) {
 	if !ae.isRunning.CompareAndSwap(false, true) {
 		return nil, errors.EC_AGENT_BUSY
 	}
 
-	resultChan := make(chan StreamResult, DefaultChannelBuffer)
+	resultChan := make(chan types.StreamResult, types.DefaultChannelBuffer)
 
 	go func() {
 		defer close(resultChan)
 		defer ae.isRunning.Store(false)
 
 		startTime := time.Now()
-		logger.LogExecution("ExecuteStream", 0, "Starting stream execution", slog.String("input", truncateString(input, 100)), slog.Int("previousRequests", len(previousRequests)))
+		logger.LogExecution("ExecuteStream", 0, "Starting stream execution", slog.String("input", types.TruncateString(input.String(), 100)), slog.Int("previousRequests", len(previousRequests)))
 
 		ae.mu.RLock()
 		limiter := ae.rateLimiter
@@ -489,7 +499,7 @@ func (ae *AgentEngine) ExecuteStream(ctx context.Context, input string, previous
 			defer cancel()
 			if err := limiter.Wait(limitCtx); err != nil {
 				logger.LogError("ExecuteStream", err, slog.String("phase", "rate_limit"))
-				resultChan <- StreamResult{
+				resultChan <- types.StreamResult{
 					Type:  "error",
 					Error: errors.NewError(errors.EC_SYSTEM_OVERLOAD.Code, "rate limit exceeded").Wrap(err),
 				}
@@ -500,7 +510,7 @@ func (ae *AgentEngine) ExecuteStream(ctx context.Context, input string, previous
 		defer func() {
 			if r := recover(); r != nil {
 				logger.LogError("ExecuteStream", fmt.Errorf("panic recovered: %v", r))
-				resultChan <- StreamResult{
+				resultChan <- types.StreamResult{
 					Type:  "error",
 					Error: errors.NewError(errors.EC_STREAM_PANIC.Code, "panic in stream execution").Wrap(fmt.Errorf("%v", r)),
 				}
@@ -511,7 +521,7 @@ func (ae *AgentEngine) ExecuteStream(ctx context.Context, input string, previous
 		messages, err := ae.prepareMessages(ctx, input, previousRequests)
 		if err != nil {
 			logger.LogError("ExecuteStream", err, slog.String("phase", "prepare_messages"))
-			resultChan <- StreamResult{
+			resultChan <- types.StreamResult{
 				Type:  "error",
 				Error: errors.NewError(errors.EC_PREPARE_MESSAGES_FAILED.Code, "failed to prepare messages").Wrap(err),
 			}
@@ -537,7 +547,7 @@ func (ae *AgentEngine) ExecuteStream(ctx context.Context, input string, previous
 // Returns:
 //   - built message list
 //   - error information
-func (ae *AgentEngine) prepareMessages(ctx context.Context, input string, previousRequests []types.ToolCallData) ([]types.Message, error) {
+func (ae *AgentEngine) prepareMessages(ctx context.Context, input types.AgentInput, previousRequests []types.ToolCallData) ([]types.Message, error) {
 	var history []types.Message
 	var historyErr error
 	if ae.memory != nil {
@@ -584,10 +594,7 @@ func (ae *AgentEngine) prepareMessages(ctx context.Context, input string, previo
 	}
 
 	// Add user input
-	messages = append(messages, types.Message{
-		Role:    "user",
-		Content: input,
-	})
+	messages = append(messages, input.ToMessage("user"))
 
 	return messages, nil
 }
@@ -615,7 +622,7 @@ func (ae *AgentEngine) buildContextFromPreviousRequests(requests []types.ToolCal
 //   - execution result
 //   - whether to continue iteration
 //   - error information
-func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Message, iteration int) (*AgentResult, bool, error) {
+func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Message, iteration int) (*types.AgentResult, bool, error) {
 	ae.mu.RLock()
 	maxIterations := 10
 	timeout := time.Duration(0)
@@ -650,7 +657,7 @@ func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Me
 		return nil, false, errors.NewError(errors.EC_CHAT_FAILED.Code, "failed to chat with tools").Wrap(err)
 	}
 
-	result := &AgentResult{
+	result := &types.AgentResult{
 		Output: response.Content,
 		Usage:  response.Usage,
 	}
@@ -765,7 +772,7 @@ func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Me
 
 			// Format observation from tool result
 			truncationLength := ae.getToolTruncationLength(toolCall.Function.Name)
-			observation := truncateString(formatToolResult(toolResult), truncationLength)
+			observation := types.TruncateString(types.FormatToolResult(toolResult), truncationLength)
 
 			intermediateSteps = append(intermediateSteps, types.ToolCallData{
 				Action: types.ToolActionStep{
@@ -798,7 +805,7 @@ func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Me
 // ==================== Message Building Methods ====================
 
 // buildNextMessages builds messages for the next round
-func (ae *AgentEngine) buildNextMessages(previousMessages []types.Message, result *AgentResult) []types.Message {
+func (ae *AgentEngine) buildNextMessages(previousMessages []types.Message, result *types.AgentResult) []types.Message {
 	// Keep system messages, user's original question, and assistant's previous response
 	// Pre-allocate slice capacity: system messages + user message + assistant response + tool results
 	messages := make([]types.Message, 0, 4)
@@ -865,9 +872,9 @@ func (ae *AgentEngine) buildNextMessages(previousMessages []types.Message, resul
 // ==================== Streaming Execution Methods ====================
 
 // executeStreamWithIterations executes streaming iterations (supports multi-round tool calling)
-func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialMessages []types.Message, resultChan chan<- StreamResult) {
+func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialMessages []types.Message, resultChan chan<- types.StreamResult) {
 	messages := initialMessages
-	finalResult := &AgentResult{}
+	finalResult := &types.AgentResult{}
 
 	ae.mu.RLock()
 	maxIterations := 10
@@ -883,7 +890,7 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 	for iteration := 0; iteration < maxIterations; iteration++ {
 		select {
 		case <-ctx.Done():
-			resultChan <- StreamResult{
+			resultChan <- types.StreamResult{
 				Type:  "error",
 				Error: ctx.Err(),
 			}
@@ -899,7 +906,7 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 		iterationResult, hasMore, err := ae.executeStreamIteration(ctx, messages, resultChan, iteration)
 		if err != nil {
 			logger.LogError("executeStreamWithIterations", err, slog.Int("iteration", iteration+1))
-			resultChan <- StreamResult{
+			resultChan <- types.StreamResult{
 				Type:  "error",
 				Error: errors.NewError(errors.EC_STREAM_ITERATION_FAILED.Code, fmt.Sprintf("iteration %d failed", iteration+1)).Wrap(err),
 			}
@@ -933,7 +940,17 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 
 	// Save to memory system
 	if ae.memory != nil && len(initialMessages) > 0 {
-		input := map[string]interface{}{"input": initialMessages[len(initialMessages)-1].Content}
+		ae.mu.RLock()
+		chatRole := ""
+		if ae.config != nil {
+			chatRole = ae.config.ChatMessageRole
+		}
+		ae.mu.RUnlock()
+
+		if chatRole == "" {
+			chatRole = "user"
+		}
+		input := map[string]interface{}{"input": initialMessages[len(initialMessages)-1].Content, "role": chatRole}
 		output := map[string]interface{}{"output": finalResult.Output}
 		if err := ae.memory.SaveContext(ctx, input, output); err != nil {
 			logger.LogError("executeStreamWithIterations", err, slog.String("phase", "save_context"))
@@ -993,7 +1010,7 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 		slog.Int("total_tools", len(toolCalls)),
 		slog.Int("total_tokens", finalResult.Usage.TotalTokens))
 
-	resultChan <- StreamResult{
+	resultChan <- types.StreamResult{
 		Type:   "end",
 		Result: finalResult,
 	}
@@ -1011,8 +1028,8 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 //   - execution result
 //   - whether to continue iteration
 //   - error information
-func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []types.Message, resultChan chan<- StreamResult, iteration int) (*AgentResult, bool, error) {
-	result := &AgentResult{}
+func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []types.Message, resultChan chan<- types.StreamResult, iteration int) (*types.AgentResult, bool, error) {
+	result := &types.AgentResult{}
 
 	ae.mu.RLock()
 	tools := ae.tools
@@ -1056,7 +1073,7 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 		switch msg.Type {
 		case "chunk":
 			outputBuilder.WriteString(msg.Content)
-			resultChan <- StreamResult{
+			resultChan <- types.StreamResult{
 				Type:    "chunk",
 				Content: msg.Content,
 			}
@@ -1192,7 +1209,7 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 
 			// Format observation from tool result
 			truncationLength := ae.getToolTruncationLength(toolCall.Tool)
-			observation := truncateString(formatToolResult(toolResult), truncationLength)
+			observation := types.TruncateString(types.FormatToolResult(toolResult), truncationLength)
 
 			intermediateSteps = append(intermediateSteps, types.ToolCallData{
 				Action: types.ToolActionStep{
@@ -1311,7 +1328,7 @@ func (ae *AgentEngine) getToolTruncationLength(toolName string) int {
 			return metadata.MaxTruncationLength
 		}
 	}
-	return MaxTruncationLength
+	return types.MaxTruncationLength
 }
 
 // getCachedToolResult gets cached tool result
@@ -1337,14 +1354,14 @@ func (ae *AgentEngine) getCachedToolResult(toolName string, args map[string]inte
 	}
 
 	// Check expiration
-	if time.Since(entry.timestamp) >= CacheExpirationTime {
+	if time.Since(entry.Timestamp) >= types.CacheExpirationTime {
 		ae.removeCacheEntry(entry)
 		return nil, nil, false
 	}
 
 	// Move to head (most recently used)
 	ae.moveToHead(entry)
-	return entry.result, entry.err, true
+	return entry.Result, entry.Err, true
 }
 
 // setCachedToolResult sets tool result cache
@@ -1363,9 +1380,9 @@ func (ae *AgentEngine) setCachedToolResult(toolName string, args map[string]inte
 
 	// Check if entry already exists (update existing entry)
 	if existing, exists := ae.toolCache[cacheKey]; exists {
-		existing.result = result
-		existing.err = err
-		existing.timestamp = time.Now()
+		existing.Result = result
+		existing.Err = err
+		existing.Timestamp = time.Now()
 		ae.moveToHead(existing)
 		return
 	}
@@ -1379,11 +1396,11 @@ func (ae *AgentEngine) setCachedToolResult(toolName string, args map[string]inte
 	}
 
 	// Create new entry and add to head
-	entry := &toolCacheEntry{
-		result:    result,
-		err:       err,
-		timestamp: time.Now(),
-		key:       cacheKey,
+	entry := &types.ToolCacheEntry{
+		Result:    result,
+		Err:       err,
+		Timestamp: time.Now(),
+		Key:       cacheKey,
 	}
 	ae.toolCache[cacheKey] = entry
 	ae.addToHead(entry)
@@ -1394,8 +1411,8 @@ func (ae *AgentEngine) removeExpiredEntries() {
 	now := time.Now()
 	current := ae.toolCacheTail
 	for current != nil {
-		next := current.prev
-		if now.Sub(current.timestamp) >= CacheExpirationTime {
+		next := current.Prev
+		if now.Sub(current.Timestamp) >= types.CacheExpirationTime {
 			ae.removeCacheEntry(current)
 		}
 		current = next
@@ -1403,12 +1420,12 @@ func (ae *AgentEngine) removeExpiredEntries() {
 }
 
 // addToHead adds an entry to the head of LRU list
-func (ae *AgentEngine) addToHead(entry *toolCacheEntry) {
-	entry.prev = nil
-	entry.next = ae.toolCacheHead
+func (ae *AgentEngine) addToHead(entry *types.ToolCacheEntry) {
+	entry.Prev = nil
+	entry.Next = ae.toolCacheHead
 
 	if ae.toolCacheHead != nil {
-		ae.toolCacheHead.prev = entry
+		ae.toolCacheHead.Prev = entry
 	} else {
 		ae.toolCacheTail = entry
 	}
@@ -1416,52 +1433,52 @@ func (ae *AgentEngine) addToHead(entry *toolCacheEntry) {
 }
 
 // moveToHead moves an existing entry to the head of LRU list
-func (ae *AgentEngine) moveToHead(entry *toolCacheEntry) {
+func (ae *AgentEngine) moveToHead(entry *types.ToolCacheEntry) {
 	if entry == ae.toolCacheHead {
 		return
 	}
 
 	// Remove from current position
-	if entry.prev != nil {
-		entry.prev.next = entry.next
+	if entry.Prev != nil {
+		entry.Prev.Next = entry.Next
 	}
-	if entry.next != nil {
-		entry.next.prev = entry.prev
+	if entry.Next != nil {
+		entry.Next.Prev = entry.Prev
 	} else {
-		ae.toolCacheTail = entry.prev
+		ae.toolCacheTail = entry.Prev
 	}
 
 	// Add to head
-	entry.prev = nil
-	entry.next = ae.toolCacheHead
+	entry.Prev = nil
+	entry.Next = ae.toolCacheHead
 	if ae.toolCacheHead != nil {
-		ae.toolCacheHead.prev = entry
+		ae.toolCacheHead.Prev = entry
 	}
 	ae.toolCacheHead = entry
 }
 
 // removeCacheEntry removes an entry from cache and LRU list
-func (ae *AgentEngine) removeCacheEntry(entry *toolCacheEntry) {
+func (ae *AgentEngine) removeCacheEntry(entry *types.ToolCacheEntry) {
 	if entry == nil {
 		return
 	}
 
-	delete(ae.toolCache, entry.key)
+	delete(ae.toolCache, entry.Key)
 
-	if entry.prev != nil {
-		entry.prev.next = entry.next
+	if entry.Prev != nil {
+		entry.Prev.Next = entry.Next
 	} else {
-		ae.toolCacheHead = entry.next
+		ae.toolCacheHead = entry.Next
 	}
 
-	if entry.next != nil {
-		entry.next.prev = entry.prev
+	if entry.Next != nil {
+		entry.Next.Prev = entry.Prev
 	} else {
-		ae.toolCacheTail = entry.prev
+		ae.toolCacheTail = entry.Prev
 	}
 
-	entry.prev = nil
-	entry.next = nil
+	entry.Prev = nil
+	entry.Next = nil
 }
 
 // ==================== Tool Dependency Management Methods ====================

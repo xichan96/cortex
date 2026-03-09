@@ -14,25 +14,25 @@ import (
 	"github.com/xichan96/cortex/agent/llm"
 	"github.com/xichan96/cortex/agent/providers"
 	"github.com/xichan96/cortex/agent/skills"
+	"github.com/xichan96/cortex/agent/tools"
 	"github.com/xichan96/cortex/agent/tools/builtin/fs"
 	"github.com/xichan96/cortex/agent/tools/builtin/runtime"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/logger"
+	"github.com/xichan96/cortex/pkg/middle/sql/sqlite"
+	"github.com/xichan96/cortex/pkg/xcron"
+	"github.com/xichan96/cortex/scheduler"
 )
 
-// getLLMProvider creates an LLM provider (using Volcengine configuration)
 func getLLMProvider() (types.LLMProvider, error) {
-	// Use Volcengine client
-	// If model is empty, llm.NewVolceClient will use the default (DoubaoSeed1)
-	// If baseURL is empty, llm.NewVolceClient will use the default
-	opts := llm.VolceOptions{
-		APIKey: "",
-		Model:  "deepseek-v3-1-250821",
-	}
+	apiKey := ""
+	baseURL := ""
+	model := "gpt-4.1"
 
-	llmProvider, err := llm.NewVolceClient(opts)
+	fmt.Printf("Using LLM API: %s, Model: %s\n", baseURL, model)
+	llmProvider, err := llm.OpenAIClientWithBaseURL(apiKey, baseURL, model)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create Volcengine client: %w", err)
+		return nil, fmt.Errorf("Failed to create OpenAI client: %w", err)
 	}
 	return llmProvider, nil
 }
@@ -44,15 +44,37 @@ func loadAndInjectSkills(ctx context.Context, agentConfig *types.AgentConfig) ([
 		return nil, fmt.Errorf("failed to get current working directory: %w", err)
 	}
 
-	// Try to find the skills directory
-	skillsDir := filepath.Join(cwd, "examples", "skills", "skills")
-	if _, err := os.Stat(skillsDir); os.IsNotExist(err) {
-		skillsDir = filepath.Join(cwd, "skills")
+	var skillDirs []string
+	if envDir := os.Getenv("SKILLS_DIR"); envDir != "" {
+		skillDirs = append(skillDirs, envDir)
+	}
+	skillDirs = append(skillDirs,
+		filepath.Join(cwd, "examples", "scheduler", "skills"),
+		filepath.Join(cwd, "examples", "skills", "skills"),
+		filepath.Join(cwd, "skills"),
+	)
+
+	unique := make(map[string]struct{}, len(skillDirs))
+	var existing []string
+	for _, dir := range skillDirs {
+		if dir == "" {
+			continue
+		}
+		if _, ok := unique[dir]; ok {
+			continue
+		}
+		unique[dir] = struct{}{}
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			existing = append(existing, dir)
+		}
+	}
+	if len(existing) == 0 {
+		return nil, fmt.Errorf("no skills directory found")
 	}
 
-	fmt.Printf("Loading skills from: %s\n", skillsDir)
+	fmt.Printf("Loading skills from: %s\n", strings.Join(existing, ", "))
 
-	loadedSkills, err := skills.LoadSkillsFromDirs(ctx, logger.GetLogger(), []string{skillsDir})
+	loadedSkills, err := skills.LoadSkillsFromDirs(ctx, logger.GetLogger(), existing)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load skills: %w", err)
 	}
@@ -118,14 +140,59 @@ func main() {
 	memory := providers.NewSimpleMemoryProvider()
 	agentEngine.SetMemory(ctx, memory)
 
+	// 5.1 Initialize Persistence (SQLite)
+	cwd, _ := os.Getwd()
+	dbPath := filepath.Join(cwd, "scheduler.db")
+	fmt.Printf("Using SQLite database: %s\n", dbPath)
+
+	sqliteConfig := &sqlite.Config{
+		Path: dbPath,
+	}
+	sqliteClient, err := sqlite.NewClient(sqliteConfig)
+	if err != nil {
+		log.Fatalf("Failed to initialize SQLite: %v", err)
+	}
+
+	// AutoMigrate
+	if err := sqliteClient.DB.AutoMigrate(&xcron.Job{}); err != nil {
+		log.Fatalf("Failed to migrate database: %v", err)
+	}
+
+	// 5.2 Initialize Scheduler Service with GormJobStore
+	jobStore := xcron.NewGormJobStore(sqliteClient.DB)
+	cronScheduler := xcron.NewScheduler(jobStore)
+	schedulerService := scheduler.NewService(cronScheduler)
+
+	// Configure Scheduler Service
+	// We need a tool registry for the scheduler to use when executing agent tasks
+	toolRegistry := tools.NewRegistry()
+	// Register basic tools to the registry so scheduled agents can use them
+	toolRegistry.Register(fs.NewFileTool(""))
+	toolRegistry.Register(runtime.NewCommandTool())
+
+	// Configure agent for scheduler with per-session memory (SQLite)
+	memFactory := func(sessionID string) types.MemoryProvider {
+		return providers.NewSQLiteMemoryProvider(sqliteClient, sessionID)
+	}
+	agentConfig.MaxIterations = 30
+	schedulerService.ConfigureAgentWithMemoryFactory(llmProvider, agentConfig, memFactory, toolRegistry, registry)
+
+	// Start the scheduler
+	cronScheduler.Start()
+	defer cronScheduler.Stop()
+
 	// 6. Register Essential Tools
 	// The agent needs 'read_file' to read skill definitions, and 'command' to execute skill instructions.
 	agentEngine.AddTool(ctx, fs.NewFileTool(""))
 	agentEngine.AddTool(ctx, runtime.NewCommandTool())
 
-	fmt.Println("\n=== Final System Prompt ===")
-	fmt.Println(agentConfig.SystemMessage)
-	fmt.Println("===========================")
+	// Register Scheduler Tools
+	schedulerTools := scheduler.NewTools(schedulerService)
+	agentEngine.AddTools(ctx, schedulerTools)
+
+	// Inject session_id guidance for scheduling jobs (associate with this chat session)
+	chatSessionID := fmt.Sprintf("chat-%d", time.Now().UnixNano())
+	agentConfig.SystemMessage += fmt.Sprintf("\nWhen you schedule jobs using 'schedule_job', ALWAYS include session_id: '%s' to associate memory with this conversation. If needed, include max_iterations: 30.", chatSessionID)
 
 	// 7. Interactive Loop
 	reader := bufio.NewReader(os.Stdin)

@@ -221,7 +221,6 @@ github.com/mark3labs/mcp-go/server
 github.com/mark3labs/mcp-go/util
 # github.com/mattn/go-colorable v0.1.13
 ## explicit; go 1.15
-github.com/mattn/go-colorable
 # github.com/mattn/go-isatty v0.0.20
 ## explicit; go 1.15
 github.com/mattn/go-isatty
@@ -304,18 +303,18 @@ github.com/remyoudompheng/bigfft
 github.com/robfig/cron/v3
 # github.com/rs/zerolog v1.31.0
 ## explicit; go 1.15
-github.com/rs/zerolog
-github.com/rs/zerolog/internal/cbor
-github.com/rs/zerolog/internal/json
-github.com/rs/zerolog/log
 # github.com/spf13/cast v1.10.0
 ## explicit; go 1.21.0
 github.com/spf13/cast
 github.com/spf13/cast/internal
+# github.com/stretchr/objx v0.5.2
+## explicit; go 1.20
+github.com/stretchr/objx
 # github.com/stretchr/testify v1.11.1
 ## explicit; go 1.17
 github.com/stretchr/testify/assert
 github.com/stretchr/testify/assert/yaml
+github.com/stretchr/testify/mock
 # github.com/tmc/langchaingo v0.1.14
 ## explicit; go 1.24.4
 github.com/tmc/langchaingo/callbacks

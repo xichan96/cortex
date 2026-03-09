@@ -84,12 +84,9 @@ func (e *LangChainAgentEngine) BuildAgent() error {
 }
 
 // ExecuteSimple simple execution method (for backward compatibility)
-func (e *LangChainAgentEngine) ExecuteSimple(ctx context.Context, input string) (string, error) {
+func (e *LangChainAgentEngine) ExecuteSimple(ctx context.Context, input types.AgentInput) (string, error) {
 	e.mu.Lock()
-	e.memory = append(e.memory, types.Message{
-		Role:    "user",
-		Content: input,
-	})
+	e.memory = append(e.memory, input.ToMessage("user"))
 	e.limitMemoryLocked()
 	tools := make([]types.Tool, len(e.tools))
 	copy(tools, e.tools)
@@ -139,12 +136,9 @@ func (e *LangChainAgentEngine) ExecuteSimple(ctx context.Context, input string) 
 }
 
 // ExecuteStreamSimple simple streaming execution (for backward compatibility)
-func (e *LangChainAgentEngine) ExecuteStreamSimple(ctx context.Context, input string) (<-chan string, error) {
+func (e *LangChainAgentEngine) ExecuteStreamSimple(ctx context.Context, input types.AgentInput) (<-chan string, error) {
 	e.mu.Lock()
-	e.memory = append(e.memory, types.Message{
-		Role:    "user",
-		Content: input,
-	})
+	e.memory = append(e.memory, input.ToMessage("user"))
 	memory := make([]types.Message, len(e.memory))
 	copy(memory, e.memory)
 	e.mu.Unlock()
@@ -412,10 +406,10 @@ func (e *LangChainAgentEngine) AddTools(ctx context.Context, tools []types.Tool)
 }
 
 // Execute executes the agent (implements Agent interface)
-func (e *LangChainAgentEngine) Execute(ctx context.Context, input string, previousRequests []types.ToolCallData) (*AgentResult, error) {
+func (e *LangChainAgentEngine) Execute(ctx context.Context, input types.AgentInput, previousRequests []types.ToolCallData) (*types.AgentResult, error) {
 	startTime := time.Now()
 	logger.LogExecution("LangChainAgentEngine.Execute", 0, "Starting execution",
-		slog.String("input", truncateString(input, 100)))
+		slog.String("input", types.TruncateString(input.String(), 100)))
 
 	// Adapt to Agent interface, ignore previousRequests parameter
 	output, err := e.ExecuteSimple(ctx, input)
@@ -430,21 +424,21 @@ func (e *LangChainAgentEngine) Execute(ctx context.Context, input string, previo
 
 	// Note: ExecuteSimple has already updated e.totalUsage
 
-	return &AgentResult{
+	return &types.AgentResult{
 		Output: output,
 		Usage:  e.GetTotalUsage(), // Return current total usage as this run's usage (simplified)
 	}, nil
 }
 
 // ExecuteStream streams agent execution (implements Agent interface)
-func (e *LangChainAgentEngine) ExecuteStream(ctx context.Context, input string, previousRequests []types.ToolCallData) (<-chan StreamResult, error) {
+func (e *LangChainAgentEngine) ExecuteStream(ctx context.Context, input types.AgentInput, previousRequests []types.ToolCallData) (<-chan types.StreamResult, error) {
 	// Adapt to Agent interface, ignore previousRequests parameter
 	outputChan, err := e.ExecuteStreamSimple(ctx, input)
 	if err != nil {
 		return nil, err
 	}
 
-	resultChan := make(chan StreamResult, 100)
+	resultChan := make(chan types.StreamResult, 100)
 
 	go func() {
 		defer close(resultChan)
@@ -454,7 +448,7 @@ func (e *LangChainAgentEngine) ExecuteStream(ctx context.Context, input string, 
 			case <-ctx.Done():
 				return
 			default:
-				resultChan <- StreamResult{
+				resultChan <- types.StreamResult{
 					Type:    "chunk",
 					Content: content,
 				}
@@ -465,7 +459,7 @@ func (e *LangChainAgentEngine) ExecuteStream(ctx context.Context, input string, 
 		case <-ctx.Done():
 			return
 		default:
-			resultChan <- StreamResult{
+			resultChan <- types.StreamResult{
 				Type: "end",
 			}
 		}

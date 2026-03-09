@@ -9,6 +9,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpsrv "github.com/mark3labs/mcp-go/server"
 	"github.com/xichan96/cortex/agent/engine"
+	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
 	"github.com/xichan96/cortex/pkg/logger"
 )
@@ -104,7 +105,7 @@ func (h *handler) registerTools(mcp *mcpsrv.MCPServer) {
 				return mcpgo.NewToolResultError("message parameter is required"), nil
 			}
 
-			result, err := h.engine.Execute(ctx, message, nil)
+			result, err := h.engine.Execute(ctx, types.NewAgentInput(message), nil)
 			if err != nil {
 				var errorMsg string
 				if e, ok := err.(*errors.Error); ok {
