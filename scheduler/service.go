@@ -148,7 +148,7 @@ func (s *Service) registerAgentHandler() {
 
 		// Execute Agent
 		logger.Info("🚀 Executing Agent", slog.String("instruction", instruction), slog.Int("skills_count", len(agentPayload.Skills)))
-		result, err := agentEngine.Execute(ctx, instruction, nil)
+		result, err := agentEngine.Execute(ctx, types.NewAgentInput(instruction), nil)
 		if err != nil {
 			logger.Error("❌ Agent execution failed", slog.Any("error", err))
 			return err

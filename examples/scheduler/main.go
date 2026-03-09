@@ -236,13 +236,13 @@ func main() {
 		fmt.Printf("Assistant: ")
 
 		// Use streaming execution
-		stream, err := agentEngine.ExecuteStream(ctx, userInput, nil) // passing nil for tool_choice
+		stream, err := agentEngine.ExecuteStream(ctx, types.NewAgentInput(userInput), nil) // passing nil for tool_choice
 		if err != nil {
 			log.Printf("Execution error: %v", err)
 			continue
 		}
 
-		var finalResult *engine.AgentResult
+		var finalResult *types.AgentResult
 
 		for result := range stream {
 			switch result.Type {

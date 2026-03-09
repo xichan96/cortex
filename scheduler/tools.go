@@ -260,6 +260,8 @@ func sanitizeMessage(schedule string, msg string) string {
 		`(?U)(每隔\s*[一二三四五六七八九十0-9]+\s*(秒|分钟|分|小时|天))`,
 		`(?U)(每\s*[一二三四五六七八九十0-9]+\s*(秒|分钟|分|小时|天))`,
 		`(?U)((在)?\s*[一二三四五六七八九十0-9]+\s*(秒|分钟|分|小时|天)后)`,
+		`(?i)(every\s+([0-9]+|one|two|three|four|five|six|seven|eight|nine|ten)?\s*(second|minute|hour|day|week|month|year)s?)`,
+		`(?i)(in\s+([0-9]+|one|two|three|four|five|six|seven|eight|nine|ten)?\s*(second|minute|hour|day|week|month|year)s?)`,
 	}
 	for _, p := range pats {
 		re := regexp.MustCompile(p)

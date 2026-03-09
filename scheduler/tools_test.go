@@ -249,7 +249,8 @@ func TestScheduleJobTool_SanitizeMessage(t *testing.T) {
 	assert.NoError(t, err)
 	msg := payload["message"].(string)
 	assert.NotContains(t, msg, "every minute")
-	assert.Contains(t, msg, "use macos-alert，every minute pop up a notification：Drink water！Keep healthy. Title is “Drink Water Reminder”，sound is “Ping”。")
+	assert.Contains(t, msg, "use macos-alert")
+	assert.Contains(t, msg, "Drink water")
 }
 func TestListJobsTool_Execute(t *testing.T) {
 	store := NewMockJobStore()
@@ -380,7 +381,7 @@ func TestAgentEngine_SaveContextUsesChatMessageRole(t *testing.T) {
 	mem := providers.NewSimpleMemoryProvider()
 	ae.SetMemory(context.Background(), mem)
 
-	result, err := ae.Execute(context.Background(), "hello", nil)
+	result, err := ae.Execute(context.Background(), types.NewAgentInput("hello"), nil)
 	assert.NoError(t, err)
 	assert.Equal(t, "ok", result.Output)
 
