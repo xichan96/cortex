@@ -88,6 +88,9 @@ func (p *LangChainLLMProvider) Chat(ctx context.Context, messages []types.Messag
 	// Convert message format
 	langChainMessages := p.convertToLangChainMessages(messages)
 
+	// Build call options
+	callOpts := p.getCallOptions(ctx)
+
 	retryCount := 0
 
 	for {
@@ -99,7 +102,7 @@ func (p *LangChainLLMProvider) Chat(ctx context.Context, messages []types.Messag
 		}
 
 		// Call LLM
-		response, err := p.model.GenerateContent(ctx, langChainMessages)
+		response, err := p.model.GenerateContent(ctx, langChainMessages, callOpts...)
 		if err != nil {
 			// Handle 429 retry
 			if shouldRetry, waitTime := p.handle429Retry(err, retryCount, p.maxRetries); shouldRetry {
@@ -126,6 +129,9 @@ func (p *LangChainLLMProvider) ChatStream(ctx context.Context, messages []types.
 	// Convert message format
 	langChainMessages := p.convertToLangChainMessages(messages)
 
+	// Build call options
+	callOpts := p.getCallOptions(ctx)
+
 	outputChan := make(chan types.StreamMessage, 100)
 
 	go func() {
@@ -151,7 +157,8 @@ func (p *LangChainLLMProvider) ChatStream(ctx context.Context, messages []types.
 			// Streaming call
 			var response *llms.ContentResponse
 			var err error
-			response, err = p.model.GenerateContent(ctx, langChainMessages, llms.WithStreamingFunc(func(c context.Context, chunk []byte) error {
+
+			streamingOpts := append(callOpts, llms.WithStreamingFunc(func(c context.Context, chunk []byte) error {
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
@@ -162,6 +169,8 @@ func (p *LangChainLLMProvider) ChatStream(ctx context.Context, messages []types.
 					return nil
 				}
 			}))
+
+			response, err = p.model.GenerateContent(ctx, langChainMessages, streamingOpts...)
 
 			if err != nil {
 				// Handle 429 retry
@@ -198,6 +207,9 @@ func (p *LangChainLLMProvider) ChatWithTools(ctx context.Context, messages []typ
 	// Convert message format
 	langChainMessages := p.convertToLangChainMessages(messages)
 
+	// Build call options
+	callOpts := p.getCallOptions(ctx)
+
 	// Convert tools
 	langChainTools := p.convertToLangChainTools(tools)
 
@@ -212,7 +224,8 @@ func (p *LangChainLLMProvider) ChatWithTools(ctx context.Context, messages []typ
 		}
 
 		// Call LLM
-		response, err := p.model.GenerateContent(ctx, langChainMessages, llms.WithTools(langChainTools))
+		toolOpts := append(callOpts, llms.WithTools(langChainTools))
+		response, err := p.model.GenerateContent(ctx, langChainMessages, toolOpts...)
 		if err != nil {
 			// Handle 429 retry
 			if shouldRetry, waitTime := p.handle429Retry(err, retryCount, p.maxRetries); shouldRetry {
@@ -240,6 +253,9 @@ func (p *LangChainLLMProvider) ChatWithTools(ctx context.Context, messages []typ
 func (p *LangChainLLMProvider) ChatWithToolsStream(ctx context.Context, messages []types.Message, tools []types.Tool) (<-chan types.StreamMessage, error) {
 	// Convert message format
 	langChainMessages := p.convertToLangChainMessages(messages)
+
+	// Build call options
+	callOpts := p.getCallOptions(ctx)
 
 	// Convert tools
 	langChainTools := p.convertToLangChainTools(tools)
@@ -273,7 +289,8 @@ func (p *LangChainLLMProvider) ChatWithToolsStream(ctx context.Context, messages
 			// Streaming call
 			// Note: We collect all content chunks and filter tool calls from the full response
 			// This is more reliable than trying to detect tool calls in streaming chunks
-			response, err := p.model.GenerateContent(ctx, langChainMessages,
+
+			streamingOpts := append(callOpts,
 				llms.WithTools(langChainTools),
 				llms.WithStreamingFunc(func(c context.Context, chunk []byte) error {
 					select {
@@ -300,6 +317,8 @@ func (p *LangChainLLMProvider) ChatWithToolsStream(ctx context.Context, messages
 
 					return nil
 				}))
+
+			response, err := p.model.GenerateContent(ctx, langChainMessages, streamingOpts...)
 
 			// Save the full response to extract tool calls
 			if err == nil {
@@ -364,6 +383,40 @@ func (p *LangChainLLMProvider) ChatWithToolsStream(ctx context.Context, messages
 	}()
 
 	return outputChan, nil
+}
+
+// getCallOptions builds LangChain call options from context
+func (p *LangChainLLMProvider) getCallOptions(ctx context.Context) []llms.CallOption {
+	opts := []llms.CallOption{}
+
+	// Extract options from context if present
+	if v := ctx.Value(types.ContextKeyTemperature); v != nil {
+		if temp, ok := v.(float32); ok {
+			opts = append(opts, llms.WithTemperature(float64(temp)))
+		}
+	}
+
+	if v := ctx.Value(types.ContextKeyMaxTokens); v != nil {
+		if tokens, ok := v.(int); ok && tokens > 0 {
+			opts = append(opts, llms.WithMaxTokens(tokens))
+		}
+	}
+
+	if v := ctx.Value(types.ContextKeyMaxCompletionTokens); v != nil {
+		if tokens, ok := v.(int); ok && tokens > 0 {
+			// Note: langchaingo doesn't have WithMaxCompletionTokens yet, so we use WithMaxTokens
+			// and rely on our CompatibilityHTTPClient to swap it for reasoning models
+			opts = append(opts, llms.WithMaxTokens(tokens))
+		}
+	}
+
+	if v := ctx.Value(types.ContextKeyTopP); v != nil {
+		if topP, ok := v.(float32); ok {
+			opts = append(opts, llms.WithTopP(float64(topP)))
+		}
+	}
+
+	return opts
 }
 
 // GetModelName gets the model name

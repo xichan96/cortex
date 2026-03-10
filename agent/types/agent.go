@@ -21,6 +21,14 @@ const (
 	IterationDelay        = 100 * time.Millisecond // inter-iteration delay
 )
 
+// Context keys
+const (
+	ContextKeyTemperature         = "temperature"
+	ContextKeyMaxTokens           = "max_tokens"
+	ContextKeyTopP                = "top_p"
+	ContextKeyMaxCompletionTokens = "max_completion_tokens"
+)
+
 // AgentInput agent execution input
 type AgentInput struct {
 	Text  string        `json:"text,omitempty"`

@@ -52,6 +52,7 @@ func (ae *AgentEngine) SetTemperature(ctx context.Context, temperature float32) 
 func (ae *AgentEngine) SetMaxTokens(ctx context.Context, maxTokens int) {
 	ae.setConfigValue(func() {
 		ae.config.MaxTokens = maxTokens
+		ae.config.MaxCompletionTokens = maxTokens // Also set MaxCompletionTokens for compatibility
 	})
 }
 

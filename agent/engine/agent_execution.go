@@ -792,6 +792,22 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 		defer cancel()
 	}
 
+	// Add config values to context for LLM provider
+	if ae.config != nil {
+		if ae.config.Temperature > 0 {
+			ctx = context.WithValue(ctx, types.ContextKeyTemperature, ae.config.Temperature)
+		}
+		if ae.config.MaxTokens > 0 {
+			ctx = context.WithValue(ctx, types.ContextKeyMaxTokens, ae.config.MaxTokens)
+		}
+		if ae.config.MaxCompletionTokens > 0 {
+			ctx = context.WithValue(ctx, types.ContextKeyMaxCompletionTokens, ae.config.MaxCompletionTokens)
+		}
+		if ae.config.TopP > 0 {
+			ctx = context.WithValue(ctx, types.ContextKeyTopP, ae.config.TopP)
+		}
+	}
+
 	if ae.model == nil {
 		return nil, false, errors.NewError(errors.EC_STREAM_CHAT_FAILED.Code, "LLM model provider is nil")
 	}
