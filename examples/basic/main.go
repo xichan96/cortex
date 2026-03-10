@@ -169,6 +169,12 @@ func main() {
 		},
 	})
 
+	result, err := agentEngine.Execute(ctx, input, nil)
+	if err != nil {
+		log.Printf("Agent streaming execution error: %v", err)
+		return
+	}
+	fmt.Println(result.Output)
 	stream, err := agentEngine.ExecuteStream(ctx, input, nil)
 	if err != nil {
 		log.Printf("Agent streaming execution error: %v", err)

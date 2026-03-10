@@ -1,9 +1,11 @@
 package http
 
+import "github.com/xichan96/cortex/agent/types"
+
 // MessageRequest defines the structure for message requests
 type MessageRequest struct {
-	SessionID string `json:"session_id" binding:"required,min=1"`
-	Message   string `json:"message" binding:"required,min=1"`
+	SessionID        string `json:"session_id" binding:"required,min=1"`
+	types.AgentInput `json:"message" binding:"required,min=1"`
 }
 
 // ErrorResponse defines the structure for error responses
