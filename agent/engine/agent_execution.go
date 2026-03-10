@@ -12,6 +12,129 @@ import (
 	"github.com/xichan96/cortex/pkg/logger"
 )
 
+func (ae *AgentEngine) getConfig() *types.AgentConfig {
+	ae.mu.RLock()
+	defer ae.mu.RUnlock()
+	return ae.config
+}
+
+func (ae *AgentEngine) getMaxIterations() int {
+	if c := ae.getConfig(); c != nil {
+		return c.MaxIterations
+	}
+	return 10
+}
+
+func (ae *AgentEngine) waitRateLimit(ctx context.Context) error {
+	ae.mu.RLock()
+	limiter := ae.rateLimiter
+	ae.mu.RUnlock()
+	if limiter == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	limitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := limiter.Wait(limitCtx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func toolCallData(tool string, toolInput interface{}, toolCallID, typeStr, observation string) types.ToolCallData {
+	return types.ToolCallData{
+		Action: types.ToolActionStep{
+			Tool:       tool,
+			ToolInput:  toolInput,
+			ToolCallID: toolCallID,
+			Type:       typeStr,
+		},
+		Observation: observation,
+	}
+}
+
+func (ae *AgentEngine) enrichContextWithConfig(ctx context.Context) (context.Context, context.CancelFunc) {
+	config := ae.getConfig()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timeout := time.Duration(0)
+	if config != nil {
+		timeout = config.Timeout
+	}
+	if timeout > 0 {
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		return ae.addConfigValuesToContext(ctx), cancel
+	}
+	return ae.addConfigValuesToContext(ctx), func() {}
+}
+
+func (ae *AgentEngine) addConfigValuesToContext(ctx context.Context) context.Context {
+	config := ae.getConfig()
+	if config == nil {
+		return ctx
+	}
+	if config.Temperature > 0 {
+		ctx = context.WithValue(ctx, types.ContextKeyTemperature, config.Temperature)
+	}
+	if config.MaxTokens > 0 {
+		ctx = context.WithValue(ctx, types.ContextKeyMaxTokens, config.MaxTokens)
+	}
+	if config.MaxCompletionTokens > 0 {
+		ctx = context.WithValue(ctx, types.ContextKeyMaxCompletionTokens, config.MaxCompletionTokens)
+	}
+	if config.TopP > 0 {
+		ctx = context.WithValue(ctx, types.ContextKeyTopP, config.TopP)
+	}
+	return ctx
+}
+
+func (ae *AgentEngine) saveToMemoryAndMaybeCompress(ctx context.Context, inputMap, outputMap map[string]interface{}) {
+	if ae.memory == nil {
+		return
+	}
+	if err := ae.memory.SaveContext(ctx, inputMap, outputMap); err != nil {
+		logger.LogError("saveToMemoryAndMaybeCompress", err, slog.String("phase", "save_context"))
+		return
+	}
+	config := ae.getConfig()
+	enableCompress := false
+	compressThreshold := 0
+	if config != nil {
+		enableCompress = config.EnableMemoryCompress
+		compressThreshold = config.MemoryCompressThreshold
+	}
+	if !enableCompress || compressThreshold <= 0 {
+		return
+	}
+	history, err := ae.memory.GetChatHistory(ctx)
+	if err != nil || len(history) <= compressThreshold {
+		return
+	}
+	ae.mu.RLock()
+	llm := ae.model
+	ae.mu.RUnlock()
+	if llm == nil {
+		return
+	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.LogError("saveToMemoryAndMaybeCompress", fmt.Errorf("panic in compress memory async: %v", r))
+			}
+		}()
+		if err := ae.memory.CompressMemory(context.Background(), llm, compressThreshold); err != nil {
+			logger.LogError("saveToMemoryAndMaybeCompress", err, slog.String("phase", "compress_memory_async"))
+		} else {
+			logger.Info("Memory compressed successfully",
+				slog.Int("original_count", len(history)),
+				slog.Int("threshold", compressThreshold))
+		}
+	}()
+}
+
 // ==================== Core Execution Methods ====================
 
 // Execute executes the agent task (supports multi-round iteration)
@@ -37,24 +160,11 @@ func (ae *AgentEngine) Execute(ctx context.Context, input types.AgentInput, prev
 		slog.String("input", types.TruncateString(input.String(), 100)),
 		slog.Int("previousRequests", len(previousRequests)))
 
-	ae.mu.RLock()
-	limiter := ae.rateLimiter
-	ae.mu.RUnlock()
-
-	if limiter != nil {
-		if ctx == nil {
-			ctx = context.Background()
-		}
-		// Create a separate context for rate limiter to avoid cancelling the main context
-		limitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		if err := limiter.Wait(limitCtx); err != nil {
-			logger.LogError("Execute", err, slog.String("phase", "rate_limit"))
-			return nil, errors.NewError(errors.EC_SYSTEM_OVERLOAD.Code, "rate limit exceeded").Wrap(err)
-		}
+	if err := ae.waitRateLimit(ctx); err != nil {
+		logger.LogError("Execute", err, slog.String("phase", "rate_limit"))
+		return nil, errors.NewError(errors.EC_SYSTEM_OVERLOAD.Code, "rate limit exceeded").Wrap(err)
 	}
 
-	// Pre-allocate slice capacity to reduce memory reallocations
 	messages, err := ae.prepareMessages(ctx, input, previousRequests)
 	if err != nil {
 		logger.LogError("Execute", err, slog.String("phase", "prepare_messages"))
@@ -63,14 +173,7 @@ func (ae *AgentEngine) Execute(ctx context.Context, input types.AgentInput, prev
 
 	var finalResult *types.AgentResult
 	iteration := 0
-	ae.mu.RLock()
-	maxIterations := 10
-	if ae.config != nil {
-		maxIterations = ae.config.MaxIterations
-	}
-	ae.mu.RUnlock()
-
-	// Initialize finalResult to prevent nil pointer panic
+	maxIterations := ae.getMaxIterations()
 	finalResult = &types.AgentResult{Output: ""}
 	totalUsage := types.Usage{}
 
@@ -133,64 +236,14 @@ func (ae *AgentEngine) Execute(ctx context.Context, input types.AgentInput, prev
 		slog.Int("total_iterations", iteration+1),
 		slog.Int("output_length", outputLength))
 
-	// Save to memory system
 	if ae.memory != nil && finalResult != nil {
-		ae.mu.RLock()
-		chatRole := ""
-		if ae.config != nil {
-			chatRole = ae.config.ChatMessageRole
+		chatRole := "user"
+		if c := ae.getConfig(); c != nil && c.ChatMessageRole != "" {
+			chatRole = c.ChatMessageRole
 		}
-		ae.mu.RUnlock()
-
-		if chatRole == "" {
-			chatRole = "user"
-		}
-		inputMap := map[string]interface{}{
-			"input": input.String(),
-			"role":  chatRole,
-			"parts": input.Parts,
-		}
-		outputMap := map[string]interface{}{"output": finalResult.Output}
-		if err := ae.memory.SaveContext(ctx, inputMap, outputMap); err != nil {
-			logger.LogError("Execute", err, slog.String("phase", "save_context"))
-			// Do not interrupt execution as main flow is complete
-		} else {
-			// Check if memory compression is needed
-			ae.mu.RLock()
-			enableCompress := false
-			compressThreshold := 0
-			if ae.config != nil {
-				enableCompress = ae.config.EnableMemoryCompress
-				compressThreshold = ae.config.MemoryCompressThreshold
-			}
-			ae.mu.RUnlock()
-
-			if enableCompress && compressThreshold > 0 {
-				history, err := ae.memory.GetChatHistory(ctx)
-				if err == nil && len(history) > compressThreshold {
-					ae.mu.RLock()
-					llm := ae.model
-					ae.mu.RUnlock()
-					if llm != nil {
-						// Execute compression asynchronously to avoid blocking the main thread
-						go func() {
-							defer func() {
-								if r := recover(); r != nil {
-									logger.LogError("Execute", fmt.Errorf("panic in compress memory async: %v", r))
-								}
-							}()
-							if err := ae.memory.CompressMemory(context.Background(), llm, compressThreshold); err != nil {
-								logger.LogError("Execute", err, slog.String("phase", "compress_memory_async"))
-							} else {
-								logger.Info("Memory compressed successfully",
-									slog.Int("original_count", len(history)),
-									slog.Int("threshold", compressThreshold))
-							}
-						}()
-					}
-				}
-			}
-		}
+		ae.saveToMemoryAndMaybeCompress(ctx, map[string]interface{}{
+			"input": input.String(), "role": chatRole, "parts": input.Parts,
+		}, map[string]interface{}{"output": finalResult.Output})
 	}
 
 	return finalResult, nil
@@ -220,25 +273,13 @@ func (ae *AgentEngine) ExecuteStream(ctx context.Context, input types.AgentInput
 		startTime := time.Now()
 		logger.LogExecution("ExecuteStream", 0, "Starting stream execution", slog.String("input", types.TruncateString(input.String(), 100)), slog.Int("previousRequests", len(previousRequests)))
 
-		ae.mu.RLock()
-		limiter := ae.rateLimiter
-		ae.mu.RUnlock()
-
-		if limiter != nil {
-			if ctx == nil {
-				ctx = context.Background()
+		if err := ae.waitRateLimit(ctx); err != nil {
+			logger.LogError("ExecuteStream", err, slog.String("phase", "rate_limit"))
+			resultChan <- types.StreamResult{
+				Type:  "error",
+				Error: errors.NewError(errors.EC_SYSTEM_OVERLOAD.Code, "rate limit exceeded").Wrap(err),
 			}
-			// Create a separate context for rate limiter
-			limitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			defer cancel()
-			if err := limiter.Wait(limitCtx); err != nil {
-				logger.LogError("ExecuteStream", err, slog.String("phase", "rate_limit"))
-				resultChan <- types.StreamResult{
-					Type:  "error",
-					Error: errors.NewError(errors.EC_SYSTEM_OVERLOAD.Code, "rate limit exceeded").Wrap(err),
-				}
-				return
-			}
+			return
 		}
 
 		defer func() {
@@ -291,10 +332,7 @@ func (ae *AgentEngine) prepareMessages(ctx context.Context, input types.AgentInp
 		}
 	}
 
-	ae.mu.RLock()
-	config := ae.config
-	ae.mu.RUnlock()
-
+	config := ae.getConfig()
 	estimatedSize := 1 +
 		len(history) +
 		len(previousRequests)
@@ -358,28 +396,17 @@ func (ae *AgentEngine) buildContextFromPreviousRequests(requests []types.ToolCal
 //   - error information
 func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Message, iteration int) (*types.AgentResult, bool, error) {
 	ae.mu.RLock()
-	maxIterations := 10
-	timeout := time.Duration(0)
+	tools := ae.tools
 	toolExecutionTimeout := time.Duration(0)
 	if ae.config != nil {
-		maxIterations = ae.config.MaxIterations
-		timeout = ae.config.Timeout
 		toolExecutionTimeout = ae.config.ToolExecutionTimeout
 	}
-	tools := ae.tools
 	ae.mu.RUnlock()
+	maxIterations := ae.getMaxIterations()
+	ctx, cancel := ae.enrichContextWithConfig(ctx)
+	defer cancel()
 	startTime := time.Now()
 	logger.LogExecution("executeIteration", iteration, fmt.Sprintf("Starting iteration %d/%d", iteration+1, maxIterations))
-
-	// Create context with timeout if configured
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
-	}
 
 	if ae.model == nil {
 		return nil, false, errors.NewError(errors.EC_LLM_CALL_FAILED.Code, "LLM model provider is nil")
@@ -430,18 +457,8 @@ func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Me
 			ae.mu.RUnlock()
 			if !exists {
 				errMsg := fmt.Sprintf("tool '%s' not found in available tools", toolCall.Function.Name)
-				logger.Info("Tool not found",
-					slog.String("tool_name", toolCall.Function.Name),
-					slog.Int("iteration", iteration+1))
-				intermediateSteps = append(intermediateSteps, types.ToolCallData{
-					Action: types.ToolActionStep{
-						Tool:       toolCall.Function.Name,
-						ToolInput:  toolCall.Function.Arguments,
-						ToolCallID: toolCall.ID,
-						Type:       toolCall.Type,
-					},
-					Observation: errMsg,
-				})
+				logger.Info("Tool not found", slog.String("tool_name", toolCall.Function.Name), slog.Int("iteration", iteration+1))
+				intermediateSteps = append(intermediateSteps, toolCallData(toolCall.Function.Name, toolCall.Function.Arguments, toolCall.ID, toolCall.Type, errMsg))
 				continue
 			}
 
@@ -452,18 +469,8 @@ func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Me
 				logger.LogToolExecution(toolCall.Function.Name, true, 0, slog.Bool("cached", true))
 				if err != nil {
 					errMsg := fmt.Sprintf("Tool '%s' execution failed (cached error): %v", toolCall.Function.Name, err)
-					logger.LogToolExecution(toolCall.Function.Name, false, 0,
-						slog.String("error", err.Error()),
-						slog.Bool("cached", true))
-					intermediateSteps = append(intermediateSteps, types.ToolCallData{
-						Action: types.ToolActionStep{
-							Tool:       toolCall.Function.Name,
-							ToolInput:  toolCall.Function.Arguments,
-							ToolCallID: toolCall.ID,
-							Type:       toolCall.Type,
-						},
-						Observation: errMsg,
-					})
+					logger.LogToolExecution(toolCall.Function.Name, false, 0, slog.String("error", err.Error()), slog.Bool("cached", true))
+					intermediateSteps = append(intermediateSteps, toolCallData(toolCall.Function.Name, toolCall.Function.Arguments, toolCall.ID, toolCall.Type, errMsg))
 					continue
 				}
 			} else {
@@ -473,50 +480,21 @@ func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Me
 
 				if err != nil {
 					errMsg := fmt.Sprintf("Tool '%s' execution failed: %v", toolCall.Function.Name, err)
-					logger.LogToolExecution(toolCall.Function.Name, false, duration,
-						slog.String("error", err.Error()),
-						slog.String("tool_input", fmt.Sprintf("%v", toolCall.Function.Arguments)))
-					intermediateSteps = append(intermediateSteps, types.ToolCallData{
-						Action: types.ToolActionStep{
-							Tool:       toolCall.Function.Name,
-							ToolInput:  toolCall.Function.Arguments,
-							ToolCallID: toolCall.ID,
-							Type:       toolCall.Type,
-						},
-						Observation: errMsg,
-					})
+					logger.LogToolExecution(toolCall.Function.Name, false, duration, slog.String("error", err.Error()), slog.String("tool_input", fmt.Sprintf("%v", toolCall.Function.Arguments)))
+					intermediateSteps = append(intermediateSteps, toolCallData(toolCall.Function.Name, toolCall.Function.Arguments, toolCall.ID, toolCall.Type, errMsg))
 					continue
 				}
-
-				// Cache tool result
 				ae.setCachedToolResult(toolCall.Function.Name, toolCall.Function.Arguments, toolResult, err)
 				logger.LogToolExecution(toolCall.Function.Name, true, duration, slog.Bool("cached", false))
 			}
 
-			logger.Info("Tool executed successfully",
-				slog.String("tool_name", toolCall.Function.Name),
-				slog.Int("iteration", iteration+1))
-
+			logger.Info("Tool executed successfully", slog.String("tool_name", toolCall.Function.Name), slog.Int("iteration", iteration+1))
 			toolCalls = append(toolCalls, types.ToolCallRequest{
-				Tool:       toolCall.Function.Name,
-				ToolInput:  toolCall.Function.Arguments,
-				ToolCallID: toolCall.ID,
-				Type:       toolCall.Type,
+				Tool: toolCall.Function.Name, ToolInput: toolCall.Function.Arguments, ToolCallID: toolCall.ID, Type: toolCall.Type,
 			})
-
-			// Format observation from tool result
 			truncationLength := ae.getToolTruncationLength(toolCall.Function.Name)
 			observation := types.TruncateString(types.FormatToolResult(toolResult), truncationLength)
-
-			intermediateSteps = append(intermediateSteps, types.ToolCallData{
-				Action: types.ToolActionStep{
-					Tool:       toolCall.Function.Name,
-					ToolInput:  toolCall.Function.Arguments,
-					ToolCallID: toolCall.ID,
-					Type:       toolCall.Type,
-				},
-				Observation: observation,
-			})
+			intermediateSteps = append(intermediateSteps, toolCallData(toolCall.Function.Name, toolCall.Function.Arguments, toolCall.ID, toolCall.Type, observation))
 		}
 
 		result.ToolCalls = toolCalls
@@ -609,14 +587,7 @@ func (ae *AgentEngine) buildNextMessages(previousMessages []types.Message, resul
 func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialMessages []types.Message, resultChan chan<- types.StreamResult) {
 	messages := initialMessages
 	finalResult := &types.AgentResult{}
-
-	ae.mu.RLock()
-	maxIterations := 10
-	if ae.config != nil {
-		maxIterations = ae.config.MaxIterations
-	}
-	ae.mu.RUnlock()
-
+	maxIterations := ae.getMaxIterations()
 	estimatedToolCalls := maxIterations * 3
 	toolCalls := make([]types.ToolCallRequest, 0, estimatedToolCalls)
 	intermediateSteps := make([]types.ToolCallData, 0, estimatedToolCalls)
@@ -672,65 +643,15 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 		}
 	}
 
-	// Save to memory system
 	if ae.memory != nil && len(initialMessages) > 0 {
-		ae.mu.RLock()
-		chatRole := ""
-		if ae.config != nil {
-			chatRole = ae.config.ChatMessageRole
-		}
-		ae.mu.RUnlock()
-
-		if chatRole == "" {
-			chatRole = "user"
+		chatRole := "user"
+		if c := ae.getConfig(); c != nil && c.ChatMessageRole != "" {
+			chatRole = c.ChatMessageRole
 		}
 		lastMsg := initialMessages[len(initialMessages)-1]
-		input := map[string]interface{}{
-			"input": lastMsg.Content,
-			"role":  chatRole,
-			"parts": lastMsg.Parts,
-		}
-		output := map[string]interface{}{"output": finalResult.Output}
-		if err := ae.memory.SaveContext(ctx, input, output); err != nil {
-			logger.LogError("executeStreamWithIterations", err, slog.String("phase", "save_context"))
-			// Do not interrupt execution as main flow is complete
-		} else {
-			// Check if memory compression is needed
-			ae.mu.RLock()
-			enableCompress := false
-			compressThreshold := 0
-			if ae.config != nil {
-				enableCompress = ae.config.EnableMemoryCompress
-				compressThreshold = ae.config.MemoryCompressThreshold
-			}
-			ae.mu.RUnlock()
-
-			if enableCompress && compressThreshold > 0 {
-				history, err := ae.memory.GetChatHistory(ctx)
-				if err == nil && len(history) > compressThreshold {
-					ae.mu.RLock()
-					llm := ae.model
-					ae.mu.RUnlock()
-					if llm != nil {
-						// Execute compression asynchronously to avoid blocking the main thread
-						go func() {
-							defer func() {
-								if r := recover(); r != nil {
-									logger.LogError("executeStreamWithIterations", fmt.Errorf("panic in compress memory async: %v", r))
-								}
-							}()
-							if err := ae.memory.CompressMemory(context.Background(), llm, compressThreshold); err != nil {
-								logger.LogError("executeStreamWithIterations", err, slog.String("phase", "compress_memory_async"))
-							} else {
-								logger.Info("Memory compressed successfully",
-									slog.Int("original_count", len(history)),
-									slog.Int("threshold", compressThreshold))
-							}
-						}()
-					}
-				}
-			}
-		}
+		ae.saveToMemoryAndMaybeCompress(ctx, map[string]interface{}{
+			"input": lastMsg.Content, "role": chatRole, "parts": lastMsg.Parts,
+		}, map[string]interface{}{"output": finalResult.Output})
 	}
 
 	// Set final result's tool calls and intermediate steps
@@ -769,44 +690,16 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 //   - error information
 func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []types.Message, resultChan chan<- types.StreamResult, iteration int) (*types.AgentResult, bool, error) {
 	result := &types.AgentResult{}
-
 	ae.mu.RLock()
 	tools := ae.tools
-	maxIterations := 10
-	timeout := time.Duration(0)
 	toolExecutionTimeout := time.Duration(0)
 	if ae.config != nil {
-		maxIterations = ae.config.MaxIterations
-		timeout = ae.config.Timeout
 		toolExecutionTimeout = ae.config.ToolExecutionTimeout
 	}
 	ae.mu.RUnlock()
-
-	// Create context with timeout if configured
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
-	}
-
-	// Add config values to context for LLM provider
-	if ae.config != nil {
-		if ae.config.Temperature > 0 {
-			ctx = context.WithValue(ctx, types.ContextKeyTemperature, ae.config.Temperature)
-		}
-		if ae.config.MaxTokens > 0 {
-			ctx = context.WithValue(ctx, types.ContextKeyMaxTokens, ae.config.MaxTokens)
-		}
-		if ae.config.MaxCompletionTokens > 0 {
-			ctx = context.WithValue(ctx, types.ContextKeyMaxCompletionTokens, ae.config.MaxCompletionTokens)
-		}
-		if ae.config.TopP > 0 {
-			ctx = context.WithValue(ctx, types.ContextKeyTopP, ae.config.TopP)
-		}
-	}
+	maxIterations := ae.getMaxIterations()
+	ctx, cancel := ae.enrichContextWithConfig(ctx)
+	defer cancel()
 
 	if ae.model == nil {
 		return nil, false, errors.NewError(errors.EC_STREAM_CHAT_FAILED.Code, "LLM model provider is nil")
@@ -898,83 +791,35 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 			ae.mu.RUnlock()
 			if !exists {
 				errMsg := fmt.Sprintf("tool '%s' not found in available tools", toolCall.Tool)
-				logger.LogError("executeStreamIteration", fmt.Errorf("tool %q not found in available tools", toolCall.Tool),
-					slog.String("tool_name", toolCall.Tool))
-				intermediateSteps = append(intermediateSteps, types.ToolCallData{
-					Action: types.ToolActionStep{
-						Tool:       toolCall.Tool,
-						ToolInput:  toolCall.ToolInput,
-						ToolCallID: toolCall.ToolCallID,
-						Type:       toolCall.Type,
-					},
-					Observation: errMsg,
-				})
+				logger.LogError("executeStreamIteration", fmt.Errorf("tool %q not found in available tools", toolCall.Tool), slog.String("tool_name", toolCall.Tool))
+				intermediateSteps = append(intermediateSteps, toolCallData(toolCall.Tool, toolCall.ToolInput, toolCall.ToolCallID, toolCall.Type, errMsg))
 				continue
 			}
-
-			// Check cache first
 			toolStartTime := time.Now()
 			toolResult, err, cached := ae.getCachedToolResult(toolCall.Tool, toolCall.ToolInput)
 			if cached {
 				logger.LogToolExecution(toolCall.Tool, true, 0, slog.Bool("cached", true), slog.String("context", "streaming"))
 				if err != nil {
 					errMsg := fmt.Sprintf("Tool '%s' execution failed (cached error): %v", toolCall.Tool, err)
-					logger.LogToolExecution(toolCall.Tool, false, 0,
-						slog.String("error", err.Error()),
-						slog.Bool("cached", true),
-						slog.String("context", "streaming"))
-					intermediateSteps = append(intermediateSteps, types.ToolCallData{
-						Action: types.ToolActionStep{
-							Tool:       toolCall.Tool,
-							ToolInput:  toolCall.ToolInput,
-							ToolCallID: toolCall.ToolCallID,
-							Type:       toolCall.Type,
-						},
-						Observation: errMsg,
-					})
+					logger.LogToolExecution(toolCall.Tool, false, 0, slog.String("error", err.Error()), slog.Bool("cached", true), slog.String("context", "streaming"))
+					intermediateSteps = append(intermediateSteps, toolCallData(toolCall.Tool, toolCall.ToolInput, toolCall.ToolCallID, toolCall.Type, errMsg))
 					continue
 				}
 			} else {
-				// Execute tool with timeout
 				toolResult, err = ae.executeToolWithTimeout(ctx, tool, toolCall.ToolInput, toolExecutionTimeout)
 				duration := time.Since(toolStartTime)
-
 				if err != nil {
 					errMsg := fmt.Sprintf("Tool '%s' execution failed: %v", toolCall.Tool, err)
-					logger.LogToolExecution(toolCall.Tool, false, duration,
-						slog.String("error", err.Error()),
-						slog.String("tool_input", fmt.Sprintf("%v", toolCall.ToolInput)),
-						slog.String("context", "streaming"))
-					intermediateSteps = append(intermediateSteps, types.ToolCallData{
-						Action: types.ToolActionStep{
-							Tool:       toolCall.Tool,
-							ToolInput:  toolCall.ToolInput,
-							ToolCallID: toolCall.ToolCallID,
-							Type:       toolCall.Type,
-						},
-						Observation: errMsg,
-					})
+					logger.LogToolExecution(toolCall.Tool, false, duration, slog.String("error", err.Error()), slog.String("tool_input", fmt.Sprintf("%v", toolCall.ToolInput)), slog.String("context", "streaming"))
+					intermediateSteps = append(intermediateSteps, toolCallData(toolCall.Tool, toolCall.ToolInput, toolCall.ToolCallID, toolCall.Type, errMsg))
 					continue
 				}
-
-				// Cache tool result
 				ae.setCachedToolResult(toolCall.Tool, toolCall.ToolInput, toolResult, err)
 				logger.LogToolExecution(toolCall.Tool, true, duration, slog.Bool("cached", false), slog.String("context", "streaming"))
 			}
-
-			// Format observation from tool result
 			truncationLength := ae.getToolTruncationLength(toolCall.Tool)
 			observation := types.TruncateString(types.FormatToolResult(toolResult), truncationLength)
-
-			intermediateSteps = append(intermediateSteps, types.ToolCallData{
-				Action: types.ToolActionStep{
-					Tool:       toolCall.Tool,
-					ToolInput:  toolCall.ToolInput,
-					ToolCallID: toolCall.ToolCallID,
-					Type:       toolCall.Type,
-				},
-				Observation: observation,
-			})
+			intermediateSteps = append(intermediateSteps, toolCallData(toolCall.Tool, toolCall.ToolInput, toolCall.ToolCallID, toolCall.Type, observation))
 		}
 
 		result.IntermediateSteps = intermediateSteps
