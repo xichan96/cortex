@@ -100,23 +100,24 @@ type AgentConfig struct {
 	MaxIterations           int           `json:"maxIterations"`
 	SystemMessage           string        `json:"systemMessage"`
 	ChatMessageRole         string        `json:"chatMessageRole,omitempty"`
-	Temperature             float32       `json:"temperature"`             // 温度参数 (0.0-1.0)
-	MaxTokens               int           `json:"maxTokens"`               // 最大token数
-	TopP                    float32       `json:"topP"`                    // Top P采样
-	FrequencyPenalty        float32       `json:"frequencyPenalty"`        // 频率惩罚
-	PresencePenalty         float32       `json:"presencePenalty"`         // 存在惩罚
-	StopSequences           []string      `json:"stopSequences"`           // 停止序列
-	Timeout                 time.Duration `json:"timeout"`                 // 超时时间
-	ToolExecutionTimeout    time.Duration `json:"toolExecutionTimeout"`    // 工具执行超时时间
-	RetryAttempts           int           `json:"retryAttempts"`           // 重试次数
-	RetryDelay              time.Duration `json:"retryDelay"`              // 重试延迟
-	EnableToolRetry         bool          `json:"enableToolRetry"`         // 启用工具重试
-	MaxHistoryMessages      int           `json:"maxHistoryMessages"`      // 最大历史消息数
-	EnableMemoryCompress    bool          `json:"enableMemoryCompress"`    // 启用记忆压缩
-	MemoryCompressThreshold int           `json:"memoryCompressThreshold"` // 记忆压缩阈值（消息数量）
-	MemoryCompressRatio     float32       `json:"memoryCompressRatio"`     // 记忆压缩比例（0.0-1.0）
-	LogSilent               bool          `json:"logSilent"`               // 是否静默日志
-	LogFile                 string        `json:"logFile"`                 // 日志文件路径，为空则输出到终端
+	Temperature             float32       `json:"temperature"`                   // 温度参数 (0.0-1.0)
+	MaxTokens               int           `json:"maxTokens,omitempty"`           // 最大token数
+	MaxCompletionTokens     int           `json:"maxCompletionTokens,omitempty"` // 最大完成token数
+	TopP                    float32       `json:"topP"`                          // Top P采样
+	FrequencyPenalty        float32       `json:"frequencyPenalty"`              // 频率惩罚
+	PresencePenalty         float32       `json:"presencePenalty"`               // 存在惩罚
+	StopSequences           []string      `json:"stopSequences"`                 // 停止序列
+	Timeout                 time.Duration `json:"timeout"`                       // 超时时间
+	ToolExecutionTimeout    time.Duration `json:"toolExecutionTimeout"`          // 工具执行超时时间
+	RetryAttempts           int           `json:"retryAttempts"`                 // 重试次数
+	RetryDelay              time.Duration `json:"retryDelay"`                    // 重试延迟
+	EnableToolRetry         bool          `json:"enableToolRetry"`               // 启用工具重试
+	MaxHistoryMessages      int           `json:"maxHistoryMessages"`            // 最大历史消息数
+	EnableMemoryCompress    bool          `json:"enableMemoryCompress"`          // 启用记忆压缩
+	MemoryCompressThreshold int           `json:"memoryCompressThreshold"`       // 记忆压缩阈值（消息数量）
+	MemoryCompressRatio     float32       `json:"memoryCompressRatio"`           // 记忆压缩比例（0.0-1.0）
+	LogSilent               bool          `json:"logSilent"`                     // 是否静默日志
+	LogFile                 string        `json:"logFile"`                       // 日志文件路径，为空则输出到终端
 }
 
 // NewAgentConfig creates a new agent configuration with reasonable defaults

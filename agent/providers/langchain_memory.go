@@ -117,10 +117,14 @@ func (p *SimpleMemoryProvider) SaveContext(ctx context.Context, input, output ma
 		if role == "" {
 			role = "user"
 		}
-		p.messages = append(p.messages, types.Message{
+		msg := types.Message{
 			Role:    role,
 			Content: inputMsg,
-		})
+		}
+		if parts, ok := input["parts"].([]types.MessagePart); ok {
+			msg.Parts = parts
+		}
+		p.messages = append(p.messages, msg)
 	}
 	if outputMsg, ok := output["output"].(string); ok {
 		role, _ := output["role"].(string)

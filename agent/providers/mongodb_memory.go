@@ -18,6 +18,7 @@ type MessageDocument struct {
 	Role      string             `bson:"role"`
 	Content   string             `bson:"content"`
 	Name      string             `bson:"name,omitempty"`
+	Parts     string             `bson:"parts,omitempty"`
 	CreatedAt time.Time          `bson:"created_at"`
 }
 
@@ -80,11 +81,14 @@ func (p *MongoDBMemoryProvider) AddMessage(ctx context.Context, message types.Me
 	sessionID := p.sessionID
 	p.mu.RUnlock()
 
+	partsJSON, _ := types.SerializeMessageParts(message.Parts)
+
 	doc := MessageDocument{
 		SessionID: sessionID,
 		Role:      message.Role,
 		Content:   message.Content,
 		Name:      message.Name,
+		Parts:     partsJSON,
 		CreatedAt: time.Now(),
 	}
 	_, err := p.getCollection().InsertOne(ctx, doc)
@@ -139,10 +143,12 @@ func (p *MongoDBMemoryProvider) GetMessages(ctx context.Context, limit int) ([]t
 	// Reverse docs to get chronological order (Oldest -> Newest)
 	for i := len(docs) - 1; i >= 0; i-- {
 		doc := docs[i]
+		parts, _ := types.DeserializeMessageParts(doc.Parts)
 		messages = append(messages, types.Message{
 			Role:    doc.Role,
 			Content: doc.Content,
 			Name:    doc.Name,
+			Parts:   parts,
 		})
 	}
 
@@ -168,10 +174,14 @@ func (p *MongoDBMemoryProvider) SaveContext(ctx context.Context, input, output m
 		if role == "" {
 			role = "user"
 		}
-		if err := p.AddMessage(ctx, types.Message{
+		msg := types.Message{
 			Role:    role,
 			Content: inputMsg,
-		}); err != nil {
+		}
+		if parts, ok := input["parts"].([]types.MessagePart); ok {
+			msg.Parts = parts
+		}
+		if err := p.AddMessage(ctx, msg); err != nil {
 			return err
 		}
 	}
@@ -211,10 +221,12 @@ func (p *MongoDBMemoryProvider) GetChatHistory(ctx context.Context) ([]types.Mes
 
 	messages := make([]types.Message, 0, len(docs))
 	for _, doc := range docs {
+		parts, _ := types.DeserializeMessageParts(doc.Parts)
 		messages = append(messages, types.Message{
 			Role:    doc.Role,
 			Content: doc.Content,
 			Name:    doc.Name,
+			Parts:   parts,
 		})
 	}
 	return messages, nil
