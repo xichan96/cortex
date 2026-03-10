@@ -17,6 +17,7 @@ type MySQLMessageDocument struct {
 	Role      string    `gorm:"type:varchar(50);not null" json:"role"`
 	Content   string    `gorm:"type:text" json:"content"`
 	Name      string    `gorm:"type:varchar(255)" json:"name,omitempty"`
+	Parts     string    `gorm:"type:text" json:"parts,omitempty"`
 	CreatedAt time.Time `gorm:"index;not null" json:"created_at"`
 }
 
@@ -101,11 +102,14 @@ func (p *MySQLMemoryProvider) AddMessage(ctx context.Context, message types.Mess
 	tableName := p.tableName
 	p.mu.RUnlock()
 
+	partsJSON, _ := types.SerializeMessageParts(message.Parts)
+
 	doc := MySQLMessageDocument{
 		SessionID: sessionID,
 		Role:      message.Role,
 		Content:   message.Content,
 		Name:      message.Name,
+		Parts:     partsJSON,
 		CreatedAt: time.Now(),
 	}
 
@@ -149,10 +153,12 @@ func (p *MySQLMemoryProvider) GetMessages(ctx context.Context, limit int) ([]typ
 	// Reverse to chronological order
 	messages := make([]types.Message, 0, len(docs)+1)
 	for i := len(docs) - 1; i >= 0; i-- {
+		parts, _ := types.DeserializeMessageParts(docs[i].Parts)
 		messages = append(messages, types.Message{
 			Role:    docs[i].Role,
 			Content: docs[i].Content,
 			Name:    docs[i].Name,
+			Parts:   parts,
 		})
 	}
 
@@ -196,10 +202,14 @@ func (p *MySQLMemoryProvider) SaveContext(ctx context.Context, input, output map
 		if role == "" {
 			role = "user"
 		}
-		if err := p.AddMessage(ctx, types.Message{
+		msg := types.Message{
 			Role:    role,
 			Content: inputMsg,
-		}); err != nil {
+		}
+		if parts, ok := input["parts"].([]types.MessagePart); ok {
+			msg.Parts = parts
+		}
+		if err := p.AddMessage(ctx, msg); err != nil {
 			return err
 		}
 	}

@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -487,7 +488,11 @@ func (p *LangChainLLMProvider) convertToLangChainMessages(messages []types.Messa
 						parts = append(parts, llms.ImageURLPart(p.URL))
 					}
 				case types.ImageDataPart:
-					parts = append(parts, llms.BinaryPart(p.MIMEType, p.Data))
+					// Convert binary data to base64 data URL for OpenAI compatibility
+					// OpenAI expects "image_url" type, not "binary"
+					base64Data := base64.StdEncoding.EncodeToString(p.Data)
+					dataURL := fmt.Sprintf("data:%s;base64,%s", p.MIMEType, base64Data)
+					parts = append(parts, llms.ImageURLPart(dataURL))
 				}
 			}
 		} else if msg.Content != "" {

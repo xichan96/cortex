@@ -64,6 +64,11 @@ func (p *RedisMemoryProvider) AddMessage(ctx context.Context, message types.Mess
 		"created_at": time.Now().Unix(),
 	}
 
+	partsJSON, _ := types.SerializeMessageParts(message.Parts)
+	if partsJSON != "" {
+		msgData["parts"] = partsJSON
+	}
+
 	msgJSON, err := json.Marshal(msgData)
 	if err != nil {
 		return err
@@ -128,11 +133,18 @@ func (p *RedisMemoryProvider) GetMessages(ctx context.Context, limit int) ([]typ
 		content, _ := msgData["content"].(string)
 		name, _ := msgData["name"].(string)
 
-		messages = append(messages, types.Message{
+		msg := types.Message{
 			Role:    role,
 			Content: content,
 			Name:    name,
-		})
+		}
+
+		if partsJSON, ok := msgData["parts"].(string); ok && partsJSON != "" {
+			parts, _ := types.DeserializeMessageParts(partsJSON)
+			msg.Parts = parts
+		}
+
+		messages = append(messages, msg)
 	}
 
 	return messages, nil
@@ -157,10 +169,14 @@ func (p *RedisMemoryProvider) SaveContext(ctx context.Context, input, output map
 		if role == "" {
 			role = "user"
 		}
-		if err := p.AddMessage(ctx, types.Message{
+		msg := types.Message{
 			Role:    role,
 			Content: inputMsg,
-		}); err != nil {
+		}
+		if parts, ok := input["parts"].([]types.MessagePart); ok {
+			msg.Parts = parts
+		}
+		if err := p.AddMessage(ctx, msg); err != nil {
 			return err
 		}
 	}
@@ -204,11 +220,18 @@ func (p *RedisMemoryProvider) GetChatHistory(ctx context.Context) ([]types.Messa
 		content, _ := msgData["content"].(string)
 		name, _ := msgData["name"].(string)
 
-		messages = append(messages, types.Message{
+		msg := types.Message{
 			Role:    role,
 			Content: content,
 			Name:    name,
-		})
+		}
+
+		if partsJSON, ok := msgData["parts"].(string); ok && partsJSON != "" {
+			parts, _ := types.DeserializeMessageParts(partsJSON)
+			msg.Parts = parts
+		}
+
+		messages = append(messages, msg)
 	}
 
 	return messages, nil

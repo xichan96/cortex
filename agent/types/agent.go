@@ -139,3 +139,95 @@ func FormatToolResult(result interface{}) string {
 	// Fallback to string representation if JSON marshaling fails
 	return fmt.Sprintf("%v", result)
 }
+
+// SerializeMessageParts serializes message parts to JSON string
+func SerializeMessageParts(parts []MessagePart) (string, error) {
+	if len(parts) == 0 {
+		return "", nil
+	}
+
+	var serializedParts []map[string]interface{}
+
+	for _, part := range parts {
+		partMap := make(map[string]interface{})
+
+		switch p := part.(type) {
+		case TextPart:
+			partMap["type"] = "text"
+			partMap["text"] = p.Text
+		case ImageURLPart:
+			partMap["type"] = "image_url"
+			partMap["image_url"] = map[string]interface{}{
+				"url":    p.URL,
+				"detail": p.Detail,
+			}
+		case ImageDataPart:
+			partMap["type"] = "image_data"
+			partMap["image_data"] = map[string]interface{}{
+				"data":      p.Data,
+				"mime_type": p.MIMEType,
+			}
+		default:
+			continue
+		}
+		serializedParts = append(serializedParts, partMap)
+	}
+
+	bytes, err := json.Marshal(serializedParts)
+	if err != nil {
+		return "", err
+	}
+
+	return string(bytes), nil
+}
+
+// DeserializeMessageParts deserializes JSON string to message parts
+func DeserializeMessageParts(data string) ([]MessagePart, error) {
+	if data == "" {
+		return nil, nil
+	}
+
+	var rawParts []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(data), &rawParts); err != nil {
+		return nil, err
+	}
+
+	var parts []MessagePart
+
+	for _, rawPart := range rawParts {
+		var typeStr string
+		if err := json.Unmarshal(rawPart["type"], &typeStr); err != nil {
+			continue
+		}
+
+		switch typeStr {
+		case "text":
+			var text string
+			if err := json.Unmarshal(rawPart["text"], &text); err == nil {
+				parts = append(parts, TextPart{Text: text})
+			}
+		case "image_url":
+			var imgURL struct {
+				URL    string `json:"url"`
+				Detail string `json:"detail"`
+			}
+			if err := json.Unmarshal(rawPart["image_url"], &imgURL); err == nil {
+				parts = append(parts, ImageURLPart{URL: imgURL.URL, Detail: imgURL.Detail})
+			}
+		case "image_data":
+			var imgData struct {
+				Data     []byte `json:"data"`
+				MIMEType string `json:"mime_type"`
+			}
+			if err := json.Unmarshal(rawPart["image_data"], &imgData); err == nil {
+				parts = append(parts, ImageDataPart{Data: imgData.Data, MIMEType: imgData.MIMEType})
+			}
+		}
+	}
+
+	if len(parts) == 0 && len(rawParts) > 0 {
+		return nil, fmt.Errorf("failed to deserialize any message parts")
+	}
+
+	return parts, nil
+}
