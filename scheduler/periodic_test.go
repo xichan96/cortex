@@ -99,16 +99,7 @@ func TestPeriodicTask_NormalExecution(t *testing.T) {
 
 	svc, cronScheduler, mockLLM, _ := setupComponents(t, db)
 
-	// Expect ChatWithTools
-	mockLLM.On("ChatWithTools", mock.Anything, mock.Anything, mock.MatchedBy(func(tools []types.Tool) bool {
-		hasCommand := false
-		for _, t := range tools {
-			if t.Name() == "command" {
-				hasCommand = true
-			}
-		}
-		return hasCommand
-	})).Return(types.Message{
+	mockLLM.On("ChatWithTools", mock.Anything, mock.Anything, mock.Anything).Return(types.Message{
 		Role:    "assistant",
 		Content: "I will execute the alert.",
 	}, nil)

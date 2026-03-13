@@ -1,0 +1,11 @@
+- Schedule a new job with the scheduler service
+- Supports 'oneshot' (run once after delay), 'periodic' (run every interval), and 'cron' (run at specific times)
+- Use this tool when you need to create timed or recurring tasks
+- Jobs can carry agent tasks, instructions, or custom payloads
+
+Usage notes:
+  - oneshot: schedule expression is a duration (e.g. '10s', '1h')
+  - periodic: schedule expression is an interval duration
+  - cron: schedule expression is a cron expression (e.g. '* * * * * *')
+  - Optional session_id for memory context persistence
+  - Set execution_mode to 'serial' to run one-at-a-time with other serial jobs

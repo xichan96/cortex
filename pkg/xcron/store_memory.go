@@ -74,17 +74,77 @@ func (s *MemoryJobStore) List(ctx context.Context, offset, limit int) ([]*Job, i
 	})
 	
 	count := int64(len(jobs))
-	
+	if limit <= 0 {
+		limit = 50
+	}
 	if offset >= len(jobs) {
 		return []*Job{}, count, nil
 	}
-	
 	end := offset + limit
 	if end > len(jobs) {
 		end = len(jobs)
 	}
 	
 	return jobs[offset:end], count, nil
+}
+
+func (s *MemoryJobStore) ListWithOptions(ctx context.Context, opts ListOptions) ([]*Job, int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var jobs []*Job
+	for _, job := range s.jobs {
+		if len(opts.Status) > 0 {
+			var ok bool
+			for _, st := range opts.Status {
+				if job.Status == st {
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				continue
+			}
+		}
+		if len(opts.Type) > 0 {
+			var ok bool
+			for _, ty := range opts.Type {
+				if job.Type == ty {
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				continue
+			}
+		}
+		if opts.SessionID != "" && job.SessionID != opts.SessionID {
+			continue
+		}
+		j := *job
+		jobs = append(jobs, &j)
+	}
+	if opts.OrderBy == "next_run_at" {
+		sort.Slice(jobs, func(i, j int) bool {
+			return jobs[i].NextRunAt.Before(jobs[j].NextRunAt)
+		})
+	} else {
+		sort.Slice(jobs, func(i, j int) bool {
+			return jobs[i].CreatedAt.After(jobs[j].CreatedAt)
+		})
+	}
+	count := int64(len(jobs))
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	if opts.Offset >= len(jobs) {
+		return []*Job{}, count, nil
+	}
+	end := opts.Offset + limit
+	if end > len(jobs) {
+		end = len(jobs)
+	}
+	return jobs[opts.Offset:end], count, nil
 }
 
 func (s *MemoryJobStore) GetPendingJobs(ctx context.Context) ([]*Job, error) {

@@ -70,9 +70,35 @@ func (s *Service) ConfigureAgentWithMemoryFactory(
 	s.registerAgentHandler()
 }
 
-// registerAgentHandler registers the xcron handler that triggers the agent
+func parseAgentInstruction(payload string) (instruction string, out xcron.AgentPayload) {
+	if err := json.Unmarshal([]byte(payload), &out); err == nil && out.Message != "" {
+		return out.Message, out
+	}
+	var decoded string
+	if err := json.Unmarshal([]byte(payload), &decoded); err == nil {
+		payload = decoded
+	}
+	trimmed := strings.TrimSpace(payload)
+	if strings.HasPrefix(trimmed, "{") {
+		var nested xcron.AgentPayload
+		if err := json.Unmarshal([]byte(trimmed), &nested); err == nil && nested.Message != "" {
+			if len(out.Tools) == 0 {
+				out.Tools = nested.Tools
+			}
+			if len(out.Skills) == 0 {
+				out.Skills = nested.Skills
+			}
+			if out.MaxIterations == 0 {
+				out.MaxIterations = nested.MaxIterations
+			}
+			return nested.Message, out
+		}
+	}
+	return payload, out
+}
+
 func (s *Service) registerAgentHandler() {
-	s.xcronScheduler.RegisterHandler("agent_task", func(ctx context.Context, job *xcron.Job) error {
+	s.xcronScheduler.RegisterHandler(xcron.TaskTypeAgent, func(ctx context.Context, job *xcron.Job) error {
 		if s.llmProvider == nil {
 			return fmt.Errorf("agent LLM provider not configured")
 		}
@@ -80,44 +106,14 @@ func (s *Service) registerAgentHandler() {
 		payload := job.Payload
 		logger.Info("⏰ Scheduled Task Triggered", slog.String("payload", payload), slog.String("session_id", job.SessionID))
 
-		// Parse payload
-		var instruction string
-		var agentPayload xcron.AgentPayload
-
-		// Try to parse as structured AgentPayload
-		if err := json.Unmarshal([]byte(payload), &agentPayload); err == nil && agentPayload.Message != "" {
-			instruction = agentPayload.Message
-		} else {
-			// Fallback: try as raw string (JSON string) or raw text
-			var decoded string
-			if err := json.Unmarshal([]byte(payload), &decoded); err == nil {
-				instruction = decoded
-			} else {
-				instruction = payload
-			}
-		}
-
-		if strings.HasPrefix(strings.TrimSpace(instruction), "{") {
-			var nestedPayload xcron.AgentPayload
-			if err := json.Unmarshal([]byte(instruction), &nestedPayload); err == nil && nestedPayload.Message != "" {
-				instruction = nestedPayload.Message
-				if len(agentPayload.Tools) == 0 && len(nestedPayload.Tools) > 0 {
-					agentPayload.Tools = nestedPayload.Tools
-				}
-				if len(agentPayload.Skills) == 0 && len(nestedPayload.Skills) > 0 {
-					agentPayload.Skills = nestedPayload.Skills
-				}
-				if agentPayload.MaxIterations == 0 && nestedPayload.MaxIterations > 0 {
-					agentPayload.MaxIterations = nestedPayload.MaxIterations
-				}
-			}
-		}
+		instruction, agentPayload := parseAgentInstruction(payload)
 
 		if len(agentPayload.Skills) == 0 && s.skillRegistry != nil {
 			logger.Info("🔍 Planning skills for instruction", slog.String("instruction", instruction))
-			planner := skills.NewPlanner(s.skillRegistry)
-			plan, err := planner.Plan(ctx, instruction)
-			if err == nil && len(plan.Steps) > 0 {
+			plan, err := skills.NewPlanner(s.skillRegistry).Plan(ctx, instruction)
+			if err != nil {
+				logger.Warn("❌ Planner failed", slog.String("error", err.Error()))
+			} else if len(plan.Steps) > 0 {
 				seen := map[string]struct{}{}
 				for _, step := range plan.Steps {
 					for _, sk := range step.Skills {
@@ -129,17 +125,13 @@ func (s *Service) registerAgentHandler() {
 					}
 				}
 				logger.Info("✅ Planner identified skills", slog.Any("skills", agentPayload.Skills))
-			} else if err != nil {
-				logger.Warn("❌ Planner failed", slog.String("error", err.Error()))
 			} else {
 				logger.Warn("⚠️ Planner found no skills for instruction", slog.String("instruction", instruction))
 			}
+		} else if s.skillRegistry == nil {
+			logger.Warn("⚠️ Skill registry is nil, cannot plan skills")
 		} else {
-			if s.skillRegistry == nil {
-				logger.Warn("⚠️ Skill registry is nil, cannot plan skills")
-			} else {
-				logger.Info("ℹ️ Skills already present in payload", slog.Any("skills", agentPayload.Skills))
-			}
+			logger.Info("ℹ️ Skills already present in payload", slog.Any("skills", agentPayload.Skills))
 		}
 
 		taskConfig := s.buildTaskConfig(agentPayload)
@@ -256,33 +248,53 @@ func (s *Service) ScheduleJob(ctx context.Context, input ScheduleJobInput) (stri
 		return "", fmt.Errorf("invalid job type: %s", input.Type)
 	}
 
-	// Default task type to agent_task if not specified
 	taskType := input.TaskType
 	if taskType == "" {
-		taskType = "agent_task"
+		taskType = string(xcron.TaskTypeAgent)
 	}
 
-	// For agent tasks, ensure payload matches AgentPayload structure
 	var payload interface{} = input.Payload
-	if taskType == "agent_task" {
-		// If input payload is a string, wrap it in AgentPayload
+	if taskType == string(xcron.TaskTypeAgent) {
 		if strPayload, ok := input.Payload.(string); ok {
 			payload = xcron.AgentPayload{
 				Message: strPayload,
 			}
 		} else if mapPayload, ok := input.Payload.(map[string]interface{}); ok {
-			// Already a map, structure it
-			// We can pass map directly to xcron as it marshals to JSON
 			payload = mapPayload
 		}
 	}
 
-	return s.xcronScheduler.AddJob(ctx, input.Name, jobType, input.Schedule, xcron.TaskType(taskType), payload, input.SessionID, 0)
+	return s.xcronScheduler.AddJobWithOptions(ctx, input.Name, jobType, input.Schedule, xcron.TaskType(taskType), payload, input.SessionID, 0, input.ExecutionMode)
 }
 
 // ListJobs returns a list of scheduled jobs
 func (s *Service) ListJobs(ctx context.Context, limit, offset int) ([]*xcron.Job, int64, error) {
 	return s.xcronScheduler.ListJobs(ctx, offset, limit)
+}
+
+// ListJobsOptions defines filter and sort for listing jobs
+type ListJobsOptions struct {
+	Status    []string
+	Type      []string
+	SessionID string
+	OrderBy   string
+	Limit     int
+	Offset    int
+}
+
+// ListJobsWithOptions returns jobs with filter and sort
+func (s *Service) ListJobsWithOptions(ctx context.Context, opts ListJobsOptions) ([]*xcron.Job, int64, error) {
+	xopts := xcron.ListOptions{Limit: opts.Limit, Offset: opts.Offset, SessionID: opts.SessionID, OrderBy: opts.OrderBy}
+	for _, st := range opts.Status {
+		xopts.Status = append(xopts.Status, xcron.JobStatus(st))
+	}
+	for _, ty := range opts.Type {
+		xopts.Type = append(xopts.Type, xcron.JobType(ty))
+	}
+	if xopts.Limit <= 0 {
+		xopts.Limit = 50
+	}
+	return s.xcronScheduler.ListJobsWithOptions(ctx, xopts)
 }
 
 // DeleteJob removes a job
@@ -301,18 +313,19 @@ func (s *Service) StopJob(ctx context.Context, jobID string) error {
 
 // ScheduleJobInput defines the input for scheduling a job
 type ScheduleJobInput struct {
-	Name      string      `json:"name"`
-	Type      string      `json:"type"`       // oneshot, periodic, cron
-	SessionID string      `json:"session_id"` // Optional session ID for memory context
-	Schedule  string      `json:"schedule"`   // duration or cron expression
-	Payload   interface{} `json:"payload"`    // string or object
-	TaskType  string      `json:"task_type"`
+	Name           string      `json:"name"`
+	Type           string      `json:"type"`
+	SessionID      string      `json:"session_id"`
+	Schedule       string      `json:"schedule"`
+	Payload        interface{} `json:"payload"`
+	TaskType       string      `json:"task_type"`
+	ExecutionMode  string      `json:"execution_mode"` // "serial" to run one-at-a-time with other serial jobs
 }
 
 // RegisterAgentTaskHandler registers a handler for agent tasks
 // Deprecated: Use InitAgent instead for built-in integration
 func RegisterAgentTaskHandler(s *xcron.Scheduler, agentExecutor func(input string) error) {
-	s.RegisterHandler("agent_task", func(ctx context.Context, job *xcron.Job) error {
+	s.RegisterHandler(xcron.TaskTypeAgent, func(ctx context.Context, job *xcron.Job) error {
 		payload := job.Payload
 		// Try to unmarshal as AgentPayload first
 		var agentPayload xcron.AgentPayload

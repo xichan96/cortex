@@ -35,6 +35,7 @@ const (
 	TaskTypeReply    TaskType = "reply"
 	TaskTypeWorkflow TaskType = "workflow"
 	TaskTypeFunction TaskType = "function"
+	TaskTypeAgent    TaskType = "agent_task"
 )
 
 // Job represents a scheduled task
@@ -60,7 +61,17 @@ type Job struct {
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
 	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
-	CronEntryID int            `gorm:"-" json:"-"` // Internal cron entry ID
+	CronEntryID   int            `gorm:"-" json:"-"` // Internal cron entry ID
+	ExecutionMode string         `json:"execution_mode" gorm:"column:execution_mode;default:''"`
+}
+
+type ListOptions struct {
+	Status    []JobStatus
+	Type      []JobType
+	SessionID string
+	OrderBy   string
+	Limit     int
+	Offset    int
 }
 
 type JobStore interface {
@@ -68,6 +79,7 @@ type JobStore interface {
 	Get(ctx context.Context, id string) (*Job, error)
 	Delete(ctx context.Context, id string) error
 	List(ctx context.Context, offset, limit int) ([]*Job, int64, error)
+	ListWithOptions(ctx context.Context, opts ListOptions) ([]*Job, int64, error)
 	GetPendingJobs(ctx context.Context) ([]*Job, error)
 	UpdateStatus(ctx context.Context, id string, status JobStatus, lastRun *time.Time, nextRun time.Time, lastDuration time.Duration, lastError string) error
 	ResetStuckJobs(ctx context.Context, timeout time.Duration) error
@@ -94,4 +106,11 @@ type AgentPayload struct {
 type SystemPayload struct {
 	Event string `json:"event"`
 	Text  string `json:"text"`
+}
+
+// MetricsRecorder is an optional observer for job execution (e.g. Prometheus/OTel).
+type MetricsRecorder interface {
+	JobStarted(jobID, taskType string)
+	JobCompleted(jobID, taskType string, duration time.Duration)
+	JobFailed(jobID, taskType string)
 }

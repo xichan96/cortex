@@ -16,14 +16,19 @@ import (
 type TaskHandler func(ctx context.Context, job *Job) error
 
 type Scheduler struct {
-	cron      *cron.Cron
-	store     JobStore
-	entries   map[string]cron.EntryID
-	mu        sync.RWMutex
-	handlers  map[TaskType]TaskHandler
-	stopCh    chan struct{}
-	locker    Locker
-	onFailure func(job *Job, err error)
+	cron               *cron.Cron
+	store              JobStore
+	entries            map[string]cron.EntryID
+	mu                 sync.RWMutex
+	handlers           map[TaskType]TaskHandler
+	stopCh             chan struct{}
+	locker             Locker
+	onFailure          func(job *Job, err error)
+	sem                chan struct{}
+	serialSem          chan struct{}
+	stuckCheckInterval time.Duration
+	stuckTimeout       time.Duration
+	metrics            MetricsRecorder
 }
 
 type Locker interface {
@@ -32,23 +37,19 @@ type Locker interface {
 }
 
 func NewScheduler(store JobStore) *Scheduler {
-	// Use WithSeconds for higher precision (though still second-level for cron)
-	// For millisecond precision OneShot, we might need a separate mechanism or accept second precision for cron engine,
-	// but the requirement says "Precise to millisecond".
-	// Standard cron is 1s.
-	// However, we can use a custom runner or just accept 1s precision for cron/periodic,
-	// and use time.AfterFunc for immediate OneShot if it's very short?
-	// But for persistence, we rely on the loop.
-	// Let's stick to cron with seconds for now, and see if we can optimize.
-
 	c := cron.New(cron.WithSeconds())
 
+	serialSem := make(chan struct{}, 1)
+	serialSem <- struct{}{}
 	return &Scheduler{
-		cron:     c,
-		store:    store,
-		entries:  make(map[string]cron.EntryID),
-		handlers: make(map[TaskType]TaskHandler),
-		stopCh:   make(chan struct{}),
+		cron:               c,
+		store:              store,
+		entries:            make(map[string]cron.EntryID),
+		handlers:           make(map[TaskType]TaskHandler),
+		stopCh:             make(chan struct{}),
+		serialSem:          serialSem,
+		stuckCheckInterval: 10 * time.Minute,
+		stuckTimeout:       2 * time.Hour,
 	}
 }
 
@@ -60,6 +61,36 @@ func (s *Scheduler) SetFailureHandler(h func(job *Job, err error)) {
 	s.onFailure = h
 }
 
+func (s *Scheduler) SetMaxConcurrent(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n <= 0 {
+		s.sem = nil
+		return
+	}
+	s.sem = make(chan struct{}, n)
+	for i := 0; i < n; i++ {
+		s.sem <- struct{}{}
+	}
+}
+
+func (s *Scheduler) SetStuckCheck(interval, timeout time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if interval > 0 {
+		s.stuckCheckInterval = interval
+	}
+	if timeout > 0 {
+		s.stuckTimeout = timeout
+	}
+}
+
+func (s *Scheduler) SetMetricsRecorder(rec MetricsRecorder) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.metrics = rec
+}
+
 func (s *Scheduler) RegisterHandler(taskType TaskType, handler TaskHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -67,17 +98,14 @@ func (s *Scheduler) RegisterHandler(taskType TaskType, handler TaskHandler) {
 }
 
 func (s *Scheduler) Start() {
-	s.cron.Start()
-	// Load pending jobs from store
 	ctx := context.Background()
 	jobs, err := s.store.GetPendingJobs(ctx)
 	if err != nil {
 		logger.Error("Failed to load pending jobs", slog.String("error", err.Error()))
 		return
 	}
-
-	go s.checkStuckJobs()
-
+	s.cron.Start()
+	go s.runStuckCheck()
 	for _, job := range jobs {
 		if err := s.scheduleJob(job); err != nil {
 			logger.Error("Failed to reschedule job", slog.String("error", err.Error()), slog.String("job_id", job.ID))
@@ -85,16 +113,23 @@ func (s *Scheduler) Start() {
 	}
 }
 
-func (s *Scheduler) checkStuckJobs() {
-	ticker := time.NewTicker(10 * time.Minute)
+func (s *Scheduler) runStuckCheck() {
+	s.mu.RLock()
+	interval := s.stuckCheckInterval
+	timeout := s.stuckTimeout
+	s.mu.RUnlock()
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-s.stopCh:
 			return
 		case <-ticker.C:
+			s.mu.RLock()
+			timeout = s.stuckTimeout
+			s.mu.RUnlock()
 			ctx := context.Background()
-			if err := s.store.ResetStuckJobs(ctx, 2*time.Hour); err != nil {
+			if err := s.store.ResetStuckJobs(ctx, timeout); err != nil {
 				logger.Error("Failed to reset stuck jobs", slog.String("error", err.Error()))
 			}
 		}
@@ -107,23 +142,28 @@ func (s *Scheduler) Stop() {
 }
 
 func (s *Scheduler) AddJob(ctx context.Context, name string, jobType JobType, schedule string, taskType TaskType, payload interface{}, sessionID string, maxRetries int) (string, error) {
+	return s.AddJobWithOptions(ctx, name, jobType, schedule, taskType, payload, sessionID, maxRetries, "")
+}
+
+func (s *Scheduler) AddJobWithOptions(ctx context.Context, name string, jobType JobType, schedule string, taskType TaskType, payload interface{}, sessionID string, maxRetries int, executionMode string) (string, error) {
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
 	}
 
 	job := &Job{
-		ID:         uuid.New().String(),
-		Name:       name,
-		Type:       jobType,
-		SessionID:  sessionID,
-		Schedule:   schedule,
-		Status:     JobStatusPending,
-		Payload:    string(payloadBytes),
-		TaskType:   taskType,
-		MaxRetries: maxRetries,
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
+		ID:              uuid.New().String(),
+		Name:            name,
+		Type:            jobType,
+		SessionID:       sessionID,
+		Schedule:        schedule,
+		Status:          JobStatusPending,
+		Payload:         string(payloadBytes),
+		TaskType:        taskType,
+		MaxRetries:      maxRetries,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+		ExecutionMode:   executionMode,
 	}
 
 	// Pre-calculate NextRunAt for OneShot to ensure consistency across restarts
@@ -175,6 +215,10 @@ func (s *Scheduler) StopJob(ctx context.Context, id string) error {
 
 func (s *Scheduler) ListJobs(ctx context.Context, offset, limit int) ([]*Job, int64, error) {
 	return s.store.List(ctx, offset, limit)
+}
+
+func (s *Scheduler) ListJobsWithOptions(ctx context.Context, opts ListOptions) ([]*Job, int64, error) {
+	return s.store.ListWithOptions(ctx, opts)
 }
 
 func (s *Scheduler) scheduleJob(job *Job) error {
@@ -240,17 +284,39 @@ func (s *Scheduler) scheduleJob(job *Job) error {
 
 func (s *Scheduler) createJobWrapper(job *Job) func() {
 	return func() {
+		s.mu.RLock()
+		sem := s.sem
+		serialSem := s.serialSem
+		mode := job.ExecutionMode
+		s.mu.RUnlock()
+		if mode == "serial" && serialSem != nil {
+			<-serialSem
+			defer func() { serialSem <- struct{}{} }()
+		}
+		if sem != nil {
+			<-sem
+			defer func() { sem <- struct{}{} }()
+		}
+
 		startTime := time.Now()
 		ctx := context.Background()
 
-		// Reload job to get latest status/retries
 		currentJob, err := s.store.Get(ctx, job.ID)
 		if err != nil {
 			logger.Error("Failed to load job for execution", slog.String("error", err.Error()), slog.String("job_id", job.ID))
 			return
 		}
+		if currentJob == nil {
+			return
+		}
 
-		if currentJob.Status == JobStatusStopped || currentJob.Status == JobStatusCompleted {
+		if currentJob.Status == JobStatusStopped || currentJob.Status == JobStatusCompleted || currentJob.Status == JobStatusFailed {
+			s.mu.Lock()
+			if entryID, ok := s.entries[currentJob.ID]; ok {
+				s.cron.Remove(entryID)
+				delete(s.entries, currentJob.ID)
+			}
+			s.mu.Unlock()
 			return
 		}
 
@@ -264,11 +330,19 @@ func (s *Scheduler) createJobWrapper(job *Job) func() {
 			defer s.locker.Unlock(ctx, "job_lock:"+currentJob.ID)
 		}
 
-		// Update status to Running
 		s.store.UpdateStatus(ctx, currentJob.ID, JobStatusRunning, nil, time.Time{}, 0, "")
+		s.mu.RLock()
+		rec := s.metrics
+		s.mu.RUnlock()
+		if rec != nil {
+			rec.JobStarted(currentJob.ID, string(currentJob.TaskType))
+		}
 
 		handler, ok := s.handlers[currentJob.TaskType]
 		if !ok {
+			if rec != nil {
+				rec.JobFailed(currentJob.ID, string(currentJob.TaskType))
+			}
 			logger.Error("No handler registered for task type", slog.String("type", string(currentJob.TaskType)))
 			s.handleFailure(ctx, currentJob, fmt.Errorf("no handler for type %s", currentJob.TaskType), time.Since(startTime))
 			return
@@ -282,36 +356,34 @@ func (s *Scheduler) createJobWrapper(job *Job) func() {
 		duration := time.Since(startTime)
 
 		if err != nil {
-			s.handleFailure(ctx, currentJob, err, duration)
-		} else {
-			// Success
-			nextRun := time.Time{} // For one-shot, no next run
-			status := JobStatusCompleted
-
-			if currentJob.Type != JobTypeOneShot {
-				status = JobStatusPending // Back to pending for next run
-				// Calculate next run? Cron does it for us, but for DB visibility we might want to know.
-				// We can ask the Cron entry?
-				s.mu.RLock()
-				entryID, ok := s.entries[currentJob.ID]
-				s.mu.RUnlock()
-
-				if ok {
-					entry := s.cron.Entry(entryID)
-					nextRun = entry.Next
-				}
-			} else {
-				// OneShot done, remove from scheduler
-				s.mu.Lock()
-				if entryID, ok := s.entries[currentJob.ID]; ok {
-					s.cron.Remove(entryID)
-					delete(s.entries, currentJob.ID)
-				}
-				s.mu.Unlock()
+			if rec != nil {
+				rec.JobFailed(currentJob.ID, string(currentJob.TaskType))
 			}
-
-			s.store.UpdateStatus(ctx, currentJob.ID, status, &now, nextRun, duration, "")
+			s.handleFailure(ctx, currentJob, err, duration)
+			return
 		}
+		if rec != nil {
+			rec.JobCompleted(currentJob.ID, string(currentJob.TaskType), duration)
+		}
+		nextRun := time.Time{}
+		status := JobStatusCompleted
+		if currentJob.Type != JobTypeOneShot {
+			status = JobStatusPending
+			s.mu.RLock()
+			entryID, ok := s.entries[currentJob.ID]
+			s.mu.RUnlock()
+			if ok {
+				nextRun = s.cron.Entry(entryID).Next
+			}
+		} else {
+			s.mu.Lock()
+			if entryID, ok := s.entries[currentJob.ID]; ok {
+				s.cron.Remove(entryID)
+				delete(s.entries, currentJob.ID)
+			}
+			s.mu.Unlock()
+		}
+		s.store.UpdateStatus(ctx, currentJob.ID, status, &now, nextRun, duration, "")
 	}
 }
 
@@ -319,14 +391,18 @@ func (s *Scheduler) executeWithRetry(ctx context.Context, handler TaskHandler, j
 	var lastErr error
 	for i := 0; i <= job.MaxRetries; i++ {
 		if i > 0 {
-			time.Sleep(time.Duration(i) * 100 * time.Millisecond) // Simple backoff
+			backoff := 100 * time.Millisecond * time.Duration(1<<uint(i-1))
+			if backoff > 30*time.Second {
+				backoff = 30 * time.Second
+			}
+			time.Sleep(backoff)
 		}
-		if err := handler(ctx, job); err == nil {
+		err := handler(ctx, job)
+		if err == nil {
 			return nil
-		} else {
-			lastErr = err
-			logger.Warn("Job execution failed, retrying", slog.String("error", err.Error()), slog.String("job_id", job.ID), slog.Int("retry", i))
 		}
+		lastErr = err
+		logger.Warn("Job execution failed, retrying", slog.String("error", err.Error()), slog.String("job_id", job.ID), slog.Int("retry", i))
 	}
 	return lastErr
 }
