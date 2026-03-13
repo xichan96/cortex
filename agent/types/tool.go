@@ -118,6 +118,10 @@ type AgentConfig struct {
 	MemoryCompressRatio     float32       `json:"memoryCompressRatio"`           // 记忆压缩比例（0.0-1.0）
 	LogSilent               bool          `json:"logSilent"`                     // 是否静默日志
 	LogFile                 string        `json:"logFile"`                       // 日志文件路径，为空则输出到终端
+	DoomLoopThreshold       int           `json:"doomLoopThreshold"`             // 同一 tool+同一参数连续出现次数阈值，0 表示关闭
+	OnDoomLoop              func(toolName string, input map[string]interface{}) bool `json:"-"` // 检测到 doom loop 时回调，返回 false 则终止迭代
+	MaxToolCallsPerIteration int          `json:"maxToolCallsPerIteration"`     // 单轮最大 tool 调用数，0 表示不限制
+	ToolResultWriteDir       string       `json:"toolResultWriteDir"`            // 工具大结果落盘目录，为空则仅内存截断
 }
 
 // NewAgentConfig creates a new agent configuration with reasonable defaults
@@ -141,8 +145,12 @@ func NewAgentConfig() *AgentConfig {
 		EnableMemoryCompress:    false,
 		MemoryCompressThreshold: 50,
 		MemoryCompressRatio:     0.5,
-		LogSilent:               false,
-		LogFile:                 "",
+		LogSilent:                 false,
+		LogFile:                   "",
+		DoomLoopThreshold:         0,
+		OnDoomLoop:                nil,
+		MaxToolCallsPerIteration:   0,
+		ToolResultWriteDir:         "",
 	}
 }
 

@@ -3,6 +3,7 @@ package types
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -132,6 +133,29 @@ func TruncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+const ToolErrorMaxLen = 400
+
+func NormalizeToolError(err error, maxLen int) string {
+	if err == nil {
+		return ""
+	}
+	s := err.Error()
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' || s[i] == '\r' {
+			s = s[:i]
+			break
+		}
+	}
+	s = strings.TrimSpace(s)
+	if maxLen <= 0 {
+		maxLen = ToolErrorMaxLen
+	}
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "…"
 }
 
 // FormatToolResult formats tool execution result to string

@@ -3,6 +3,9 @@ package skills
 import (
 	"context"
 	"fmt"
+	"log/slog"
+
+	"github.com/xichan96/cortex/pkg/logger"
 )
 
 // Planner handles skill intention recognition and execution planning
@@ -100,7 +103,7 @@ func (p *Planner) createExecutionSteps(skillsMap map[string]*Skill) []ExecutionS
 			// For robustness, we might want to return what we have or error.
 			// Here we just stop to avoid infinite loop.
 			// In a real system, we should probably log an error.
-			fmt.Printf("Warning: Circular dependency detected among skills: %v\n", getSkillNames(remaining))
+			logger.Warn("Circular dependency detected among skills", slog.Any("skills", getSkillNames(remaining)))
 			break
 		}
 
