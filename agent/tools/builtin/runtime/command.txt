@@ -1,0 +1,8 @@
+- Executes a shell command on the local machine.
+- Can be run in the foreground (blocking) or background (non-blocking).
+
+Usage notes:
+  - For foreground execution, the tool waits for the command to complete and returns the output (stdout, stderr, exit code).
+  - For background execution (`"background": true`), it immediately returns a `shell_id`.
+  - Use `job_output` to get the output of a background command and `job_kill` to terminate it.
+  - A `timeout` in seconds can be specified for foreground commands (default: 30s).

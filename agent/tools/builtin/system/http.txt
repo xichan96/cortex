@@ -1,0 +1,9 @@
+- Performs an HTTP GET request to a specified URL and returns the response body.
+- This tool is useful for accessing web content or APIs directly.
+
+Usage notes:
+  - Only the GET method is supported.
+  - The URL must be fully-formed and valid.
+  - The tool will follow redirects.
+  - Request timeout is set to 30 seconds.
+  - For more advanced web scraping and content extraction, consider using the `web_fetch` tool if available.

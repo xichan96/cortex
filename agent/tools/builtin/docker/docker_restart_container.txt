@@ -1,0 +1,5 @@
+- Restarts a specified Docker container.
+- This is a convenient way to apply configuration changes or recover a crashed service.
+
+Usage notes:
+  - Requires the `container_id` or name.

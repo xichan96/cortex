@@ -1,0 +1,7 @@
+- Adds, removes, or updates tasks in a todo list.
+- This helps in planning and tracking the steps required to complete a request.
+
+Usage notes:
+  - The `operation` can be 'add', 'remove', or 'update'.
+  - `task` content is required for 'add' and 'update'.
+  - `task_id` is required for 'remove' and 'update'.

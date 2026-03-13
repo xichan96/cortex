@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 
 	"github.com/xichan96/cortex/agent/types"
@@ -11,7 +12,7 @@ import (
 
 type FileTool struct {
 	workspace string
-	file     file.File
+	file      file.File
 }
 
 func NewFileTool(workspace string) types.Tool {
@@ -22,8 +23,11 @@ func (t *FileTool) Name() string {
 	return "file"
 }
 
+//go:embed file.txt
+var fileDescription string
+
 func (t *FileTool) Description() string {
-	return "Perform file and directory operations including read, write, create, delete, copy, move, and list operations."
+	return fileDescription
 }
 
 func (t *FileTool) Schema() map[string]interface{} {

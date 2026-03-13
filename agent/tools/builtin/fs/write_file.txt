@@ -1,0 +1,6 @@
+- Writes or overwrites a file with the specified content.
+- If the file does not exist, it will be created. If the directory path does not exist, it will be created recursively.
+
+Usage notes:
+  - Requires the `path` of the file and the `content` to be written.
+  - This tool will completely replace the file's content if it already exists.

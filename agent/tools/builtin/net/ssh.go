@@ -2,6 +2,7 @@ package net
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"time"
 
@@ -20,8 +21,11 @@ func (t *SSHTool) Name() string {
 	return "ssh"
 }
 
+//go:embed ssh.txt
+var sshDescription string
+
 func (t *SSHTool) Description() string {
-	return "Execute commands on a remote server via SSH. Supports password, private key, and SSH agent authentication."
+	return sshDescription
 }
 
 func (t *SSHTool) Schema() map[string]interface{} {

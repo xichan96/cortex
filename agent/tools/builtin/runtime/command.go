@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"time"
 
@@ -20,8 +21,11 @@ func (t *CommandTool) Name() string {
 	return "command"
 }
 
+//go:embed command.txt
+var commandDescription string
+
 func (t *CommandTool) Description() string {
-	return "Execute a shell command locally and return the output. Supports timeout configuration for long-running commands."
+	return commandDescription
 }
 
 func (t *CommandTool) Schema() map[string]interface{} {

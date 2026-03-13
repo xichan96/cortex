@@ -10,8 +10,14 @@ import (
 
 type StartContainerTool struct{ baseTool }
 
-func (t *StartContainerTool) Name() string        { return "docker_start_container" }
-func (t *StartContainerTool) Description() string { return "Start a Docker container by ID or name." }
+func (t *StartContainerTool) Name() string { return "docker_start_container" }
+
+//go:embed docker_start_container.txt
+var dockerStartContainerDescription string
+
+func (t *StartContainerTool) Description() string {
+	return dockerStartContainerDescription
+}
 func (t *StartContainerTool) Schema() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",

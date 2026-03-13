@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"os"
 
@@ -21,8 +22,11 @@ func (t *ReadTool) Name() string {
 	return "read_file"
 }
 
+//go:embed read_file.txt
+var readFileDescription string
+
 func (t *ReadTool) Description() string {
-	return "Reads the content of a file from the workspace. If path is a directory, returns a listing."
+	return readFileDescription
 }
 
 func (t *ReadTool) Schema() map[string]interface{} {

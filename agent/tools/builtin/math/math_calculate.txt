@@ -1,0 +1,9 @@
+- Evaluates a mathematical expression and returns the result.
+- A powerful calculator that supports a wide range of operations.
+
+Usage notes:
+  - Basic operators: `+`, `-`, `*`, `/`
+  - Advanced operators: `^` (power), `√` or `sqrt` (square root), `%` (modulo), `!` (factorial).
+  - Functions: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `ln`, `log`, `exp`, `abs`, `floor`, `ceil`, `round`.
+  - Trigonometric functions can operate in `degrees` or `radians` (default).
+  - Set `"use_degrees": true` to enable degree mode.

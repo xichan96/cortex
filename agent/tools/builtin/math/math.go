@@ -2,6 +2,7 @@ package math
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"math"
 	"strconv"
@@ -24,8 +25,11 @@ func (t *MathTool) Name() string {
 	return "math_calculate"
 }
 
+//go:embed math_calculate.txt
+var mathCalculateDescription string
+
 func (t *MathTool) Description() string {
-	return "Perform mathematical calculations. Supports basic operations (+, -, *, /), advanced operations (^, √, %, !), trigonometric functions (sin, cos, tan), and supports both degrees and radians mode."
+	return mathCalculateDescription
 }
 
 func (t *MathTool) Schema() map[string]interface{} {

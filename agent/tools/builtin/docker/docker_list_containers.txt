@@ -1,0 +1,6 @@
+- Lists all running Docker containers on the host.
+- Provides a snapshot of the current container environment.
+
+Usage notes:
+  - Set `all` to `true` to include containers that are not currently running.
+  - Returns a list of containers with their ID, names, image, and status.

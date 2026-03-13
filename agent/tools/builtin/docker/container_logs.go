@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 
 	"github.com/xichan96/cortex/agent/types"
@@ -12,8 +13,12 @@ import (
 type ContainerLogsTool struct{ baseTool }
 
 func (t *ContainerLogsTool) Name() string { return "docker_container_logs" }
+
+//go:embed docker_container_logs.txt
+var dockerContainerLogsDescription string
+
 func (t *ContainerLogsTool) Description() string {
-	return "Get logs of a Docker container. Optional: lines (int), timestamps (bool)."
+	return dockerContainerLogsDescription
 }
 func (t *ContainerLogsTool) Schema() map[string]interface{} {
 	return map[string]interface{}{

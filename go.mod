@@ -5,6 +5,7 @@ go 1.24.4
 toolchain go1.24.10
 
 require (
+	github.com/PuerkitoBio/goquery v1.11.0
 	github.com/charmbracelet/x/exp/slice v0.0.0-20260301212224-50d5c240f29a
 	github.com/containerd/errdefs v1.0.0
 	github.com/docker/docker v28.5.2+incompatible
@@ -26,9 +27,9 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/tmc/langchaingo v0.1.14
 	github.com/valyala/fasthttp v1.68.0
+	github.com/yuin/goldmark v1.4.13
 	go.mongodb.org/mongo-driver v1.17.6
 	golang.org/x/crypto v0.48.0
-	golang.org/x/net v0.50.0
 	gopkg.in/gomail.v2 v2.0.0-20160411212932-81ebce5c23df
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/mysql v1.6.0
@@ -44,6 +45,7 @@ require (
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
+	github.com/andybalholm/cascadia v1.3.3 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.1 // indirect
 	github.com/bytedance/sonic v1.9.1 // indirect
@@ -110,6 +112,7 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.41.0 // indirect
 	go.opentelemetry.io/otel/trace v1.41.0 // indirect
 	golang.org/x/arch v0.3.0 // indirect
+	golang.org/x/net v0.50.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/term v0.40.0 // indirect

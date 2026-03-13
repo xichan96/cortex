@@ -1,0 +1,7 @@
+- Retrieves the standard output and standard error from a background command.
+- This allows for monitoring the progress and results of asynchronous tasks.
+
+Usage notes:
+  - The `shell_id` is required to identify the background command.
+  - The tool returns the current status (running or completed), along with any output produced so far.
+  - If the command has finished, the exit code will also be provided.

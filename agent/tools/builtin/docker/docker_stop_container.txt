@@ -1,0 +1,5 @@
+- Stops a running Docker container.
+- The container is not removed and can be restarted later.
+
+Usage notes:
+  - Requires the `container_id` or name of the container to stop.

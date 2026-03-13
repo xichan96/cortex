@@ -1,0 +1,6 @@
+- Asks the user a question and waits for their response.
+- This is useful when you need clarification or input from the user to proceed.
+
+Usage notes:
+  - Requires a `question` to ask the user.
+  - The tool will return the user's answer as a string.

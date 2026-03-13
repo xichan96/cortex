@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 
 	"github.com/xichan96/cortex/agent/types"
@@ -10,8 +11,14 @@ import (
 
 type RemoveContainerTool struct{ baseTool }
 
-func (t *RemoveContainerTool) Name() string        { return "docker_remove_container" }
-func (t *RemoveContainerTool) Description() string { return "Stop and remove a Docker container by ID or name." }
+func (t *RemoveContainerTool) Name() string { return "docker_remove_container" }
+
+//go:embed docker_remove_container.txt
+var dockerRemoveContainerDescription string
+
+func (t *RemoveContainerTool) Description() string {
+	return dockerRemoveContainerDescription
+}
 func (t *RemoveContainerTool) Schema() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",

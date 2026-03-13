@@ -1,0 +1,8 @@
+- A comprehensive tool for managing files and directories within the workspace.
+- It consolidates multiple filesystem actions into a single tool.
+
+Usage notes:
+  - Specify the action with the `operation` parameter (e.g., `read_file`, `write_file`, `list_dir`, `delete_file`, `copy`, `move`).
+  - The `path` parameter is always required.
+  - `content` is required for `write_file` and `append_file`.
+  - `target_path` is required for `copy` and `move`.

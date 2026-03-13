@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	_ "embed"
+
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
 )
@@ -19,8 +21,11 @@ func (t *TimeTool) Name() string {
 	return "get_time"
 }
 
+//go:embed time.txt
+var timeDescription string
+
 func (t *TimeTool) Description() string {
-	return "Get current time in specified timezone. Default timezone is Asia/Hong_Kong."
+	return timeDescription
 }
 
 func (t *TimeTool) Schema() map[string]interface{} {

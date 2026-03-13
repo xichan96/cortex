@@ -1,0 +1,8 @@
+- Sends an email using a pre-configured SMTP server.
+- Allows for sending messages to multiple recipients with a specified subject and content type.
+
+Usage notes:
+  - The `to` parameter is a list of recipient email addresses.
+  - `subject` and `message` are the email's title and body, respectively.
+  - `type` specifies the content format: `text/plain`, `text/html`, or `text/markdown`.
+  - The SMTP server details (host, port, username, password) must be configured in the environment.

@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 
 	"github.com/xichan96/cortex/agent/types"
@@ -10,8 +11,14 @@ import (
 
 type StopContainerTool struct{ baseTool }
 
-func (t *StopContainerTool) Name() string        { return "docker_stop_container" }
-func (t *StopContainerTool) Description() string { return "Stop a Docker container by ID or name." }
+func (t *StopContainerTool) Name() string { return "docker_stop_container" }
+
+//go:embed docker_stop_container.txt
+var dockerStopContainerDescription string
+
+func (t *StopContainerTool) Description() string {
+	return dockerStopContainerDescription
+}
 func (t *StopContainerTool) Schema() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",

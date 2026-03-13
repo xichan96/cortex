@@ -1,0 +1,7 @@
+- Get the current time for a specified timezone.
+- Returns detailed time information including RFC3339 format, Unix timestamp, and the timezone itself.
+
+Usage notes:
+  - The `timezone` parameter should be a valid IANA Time Zone name (e.g., 'Asia/Shanghai', 'America/New_York', 'UTC').
+  - If no timezone is provided, it defaults to 'Asia/Hong_Kong'.
+  - This tool is useful for any tasks requiring the current time.

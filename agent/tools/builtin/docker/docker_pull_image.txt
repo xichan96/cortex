@@ -1,0 +1,6 @@
+- Downloads a Docker image from a registry (e.g., Docker Hub).
+- This is necessary before creating a container if the image is not available locally.
+
+Usage notes:
+  - Requires the `image` name and tag (e.g., `ubuntu:latest`).
+  - For private registries, `username` and `password` can be provided for authentication.

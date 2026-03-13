@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,8 +23,11 @@ func (t *WriteTool) Name() string {
 	return "write_file"
 }
 
+//go:embed write_file.txt
+var writeFileDescription string
+
 func (t *WriteTool) Description() string {
-	return "Writes content to a file in the workspace. Overwrites existing files."
+	return writeFileDescription
 }
 
 func (t *WriteTool) Schema() map[string]interface{} {
