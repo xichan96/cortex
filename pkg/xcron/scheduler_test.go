@@ -444,3 +444,100 @@ func TestScheduler_OneShot_Restart_Delay_Fix(t *testing.T) {
 		t.Fatal("Timeout waiting for job execution - likely rescheduled with full delay instead of immediate execution")
 	}
 }
+
+func TestScheduler_SerialExecution(t *testing.T) {
+	db := setupTestDB()
+	store := NewGormJobStore(db)
+	scheduler := NewScheduler(store)
+
+	var concurrentRuns int32
+	var peakConcurrentRuns int32
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	handler := func(ctx context.Context, job *Job) error {
+		defer wg.Done()
+		atomic.AddInt32(&concurrentRuns, 1)
+		// Record peak concurrency
+		if current := atomic.LoadInt32(&concurrentRuns); current > atomic.LoadInt32(&peakConcurrentRuns) {
+			atomic.StoreInt32(&peakConcurrentRuns, current)
+		}
+		time.Sleep(100 * time.Millisecond)
+		atomic.AddInt32(&concurrentRuns, -1)
+		return nil
+	}
+
+	scheduler.RegisterHandler(TaskTypeGreet, handler)
+	scheduler.Start()
+	defer scheduler.Stop()
+
+	_, err := scheduler.AddJobWithOptions(context.Background(), "serial-1", JobTypeOneShot, "10ms", TaskTypeGreet, nil, "", 0, "serial")
+	assert.NoError(t, err)
+	_, err = scheduler.AddJobWithOptions(context.Background(), "serial-2", JobTypeOneShot, "10ms", TaskTypeGreet, nil, "", 0, "serial")
+	assert.NoError(t, err)
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// success
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Timeout waiting for serial jobs")
+	}
+
+	assert.Equal(t, int32(1), atomic.LoadInt32(&peakConcurrentRuns), "Serial jobs should not run concurrently")
+}
+
+func TestScheduler_MaxConcurrent(t *testing.T) {
+	db := setupTestDB()
+	store := NewGormJobStore(db)
+	scheduler := NewScheduler(store)
+	scheduler.SetMaxConcurrent(2)
+
+	var concurrentRuns int32
+	var peakConcurrentRuns int32
+	var wg sync.WaitGroup
+	wg.Add(3)
+
+	handler := func(ctx context.Context, job *Job) error {
+		defer wg.Done()
+		atomic.AddInt32(&concurrentRuns, 1)
+		if current := atomic.LoadInt32(&concurrentRuns); current > atomic.LoadInt32(&peakConcurrentRuns) {
+			atomic.StoreInt32(&peakConcurrentRuns, current)
+		}
+		time.Sleep(100 * time.Millisecond)
+		atomic.AddInt32(&concurrentRuns, -1)
+		return nil
+	}
+
+	scheduler.RegisterHandler(TaskTypeGreet, handler)
+	scheduler.Start()
+	defer scheduler.Stop()
+
+	_, err := scheduler.AddJob(context.Background(), "concurrent-1", JobTypeOneShot, "10ms", TaskTypeGreet, nil, "", 0)
+	assert.NoError(t, err)
+	_, err = scheduler.AddJob(context.Background(), "concurrent-2", JobTypeOneShot, "10ms", TaskTypeGreet, nil, "", 0)
+	assert.NoError(t, err)
+	_, err = scheduler.AddJob(context.Background(), "concurrent-3", JobTypeOneShot, "10ms", TaskTypeGreet, nil, "", 0)
+	assert.NoError(t, err)
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// success
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Timeout waiting for concurrent jobs")
+	}
+
+	assert.Equal(t, int32(2), atomic.LoadInt32(&peakConcurrentRuns), "Concurrency should be limited to 2")
+}
+

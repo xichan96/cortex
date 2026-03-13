@@ -221,3 +221,62 @@ func (ae *AgentEngine) detectCircularDependencies(graph map[string][]string) err
 
 	return nil
 }
+
+// groupSortedToolCallsByLayer groups tool call indices by execution layer. sorted must be in
+// dependency order (e.g. from sortToolCallsByDependencies) so that each tool's dependencies
+// appear earlier in the slice; tools in the same layer have no dependency on each other.
+func (ae *AgentEngine) groupSortedToolCallsByLayer(sorted []types.ToolCall) [][]int {
+	if len(sorted) == 0 {
+		return nil
+	}
+	nameToIdx := make(map[string]int)
+	toolRefs := make([]types.Tool, len(sorted))
+	ae.mu.RLock()
+	for i, tc := range sorted {
+		name := tc.Function.Name
+		nameToIdx[name] = i
+		toolRefs[i], _ = ae.toolsMap[name]
+	}
+	ae.mu.RUnlock()
+	depGraph := make(map[string][]string)
+	for i, tool := range toolRefs {
+		if tool == nil {
+			continue
+		}
+		meta := tool.Metadata()
+		if len(meta.Dependencies) == 0 {
+			continue
+		}
+		deps := make([]string, 0, len(meta.Dependencies))
+		for _, d := range meta.Dependencies {
+			if _, in := nameToIdx[d]; in {
+				deps = append(deps, d)
+			}
+		}
+		if len(deps) > 0 {
+			depGraph[sorted[i].Function.Name] = deps
+		}
+	}
+
+	layerOf := make([]int, len(sorted))
+	maxL := 0
+	for i := range sorted {
+		name := sorted[i].Function.Name
+		deps := depGraph[name]
+		maxDepLayer := -1
+		for _, d := range deps {
+			if j, ok := nameToIdx[d]; ok && j < i && layerOf[j] > maxDepLayer {
+				maxDepLayer = layerOf[j]
+			}
+		}
+		layerOf[i] = maxDepLayer + 1
+		if layerOf[i] > maxL {
+			maxL = layerOf[i]
+		}
+	}
+	layers := make([][]int, maxL+1)
+	for i, l := range layerOf {
+		layers[l] = append(layers[l], i)
+	}
+	return layers
+}

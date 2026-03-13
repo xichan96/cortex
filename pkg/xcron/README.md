@@ -13,7 +13,7 @@
   - Automatic retries with configurable count.
   - Distributed lock support via `Locker` interface.
   - Failure callbacks for monitoring.
-- **Concurrency**: Thread-safe scheduler.
+- **Concurrency**: Thread-safe. Optional cap: `SetMaxConcurrent(n)` — `n=1` for serial execution, `n=0` or unset for parallel.
 
 ## Installation
 
@@ -39,6 +39,9 @@ db.AutoMigrate(&xcron.Job{})
 // Create Store and Scheduler
 store := xcron.NewGormJobStore(db)
 scheduler := xcron.NewScheduler(store)
+
+// Optional: serial execution (one job at a time)
+scheduler.SetMaxConcurrent(1)
 
 // Optional: Set Failure Handler
 scheduler.SetFailureHandler(func(job *xcron.Job, err error) {
@@ -93,6 +96,10 @@ err := scheduler.StopJob(ctx, jobID)
 // Remove a job (delete from DB)
 err := scheduler.RemoveJob(ctx, jobID)
 ```
+
+## Metrics
+
+Optional: implement `xcron.MetricsRecorder` (JobStarted, JobCompleted, JobFailed) and call `scheduler.SetMetricsRecorder(rec)` to wire Prometheus/OTel.
 
 ## Distributed Locking
 

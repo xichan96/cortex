@@ -161,6 +161,9 @@ func main() {
 	// 5.2 Initialize Scheduler Service with GormJobStore
 	jobStore := xcron.NewGormJobStore(sqliteClient.DB)
 	cronScheduler := xcron.NewScheduler(jobStore)
+	if os.Getenv("SCHEDULER_SERIAL") == "1" {
+		cronScheduler.SetMaxConcurrent(1)
+	}
 	schedulerService := scheduler.NewService(cronScheduler)
 
 	// Configure Scheduler Service

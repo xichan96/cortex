@@ -23,15 +23,13 @@ import (
 //   - cache key string
 func generateToolCacheKey(toolName string, args map[string]any) string {
 	hasher := md5.New()
-	// Include tool name in hash to reduce collision probability
-	fmt.Fprintf(hasher, "tool:%s:", toolName)
+	hasher.Write([]byte("tool:" + toolName + ":"))
 
 	if len(args) > 0 {
 		argsJSON, err := json.Marshal(args)
 		if err != nil {
-			// If marshaling fails, use a fallback to ensure cache key uniqueness
-			// This prevents cache collisions when args contain non-marshalable types
-			fmt.Fprintf(hasher, "fallback:%v", args)
+			hasher.Write([]byte("fallback:"))
+			hasher.Write([]byte(fmt.Sprint(args)))
 		} else {
 			hasher.Write(argsJSON)
 		}
@@ -58,7 +56,17 @@ func (ae *AgentEngine) getToolTruncationLength(toolName string) int {
 			return metadata.MaxTruncationLength
 		}
 	}
+	if c := ae.getConfig(); c != nil && c.DefaultToolResultMaxLen > 0 {
+		return c.DefaultToolResultMaxLen
+	}
 	return types.MaxTruncationLength
+}
+
+func (ae *AgentEngine) getToolErrorMaxLen() int {
+	if c := ae.getConfig(); c != nil && c.ToolErrorMaxLen > 0 {
+		return c.ToolErrorMaxLen
+	}
+	return types.ToolErrorMaxLen
 }
 
 // getCachedToolResult gets cached tool result

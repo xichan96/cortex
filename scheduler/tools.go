@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
+	"github.com/xichan96/cortex/pkg/xcron"
 )
 
 // NewTools creates a set of tools for interacting with the scheduler service
@@ -33,8 +35,19 @@ func (t *ScheduleJobTool) Name() string {
 	return "schedule_job"
 }
 
+//go:embed scheduler.txt
+var scheduleJobDescription string
+
+var sanitizeRe = []*regexp.Regexp{
+	regexp.MustCompile(`(?U)(每隔\s*[一二三四五六七八九十0-9]+\s*(秒|分钟|分|小时|天))`),
+	regexp.MustCompile(`(?U)(每\s*[一二三四五六七八九十0-9]+\s*(秒|分钟|分|小时|天))`),
+	regexp.MustCompile(`(?U)((在)?\s*[一二三四五六七八九十0-9]+\s*(秒|分钟|分|小时|天)后)`),
+	regexp.MustCompile(`(?i)(every\s+([0-9]+|one|two|three|four|five|six|seven|eight|nine|ten)?\s*(second|minute|hour|day|week|month|year)s?)`),
+	regexp.MustCompile(`(?i)(in\s+([0-9]+|one|two|three|four|five|six|seven|eight|nine|ten)?\s*(second|minute|hour|day|week|month|year)s?)`),
+}
+
 func (t *ScheduleJobTool) Description() string {
-	return "Schedule a new job. Supports 'oneshot' (run once after delay), 'periodic' (run every interval), and 'cron' (run at specific times)."
+	return scheduleJobDescription
 }
 
 func (t *ScheduleJobTool) Schema() map[string]interface{} {
@@ -66,6 +79,10 @@ func (t *ScheduleJobTool) Schema() map[string]interface{} {
 				"type":        "string",
 				"description": "The type of task handler to use. Defaults to 'agent_task' if not specified.",
 			},
+			"execution_mode": map[string]interface{}{
+				"type":        "string",
+				"description": "Set to 'serial' to run this job one-at-a-time with other serial jobs.",
+			},
 		},
 		"required": []string{"name", "type", "schedule", "payload"},
 	}
@@ -96,11 +113,11 @@ func (t *ScheduleJobTool) Execute(ctx context.Context, input map[string]interfac
 
 	taskType, _ := input["task_type"].(string)
 	if taskType == "" {
-		taskType = "agent_task"
+		taskType = string(xcron.TaskTypeAgent)
 	}
+	executionMode, _ := input["execution_mode"].(string)
 
-	// Validate agent_task payload
-	if taskType == "agent_task" {
+	if taskType == string(xcron.TaskTypeAgent) {
 		if payloadStr, ok := payload.(string); ok {
 			trimmed := strings.TrimSpace(payloadStr)
 			if strings.HasPrefix(trimmed, "{") {
@@ -118,34 +135,11 @@ func (t *ScheduleJobTool) Execute(ctx context.Context, input map[string]interfac
 				return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("payload must include non-empty 'message' describing the specific action"))
 			}
 			if maxIt, ok := payloadMap["max_iterations"]; ok && maxIt != nil {
-				switch v := maxIt.(type) {
-				case float64:
-					if v <= 0 || v != float64(int(v)) {
-						return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("max_iterations must be a positive integer"))
-					}
-					payloadMap["max_iterations"] = int(v)
-				case float32:
-					if v <= 0 || v != float32(int(v)) {
-						return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("max_iterations must be a positive integer"))
-					}
-					payloadMap["max_iterations"] = int(v)
-				case int:
-					if v <= 0 {
-						return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("max_iterations must be a positive integer"))
-					}
-				case int64:
-					if v <= 0 {
-						return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("max_iterations must be a positive integer"))
-					}
-					payloadMap["max_iterations"] = int(v)
-				case int32:
-					if v <= 0 {
-						return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("max_iterations must be a positive integer"))
-					}
-					payloadMap["max_iterations"] = int(v)
-				default:
-					return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("max_iterations must be a positive integer"))
+				n, err := parsePositiveInt(maxIt)
+				if err != nil {
+					return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(err)
 				}
+				payloadMap["max_iterations"] = n
 			}
 			// Ensure required tools when skills are present
 			if skillsVal, hasSkills := payloadMap["skills"]; hasSkills && skillsVal != nil {
@@ -211,28 +205,22 @@ func (t *ScheduleJobTool) Execute(ctx context.Context, input map[string]interfac
 				default:
 					return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("tools must be an array of strings"))
 				}
-			} else {
-				// tools optional: if omitted, agent runs with default registry or none
-				// no-op
 			}
-		} else {
-			// allow string payload (raw instruction); will be wrapped later in service
-			// no-op
 		}
 	}
 
-	// Restrict task_type to agent_task only
-	if taskType != "" && taskType != "agent_task" {
+	if taskType != "" && taskType != string(xcron.TaskTypeAgent) {
 		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("only 'agent_task' is supported for scheduling"))
 	}
 
 	jobInput := ScheduleJobInput{
-		Name:      name,
-		Type:      jobType,
-		SessionID: sessionID,
-		Schedule:  schedule,
-		Payload:   payload,
-		TaskType:  taskType,
+		Name:          name,
+		Type:          jobType,
+		SessionID:     sessionID,
+		Schedule:      schedule,
+		Payload:       payload,
+		TaskType:      taskType,
+		ExecutionMode: executionMode,
 	}
 
 	id, err := t.service.ScheduleJob(ctx, jobInput)
@@ -254,17 +242,41 @@ func (t *ScheduleJobTool) Metadata() types.ToolMetadata {
 	}
 }
 
+func parsePositiveInt(v interface{}) (int, error) {
+	switch x := v.(type) {
+	case float64:
+		if x <= 0 || x != float64(int(x)) {
+			return 0, fmt.Errorf("max_iterations must be a positive integer")
+		}
+		return int(x), nil
+	case float32:
+		if x <= 0 || x != float32(int(x)) {
+			return 0, fmt.Errorf("max_iterations must be a positive integer")
+		}
+		return int(x), nil
+	case int:
+		if x <= 0 {
+			return 0, fmt.Errorf("max_iterations must be a positive integer")
+		}
+		return x, nil
+	case int64:
+		if x <= 0 {
+			return 0, fmt.Errorf("max_iterations must be a positive integer")
+		}
+		return int(x), nil
+	case int32:
+		if x <= 0 {
+			return 0, fmt.Errorf("max_iterations must be a positive integer")
+		}
+		return int(x), nil
+	default:
+		return 0, fmt.Errorf("max_iterations must be a positive integer")
+	}
+}
+
 func sanitizeMessage(schedule string, msg string) string {
 	s := msg
-	pats := []string{
-		`(?U)(每隔\s*[一二三四五六七八九十0-9]+\s*(秒|分钟|分|小时|天))`,
-		`(?U)(每\s*[一二三四五六七八九十0-9]+\s*(秒|分钟|分|小时|天))`,
-		`(?U)((在)?\s*[一二三四五六七八九十0-9]+\s*(秒|分钟|分|小时|天)后)`,
-		`(?i)(every\s+([0-9]+|one|two|three|four|five|six|seven|eight|nine|ten)?\s*(second|minute|hour|day|week|month|year)s?)`,
-		`(?i)(in\s+([0-9]+|one|two|three|four|five|six|seven|eight|nine|ten)?\s*(second|minute|hour|day|week|month|year)s?)`,
-	}
-	for _, p := range pats {
-		re := regexp.MustCompile(p)
+	for _, re := range sanitizeRe {
 		s = re.ReplaceAllString(s, "")
 	}
 	s = strings.TrimSpace(s)
@@ -300,22 +312,62 @@ func (t *ListJobsTool) Schema() map[string]interface{} {
 				"type":        "integer",
 				"description": "Offset to start listing from (default 0)",
 			},
+			"status": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]interface{}{"type": "string"},
+				"description": "Filter by status: pending, running, completed, failed, stopped",
+			},
+			"type": map[string]interface{}{
+				"type":        "array",
+				"items":       map[string]interface{}{"type": "string"},
+				"description": "Filter by job type: one_shot, periodic, cron",
+			},
+			"session_id": map[string]interface{}{
+				"type":        "string",
+				"description": "Filter by session ID",
+			},
+			"order_by": map[string]interface{}{
+				"type":        "string",
+				"enum":        []string{"created_at", "next_run_at"},
+				"description": "Sort by created_at (default) or next_run_at",
+			},
 		},
 	}
 }
 
 func (t *ListJobsTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
-	limit := 50
+	opts := ListJobsOptions{Limit: 50}
 	if l, ok := input["limit"].(float64); ok {
-		limit = int(l)
+		opts.Limit = int(l)
 	}
-
-	offset := 0
 	if o, ok := input["offset"].(float64); ok {
-		offset = int(o)
+		opts.Offset = int(o)
 	}
-
-	jobs, _, err := t.service.ListJobs(ctx, limit, offset)
+	if s, ok := input["session_id"].(string); ok {
+		opts.SessionID = s
+	}
+	if ob, ok := input["order_by"].(string); ok && (ob == "next_run_at" || ob == "created_at") {
+		opts.OrderBy = ob
+	}
+	if statusVal, ok := input["status"]; ok {
+		if arr, ok := statusVal.([]interface{}); ok {
+			for _, v := range arr {
+				if str, ok := v.(string); ok {
+					opts.Status = append(opts.Status, str)
+				}
+			}
+		}
+	}
+	if typeVal, ok := input["type"]; ok {
+		if arr, ok := typeVal.([]interface{}); ok {
+			for _, v := range arr {
+				if str, ok := v.(string); ok {
+					opts.Type = append(opts.Type, str)
+				}
+			}
+		}
+	}
+	jobs, _, err := t.service.ListJobsWithOptions(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -436,8 +488,9 @@ func (t *StopJobTool) Execute(ctx context.Context, input map[string]interface{})
 		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("either job_id or name must be provided"))
 	}
 
+	const maxJobsToSearchByName = 1000
 	if jobID == "" && name != "" {
-		jobs, _, err := t.service.ListJobs(ctx, 1000, 0)
+		jobs, _, err := t.service.ListJobs(ctx, maxJobsToSearchByName, 0)
 		if err != nil {
 			return nil, err
 		}

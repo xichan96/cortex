@@ -19,8 +19,10 @@ var (
 	EC_TOOL_NOT_FOUND          = NewError(2002, "tool not found")          // 2002
 	EC_TOOL_VALIDATION_FAILED  = NewError(2003, "tool validation failed")  // 2003
 	EC_TOOL_PARAMETER_INVALID  = NewError(2004, "tool parameter invalid")  // 2004
-	EC_TOOL_EXECUTION_TIMEOUT  = NewError(2005, "tool execution timeout")  // 2005
+	EC_TOOL_EXECUTION_TIMEOUT  = NewRetryableError(2005, "tool execution timeout", 5000)  // 2005
 	EC_TOOL_ALREADY_REGISTERED = NewError(2006, "tool already registered") // 2006
+	EC_TOOL_INPUT_ERROR        = NewError(2400, "tool input invalid")     // 2400
+	EC_TOOL_AUTH_ERROR         = NewError(2403, "tool authorization denied") // 2403
 
 	// Configuration errors (3xxx)
 	EC_INVALID_CONFIG           = NewError(3001, "invalid configuration")           // 3001
@@ -35,11 +37,11 @@ var (
 	EC_MEMORY_ALLOCATION_FAILED = NewError(4004, "memory allocation failed") // 4004
 
 	// Network/connection errors (5xxx)
-	EC_NETWORK_ERROR       = NewError(5001, "network error")       // 5001
-	EC_CONNECTION_FAILED   = NewError(5002, "connection failed")   // 5002
-	EC_TIMEOUT             = NewError(5003, "operation timeout")   // 5003
-	EC_CONNECTION_TIMEOUT  = NewError(5004, "connection timeout")  // 5004
-	EC_NETWORK_UNREACHABLE = NewError(5005, "network unreachable") // 5005
+	EC_NETWORK_ERROR       = NewRetryableError(5001, "network error", 2000)       // 5001
+	EC_CONNECTION_FAILED   = NewRetryableError(5002, "connection failed", 3000)   // 5002
+	EC_TIMEOUT             = NewRetryableError(5003, "operation timeout", 2000)   // 5003
+	EC_CONNECTION_TIMEOUT  = NewRetryableError(5004, "connection timeout", 3000)  // 5004
+	EC_NETWORK_UNREACHABLE = NewRetryableError(5005, "network unreachable", 2000) // 5005
 
 	// Validation errors (6xxx)
 	EC_VALIDATION_FAILED = NewError(6001, "validation failed") // 6001
@@ -53,7 +55,7 @@ var (
 	EC_RESOURCE_EXHAUSTED = NewError(7002, "resource exhausted") // 7002
 	EC_NOT_IMPLEMENTED    = NewError(7003, "not implemented")    // 7003
 	EC_UNKNOWN_ERROR      = NewError(7004, "unknown error")      // 7004
-	EC_SYSTEM_OVERLOAD    = NewError(7005, "system overload")    // 7005
+	EC_SYSTEM_OVERLOAD    = NewRetryableError(7005, "system overload", 1000)    // 7005
 	ErrRateLimitExceeded  = NewError(7006, "rate limit exceeded")
 
 	// Data errors (8xxx)

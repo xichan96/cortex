@@ -529,7 +529,8 @@ func (p *LangChainLLMProvider) convertToLangChainMessages(messages []types.Messa
 		}
 
 		// If there are multimodal parts, use Parts, otherwise use traditional Content field
-		if len(msg.Parts) > 0 {
+		// Skip Parts for assistant with ToolCalls - those must use ToolCall parts for API compatibility
+		if len(msg.Parts) > 0 && msg.Role != "tool" && !(msg.Role == "assistant" && len(msg.ToolCalls) > 0) {
 			for _, part := range msg.Parts {
 				switch p := part.(type) {
 				case types.TextPart:
@@ -548,6 +549,38 @@ func (p *LangChainLLMProvider) convertToLangChainMessages(messages []types.Messa
 					parts = append(parts, llms.ImageURLPart(dataURL))
 				}
 			}
+		} else if msg.Role == "tool" && msg.ToolCallID != "" {
+			// Tool messages MUST use ToolCallResponse for OpenAI compatibility (expected part type for role "tool")
+			content := msg.Content
+			if content == "" {
+				content = "{}"
+			}
+			parts = append(parts, llms.ToolCallResponse{
+				ToolCallID: msg.ToolCallID,
+				Name:       msg.Name,
+				Content:    content,
+			})
+		} else if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			// Assistant messages with tool_calls MUST include ToolCall parts (OpenAI: "tool" must follow message with "tool_calls")
+			if msg.Content != "" {
+				parts = append(parts, llms.TextPart(msg.Content))
+			}
+			for _, tc := range msg.ToolCalls {
+				argsStr := "{}"
+				if tc.Function.Arguments != nil {
+					if b, err := json.Marshal(tc.Function.Arguments); err == nil {
+						argsStr = string(b)
+					}
+				}
+				parts = append(parts, llms.ToolCall{
+					ID:   tc.ID,
+					Type: tc.Type,
+					FunctionCall: &llms.FunctionCall{
+						Name:      tc.Function.Name,
+						Arguments: argsStr,
+					},
+				})
+			}
 		} else if msg.Content != "" {
 			// Backward compatibility: use traditional Content field
 			parts = append(parts, llms.TextPart(msg.Content))
@@ -559,22 +592,7 @@ func (p *LangChainLLMProvider) convertToLangChainMessages(messages []types.Messa
 		// Ensure content is never null - provide empty string if no content exists
 		// This is required by some APIs that expect content to be a string, not null
 		if len(parts) == 0 {
-			// For tool messages, use ToolCallResponse if ToolCallID is present
-			if msg.Role == "tool" && msg.ToolCallID != "" {
-				// Ensure Content is never null - use empty string if not provided
-				content := msg.Content
-				if content == "" {
-					content = "{}"
-				}
-				parts = append(parts, llms.ToolCallResponse{
-					ToolCallID: msg.ToolCallID,
-					Name:       msg.Name,
-					Content:    content,
-				})
-			} else {
-				// For other messages, use empty text part
-				parts = append(parts, llms.TextPart(""))
-			}
+			parts = append(parts, llms.TextPart(""))
 		}
 
 		langChainMessages[i] = llms.MessageContent{

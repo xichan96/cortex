@@ -30,15 +30,34 @@ func (s *GormJobStore) Delete(ctx context.Context, id string) error {
 }
 
 func (s *GormJobStore) List(ctx context.Context, offset, limit int) ([]*Job, int64, error) {
-	var jobs []*Job
-	var count int64
+	return s.ListWithOptions(ctx, ListOptions{Offset: offset, Limit: limit})
+}
 
-	err := s.db.WithContext(ctx).Model(&Job{}).Count(&count).Error
-	if err != nil {
+func (s *GormJobStore) ListWithOptions(ctx context.Context, opts ListOptions) ([]*Job, int64, error) {
+	var jobs []*Job
+	q := s.db.WithContext(ctx).Model(&Job{})
+	if len(opts.Status) > 0 {
+		q = q.Where("status IN ?", opts.Status)
+	}
+	if len(opts.Type) > 0 {
+		q = q.Where("type IN ?", opts.Type)
+	}
+	if opts.SessionID != "" {
+		q = q.Where("session_id = ?", opts.SessionID)
+	}
+	var count int64
+	if err := q.Count(&count).Error; err != nil {
 		return nil, 0, err
 	}
-
-	err = s.db.WithContext(ctx).Offset(offset).Limit(limit).Order("created_at desc").Find(&jobs).Error
+	order := "created_at desc"
+	if opts.OrderBy == "next_run_at" {
+		order = "next_run_at asc"
+	}
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	err := q.Offset(opts.Offset).Limit(limit).Order(order).Find(&jobs).Error
 	return jobs, count, err
 }
 
