@@ -9,9 +9,11 @@ import (
 
 	stderrors "errors"
 
+	"github.com/xichan96/cortex/agent/tools/schema"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
 	"github.com/xichan96/cortex/pkg/logger"
+	"golang.org/x/sync/errgroup"
 )
 
 func (ae *AgentEngine) getConfig() *types.AgentConfig {
@@ -73,6 +75,91 @@ func toolObservationError(err error, toolName string, cached bool, maxLen int) s
 		return fmt.Sprintf("Tool '%s' authorization denied%s: %s", toolName, suffix, detail)
 	}
 	return fmt.Sprintf("Tool '%s' execution failed%s: %s", toolName, suffix, detail)
+}
+
+type stepResult struct {
+	result   interface{}
+	err      error
+	cached   bool
+	duration time.Duration
+}
+
+func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls []types.ToolCall, timeout time.Duration) (exists []bool, results []stepResult) {
+	n := len(sortedToolCalls)
+	tools := make([]types.Tool, n)
+	exists = make([]bool, n)
+	ae.mu.RLock()
+	for i, tc := range sortedToolCalls {
+		tools[i], exists[i] = ae.toolsMap[tc.Function.Name]
+	}
+	ae.mu.RUnlock()
+	results = make([]stepResult, n)
+	cfg := ae.getConfig()
+	attempts := 1
+	if cfg != nil && cfg.EnableToolRetry && cfg.RetryAttempts > 0 {
+		attempts = cfg.RetryAttempts + 1
+	}
+	retryDelay := time.Second
+	if cfg != nil && cfg.RetryDelay > 0 {
+		retryDelay = cfg.RetryDelay
+	}
+	layers := ae.groupSortedToolCallsByLayer(sortedToolCalls)
+	for _, layer := range layers {
+		g, gctx := errgroup.WithContext(ctx)
+		for _, idx := range layer {
+			if !exists[idx] {
+				continue
+			}
+			idx := idx
+			tc := sortedToolCalls[idx]
+			tool := tools[idx]
+			g.Go(func() error {
+				start := time.Now()
+				// Validation errors are not retried; only execution failures go through the retry loop below.
+				if err := schema.ValidateInput(tool.Schema(), tc.Function.Arguments, tool.Name()); err != nil {
+					results[idx] = stepResult{err: err, cached: false, duration: 0}
+					return nil
+				}
+				toolResult, err, cached := ae.getCachedToolResult(tc.Function.Name, tc.Function.Arguments)
+				if cached {
+					results[idx] = stepResult{result: toolResult, err: err, cached: true, duration: 0}
+					return nil
+				}
+				var lastErr error
+			retryLoop:
+				for attempt := 0; attempt < attempts; attempt++ {
+					select {
+					case <-gctx.Done():
+						lastErr = gctx.Err()
+						break retryLoop
+					default:
+					}
+					toolResult, err = ae.executeToolWithTimeout(gctx, tool, tc.Function.Arguments, timeout)
+					if err == nil {
+						results[idx] = stepResult{result: toolResult, cached: false, duration: time.Since(start)}
+						ae.setCachedToolResult(tc.Function.Name, tc.Function.Arguments, toolResult, nil)
+						return nil
+					}
+					lastErr = err
+					if attempt < attempts-1 && errors.IsRetryable(err) {
+						timer := time.NewTimer(retryDelay)
+						defer timer.Stop()
+						select {
+						case <-gctx.Done():
+							break retryLoop
+						case <-timer.C:
+						}
+					} else {
+						break retryLoop
+					}
+				}
+				results[idx] = stepResult{err: lastErr, cached: false, duration: time.Since(start)}
+				return nil
+			})
+		}
+		_ = g.Wait()
+	}
+	return exists, results
 }
 
 func (ae *AgentEngine) checkDoomLoop(recentKeys []string, threshold int) (doom bool, lastKey string) {
@@ -499,9 +586,10 @@ func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Me
 			logger.LogError("executeIteration", err, slog.String("phase", "sort_tool_calls"))
 			sortedToolCalls = response.ToolCalls
 		}
+		cfg := ae.getConfig()
 		maxPerIter := 0
-		if c := ae.getConfig(); c != nil && c.MaxToolCallsPerIteration > 0 {
-			maxPerIter = c.MaxToolCallsPerIteration
+		if cfg != nil && cfg.MaxToolCallsPerIteration > 0 {
+			maxPerIter = cfg.MaxToolCallsPerIteration
 		}
 		if maxPerIter > 0 && len(sortedToolCalls) > maxPerIter {
 			logger.Info("Capping tool calls per iteration", slog.Int("requested", len(sortedToolCalls)), slog.Int("cap", maxPerIter))
@@ -510,86 +598,45 @@ func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Me
 
 		toolCalls := make([]types.ToolCallRequest, 0, len(sortedToolCalls))
 		intermediateSteps := make([]types.ToolCallData, 0, len(sortedToolCalls))
-
-		for _, toolCall := range sortedToolCalls {
-			logger.Info("Executing tool",
-				slog.String("tool_name", toolCall.Function.Name),
-				slog.Int("iteration", iteration+1))
-
-			ae.mu.RLock()
-			tool, exists := ae.toolsMap[toolCall.Function.Name]
-			ae.mu.RUnlock()
-			if !exists {
-				errMsg := fmt.Sprintf("tool '%s' not found in available tools", toolCall.Function.Name)
-				logger.Info("Tool not found", slog.String("tool_name", toolCall.Function.Name), slog.Int("iteration", iteration+1))
-				intermediateSteps = append(intermediateSteps, toolCallData(toolCall.Function.Name, toolCall.Function.Arguments, toolCall.ID, toolCall.Type, errMsg))
+		exists, results := ae.runToolCallsByLayer(ctx, sortedToolCalls, toolExecutionTimeout)
+		writeDir := ""
+		if cfg != nil {
+			writeDir = cfg.ToolResultWriteDir
+		}
+		for i, toolCall := range sortedToolCalls {
+			name := toolCall.Function.Name
+			args := toolCall.Function.Arguments
+			logger.Info("Executing tool", slog.String("tool_name", name), slog.Int("iteration", iteration+1))
+			if !exists[i] {
+				errMsg := fmt.Sprintf("tool '%s' not found in available tools", name)
+				logger.Info("Tool not found", slog.String("tool_name", name), slog.Int("iteration", iteration+1))
+				intermediateSteps = append(intermediateSteps, toolCallData(name, args, toolCall.ID, toolCall.Type, errMsg))
 				continue
 			}
-
-			// Check cache
-			toolStartTime := time.Now()
-			toolResult, err, cached := ae.getCachedToolResult(toolCall.Function.Name, toolCall.Function.Arguments)
-			if cached {
-				logger.LogToolExecution(toolCall.Function.Name, true, 0, slog.Bool("cached", true))
-				if err != nil {
-					errMsg := toolObservationError(err, toolCall.Function.Name, true, types.ToolErrorMaxLen)
-					logger.LogToolExecution(toolCall.Function.Name, false, 0, slog.String("error", err.Error()), slog.Bool("cached", true))
-					intermediateSteps = append(intermediateSteps, toolCallData(toolCall.Function.Name, toolCall.Function.Arguments, toolCall.ID, toolCall.Type, errMsg))
-					continue
+			r := results[i]
+			if r.err != nil {
+				if r.cached {
+					logger.LogToolExecution(name, true, 0, slog.Bool("cached", true))
 				}
+				errMsg := toolObservationError(r.err, name, r.cached, ae.getToolErrorMaxLen())
+				logger.LogToolExecution(name, false, r.duration, slog.String("error", r.err.Error()), slog.Bool("cached", r.cached))
+				intermediateSteps = append(intermediateSteps, toolCallData(name, args, toolCall.ID, toolCall.Type, errMsg))
+				continue
+			}
+			if r.cached {
+				logger.LogToolExecution(name, true, 0, slog.Bool("cached", true))
 			} else {
-				attempts := 1
-				if cfg := ae.getConfig(); cfg != nil && cfg.EnableToolRetry && cfg.RetryAttempts > 0 {
-					attempts = cfg.RetryAttempts + 1
-				}
-				var lastErr error
-				retryDelay := time.Second
-				if cfg := ae.getConfig(); cfg != nil && cfg.RetryDelay > 0 {
-					retryDelay = cfg.RetryDelay
-				}
-			retryLoop:
-				for attempt := 0; attempt < attempts; attempt++ {
-					toolResult, err = ae.executeToolWithTimeout(ctx, tool, toolCall.Function.Arguments, toolExecutionTimeout)
-					if err == nil {
-						break retryLoop
-					}
-					lastErr = err
-					if attempt < attempts-1 && errors.IsRetryable(err) {
-						select {
-						case <-ctx.Done():
-							lastErr = ctx.Err()
-							break retryLoop
-						case <-time.After(retryDelay):
-						}
-					} else {
-						break retryLoop
-					}
-				}
-				err = lastErr
-				duration := time.Since(toolStartTime)
-				if err != nil {
-					errMsg := toolObservationError(err, toolCall.Function.Name, false, types.ToolErrorMaxLen)
-					logger.LogToolExecution(toolCall.Function.Name, false, duration, slog.String("error", err.Error()), slog.String("tool_input", fmt.Sprintf("%v", toolCall.Function.Arguments)))
-					intermediateSteps = append(intermediateSteps, toolCallData(toolCall.Function.Name, toolCall.Function.Arguments, toolCall.ID, toolCall.Type, errMsg))
-					continue
-				}
-				ae.setCachedToolResult(toolCall.Function.Name, toolCall.Function.Arguments, toolResult, nil)
-				logger.LogToolExecution(toolCall.Function.Name, true, duration, slog.Bool("cached", false))
+				logger.LogToolExecution(name, true, r.duration, slog.Bool("cached", false))
 			}
-
-			logger.Info("Tool executed successfully", slog.String("tool_name", toolCall.Function.Name), slog.Int("iteration", iteration+1))
+			logger.Info("Tool executed successfully", slog.String("tool_name", name), slog.Int("iteration", iteration+1))
 			toolCalls = append(toolCalls, types.ToolCallRequest{
-				Tool: toolCall.Function.Name, ToolInput: toolCall.Function.Arguments, ToolCallID: toolCall.ID, Type: toolCall.Type,
+				Tool: name, ToolInput: args, ToolCallID: toolCall.ID, Type: toolCall.Type,
 			})
-			truncationLength := ae.getToolTruncationLength(toolCall.Function.Name)
-			sanitized := types.SanitizeToolResult(toolResult, truncationLength)
+			truncationLength := ae.getToolTruncationLength(name)
+			sanitized := types.SanitizeToolResult(r.result, truncationLength)
 			formatted := types.FormatToolResult(sanitized)
-			writeDir := ""
-			if c := ae.getConfig(); c != nil {
-				writeDir = c.ToolResultWriteDir
-			}
 			observation, _, _ := types.TruncateToolResult(formatted, truncationLength, writeDir)
-			intermediateSteps = append(intermediateSteps, toolCallData(toolCall.Function.Name, toolCall.Function.Arguments, toolCall.ID, toolCall.Type, observation))
+			intermediateSteps = append(intermediateSteps, toolCallData(name, args, toolCall.ID, toolCall.Type, observation))
 		}
 
 		result.ToolCalls = toolCalls
@@ -887,105 +934,65 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 			logger.LogError("executeStreamIteration", err, slog.String("phase", "sort_tool_calls"))
 			sortedToolCalls = toolCallsForSorting
 		}
+		cfg := ae.getConfig()
 		maxPerIter := 0
-		if c := ae.getConfig(); c != nil && c.MaxToolCallsPerIteration > 0 {
-			maxPerIter = c.MaxToolCallsPerIteration
+		if cfg != nil && cfg.MaxToolCallsPerIteration > 0 {
+			maxPerIter = cfg.MaxToolCallsPerIteration
 		}
 		if maxPerIter > 0 && len(sortedToolCalls) > maxPerIter {
 			logger.Info("Capping tool calls per iteration", slog.Int("requested", len(sortedToolCalls)), slog.Int("cap", maxPerIter), slog.String("context", "streaming"))
 			sortedToolCalls = sortedToolCalls[:maxPerIter]
 		}
 
-		sortedToolCallRequests := make([]types.ToolCallRequest, 0, len(sortedToolCalls))
-		for _, tc := range sortedToolCalls {
-			sortedToolCallRequests = append(sortedToolCallRequests, types.ToolCallRequest{
-				Tool:       tc.Function.Name,
-				ToolInput:  tc.Function.Arguments,
-				ToolCallID: tc.ID,
-				Type:       tc.Type,
-			})
+		streamToolCalls := make([]types.ToolCallRequest, 0, len(sortedToolCalls))
+		existsStream, resultsStream := ae.runToolCallsByLayer(ctx, sortedToolCalls, toolExecutionTimeout)
+		writeDir := ""
+		if cfg != nil {
+			writeDir = cfg.ToolResultWriteDir
 		}
-
-		for _, toolCall := range sortedToolCallRequests {
-			logger.LogExecution("executeStreamIteration", iteration, "Executing tool",
-				slog.String("tool_name", toolCall.Tool))
-
-			ae.mu.RLock()
-			tool, exists := ae.toolsMap[toolCall.Tool]
-			ae.mu.RUnlock()
-			if !exists {
-				errMsg := fmt.Sprintf("tool '%s' not found in available tools", toolCall.Tool)
-				logger.LogError("executeStreamIteration", fmt.Errorf("tool %q not found in available tools", toolCall.Tool), slog.String("tool_name", toolCall.Tool))
-				intermediateSteps = append(intermediateSteps, toolCallData(toolCall.Tool, toolCall.ToolInput, toolCall.ToolCallID, toolCall.Type, errMsg))
+		for i, tc := range sortedToolCalls {
+			name := tc.Function.Name
+			args := tc.Function.Arguments
+			logger.LogExecution("executeStreamIteration", iteration, "Executing tool", slog.String("tool_name", name))
+			if !existsStream[i] {
+				errMsg := fmt.Sprintf("tool '%s' not found in available tools", name)
+				logger.LogError("executeStreamIteration", fmt.Errorf("tool %q not found in available tools", name), slog.String("tool_name", name))
+				intermediateSteps = append(intermediateSteps, toolCallData(name, args, tc.ID, tc.Type, errMsg))
 				continue
 			}
-			toolStartTime := time.Now()
-			toolResult, err, cached := ae.getCachedToolResult(toolCall.Tool, toolCall.ToolInput)
-			if cached {
-				logger.LogToolExecution(toolCall.Tool, true, 0, slog.Bool("cached", true), slog.String("context", "streaming"))
-				if err != nil {
-					errMsg := toolObservationError(err, toolCall.Tool, true, types.ToolErrorMaxLen)
-					logger.LogToolExecution(toolCall.Tool, false, 0, slog.String("error", err.Error()), slog.Bool("cached", true), slog.String("context", "streaming"))
-					intermediateSteps = append(intermediateSteps, toolCallData(toolCall.Tool, toolCall.ToolInput, toolCall.ToolCallID, toolCall.Type, errMsg))
-					continue
+			r := resultsStream[i]
+			if r.err != nil {
+				if r.cached {
+					logger.LogToolExecution(name, true, 0, slog.Bool("cached", true), slog.String("context", "streaming"))
 				}
+				errMsg := toolObservationError(r.err, name, r.cached, ae.getToolErrorMaxLen())
+				logger.LogToolExecution(name, false, r.duration, slog.String("error", r.err.Error()), slog.Bool("cached", r.cached), slog.String("context", "streaming"))
+				intermediateSteps = append(intermediateSteps, toolCallData(name, args, tc.ID, tc.Type, errMsg))
+				continue
+			}
+			if r.cached {
+				logger.LogToolExecution(name, true, 0, slog.Bool("cached", true), slog.String("context", "streaming"))
 			} else {
-				attempts := 1
-				if cfg := ae.getConfig(); cfg != nil && cfg.EnableToolRetry && cfg.RetryAttempts > 0 {
-					attempts = cfg.RetryAttempts + 1
-				}
-				var lastErr error
-				retryDelay := time.Second
-				if cfg := ae.getConfig(); cfg != nil && cfg.RetryDelay > 0 {
-					retryDelay = cfg.RetryDelay
-				}
-			streamRetryLoop:
-				for attempt := 0; attempt < attempts; attempt++ {
-					toolResult, err = ae.executeToolWithTimeout(ctx, tool, toolCall.ToolInput, toolExecutionTimeout)
-					if err == nil {
-						break streamRetryLoop
-					}
-					lastErr = err
-					if attempt < attempts-1 && errors.IsRetryable(err) {
-						select {
-						case <-ctx.Done():
-							lastErr = ctx.Err()
-							break streamRetryLoop
-						case <-time.After(retryDelay):
-						}
-					} else {
-						break streamRetryLoop
-					}
-				}
-				err = lastErr
-				duration := time.Since(toolStartTime)
-				if err != nil {
-					errMsg := toolObservationError(err, toolCall.Tool, false, types.ToolErrorMaxLen)
-					logger.LogToolExecution(toolCall.Tool, false, duration, slog.String("error", err.Error()), slog.String("tool_input", fmt.Sprintf("%v", toolCall.ToolInput)), slog.String("context", "streaming"))
-					intermediateSteps = append(intermediateSteps, toolCallData(toolCall.Tool, toolCall.ToolInput, toolCall.ToolCallID, toolCall.Type, errMsg))
-					continue
-				}
-				ae.setCachedToolResult(toolCall.Tool, toolCall.ToolInput, toolResult, nil)
-				logger.LogToolExecution(toolCall.Tool, true, duration, slog.Bool("cached", false), slog.String("context", "streaming"))
+				logger.LogToolExecution(name, true, r.duration, slog.Bool("cached", false), slog.String("context", "streaming"))
 			}
-			truncationLength := ae.getToolTruncationLength(toolCall.Tool)
-			sanitized := types.SanitizeToolResult(toolResult, truncationLength)
+			streamToolCalls = append(streamToolCalls, types.ToolCallRequest{
+				Tool: name, ToolInput: args, ToolCallID: tc.ID, Type: tc.Type,
+			})
+			truncationLength := ae.getToolTruncationLength(name)
+			sanitized := types.SanitizeToolResult(r.result, truncationLength)
 			formatted := types.FormatToolResult(sanitized)
-			writeDir := ""
-			if c := ae.getConfig(); c != nil {
-				writeDir = c.ToolResultWriteDir
-			}
 			observation, _, _ := types.TruncateToolResult(formatted, truncationLength, writeDir)
-			intermediateSteps = append(intermediateSteps, toolCallData(toolCall.Tool, toolCall.ToolInput, toolCall.ToolCallID, toolCall.Type, observation))
+			intermediateSteps = append(intermediateSteps, toolCallData(name, args, tc.ID, tc.Type, observation))
 		}
 
+		result.ToolCalls = streamToolCalls
 		result.IntermediateSteps = intermediateSteps
 
 		logger.LogExecution("executeStreamIteration", iteration, "Tool execution completed",
-			slog.Int("executed_tools", len(result.ToolCalls)),
+			slog.Int("executed_tools", len(streamToolCalls)),
 			slog.Int("intermediate_steps", len(intermediateSteps)))
 
-		return result, len(result.ToolCalls) > 0, nil
+		return result, len(streamToolCalls) > 0, nil
 	}
 
 	logger.LogExecution("executeStreamIteration", iteration, "No tool calls in this iteration")

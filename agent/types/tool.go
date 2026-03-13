@@ -97,60 +97,64 @@ type ToolActionStep struct {
 
 // AgentConfig agent configuration
 type AgentConfig struct {
-	MaxIterations           int           `json:"maxIterations"`
-	SystemMessage           string        `json:"systemMessage"`
-	ChatMessageRole         string        `json:"chatMessageRole,omitempty"`
-	Temperature             float32       `json:"temperature"`                   // 温度参数 (0.0-1.0)
-	MaxTokens               int           `json:"maxTokens,omitempty"`           // 最大token数
-	MaxCompletionTokens     int           `json:"maxCompletionTokens,omitempty"` // 最大完成token数
-	TopP                    float32       `json:"topP"`                          // Top P采样
-	FrequencyPenalty        float32       `json:"frequencyPenalty"`              // 频率惩罚
-	PresencePenalty         float32       `json:"presencePenalty"`               // 存在惩罚
-	StopSequences           []string      `json:"stopSequences"`                 // 停止序列
-	Timeout                 time.Duration `json:"timeout"`                       // 超时时间
-	ToolExecutionTimeout    time.Duration `json:"toolExecutionTimeout"`          // 工具执行超时时间
-	RetryAttempts           int           `json:"retryAttempts"`                 // 重试次数
-	RetryDelay              time.Duration `json:"retryDelay"`                    // 重试延迟
-	EnableToolRetry         bool          `json:"enableToolRetry"`               // 启用工具重试
-	MaxHistoryMessages      int           `json:"maxHistoryMessages"`            // 最大历史消息数
-	EnableMemoryCompress    bool          `json:"enableMemoryCompress"`          // 启用记忆压缩
-	MemoryCompressThreshold int           `json:"memoryCompressThreshold"`       // 记忆压缩阈值（消息数量）
-	MemoryCompressRatio     float32       `json:"memoryCompressRatio"`           // 记忆压缩比例（0.0-1.0）
-	LogSilent               bool          `json:"logSilent"`                     // 是否静默日志
-	LogFile                 string        `json:"logFile"`                       // 日志文件路径，为空则输出到终端
-	DoomLoopThreshold       int           `json:"doomLoopThreshold"`             // 同一 tool+同一参数连续出现次数阈值，0 表示关闭
-	OnDoomLoop              func(toolName string, input map[string]interface{}) bool `json:"-"` // 检测到 doom loop 时回调，返回 false 则终止迭代
-	MaxToolCallsPerIteration int          `json:"maxToolCallsPerIteration"`     // 单轮最大 tool 调用数，0 表示不限制
-	ToolResultWriteDir       string       `json:"toolResultWriteDir"`            // 工具大结果落盘目录，为空则仅内存截断
+	MaxIterations            int                                                      `json:"maxIterations"`
+	SystemMessage            string                                                   `json:"systemMessage"`
+	ChatMessageRole          string                                                   `json:"chatMessageRole,omitempty"`
+	Temperature              float32                                                  `json:"temperature"`                   // 温度参数 (0.0-1.0)
+	MaxTokens                int                                                      `json:"maxTokens,omitempty"`           // 最大token数
+	MaxCompletionTokens      int                                                      `json:"maxCompletionTokens,omitempty"` // 最大完成token数
+	TopP                     float32                                                  `json:"topP"`                          // Top P采样
+	FrequencyPenalty         float32                                                  `json:"frequencyPenalty"`              // 频率惩罚
+	PresencePenalty          float32                                                  `json:"presencePenalty"`               // 存在惩罚
+	StopSequences            []string                                                 `json:"stopSequences"`                 // 停止序列
+	Timeout                  time.Duration                                            `json:"timeout"`                       // 超时时间
+	ToolExecutionTimeout     time.Duration                                            `json:"toolExecutionTimeout"`          // 工具执行超时时间
+	RetryAttempts            int                                                      `json:"retryAttempts"`                 // 重试次数
+	RetryDelay               time.Duration                                            `json:"retryDelay"`                    // 重试延迟
+	EnableToolRetry          bool                                                     `json:"enableToolRetry"`               // 启用工具重试
+	MaxHistoryMessages       int                                                      `json:"maxHistoryMessages"`            // 最大历史消息数
+	EnableMemoryCompress     bool                                                     `json:"enableMemoryCompress"`          // 启用记忆压缩
+	MemoryCompressThreshold  int                                                      `json:"memoryCompressThreshold"`       // 记忆压缩阈值（消息数量）
+	MemoryCompressRatio      float32                                                  `json:"memoryCompressRatio"`           // 记忆压缩比例（0.0-1.0）
+	LogSilent                bool                                                     `json:"logSilent"`                     // 是否静默日志
+	LogFile                  string                                                   `json:"logFile"`                       // 日志文件路径，为空则输出到终端
+	DoomLoopThreshold        int                                                      `json:"doomLoopThreshold"`             // 同一 tool+同一参数连续出现次数阈值，0 表示关闭
+	OnDoomLoop               func(toolName string, input map[string]interface{}) bool `json:"-"`                             // 检测到 doom loop 时回调，返回 false 则终止迭代
+	MaxToolCallsPerIteration int                                                      `json:"maxToolCallsPerIteration"`      // 单轮最大 tool 调用数，0 表示不限制
+	ToolResultWriteDir       string                                                   `json:"toolResultWriteDir"`            // 工具大结果落盘目录，为空则仅内存截断
+	DefaultToolResultMaxLen  int                                                      `json:"defaultToolResultMaxLen"`       // 工具结果默认截断长度，0 表示用 types.MaxTruncationLength
+	ToolErrorMaxLen          int                                                      `json:"toolErrorMaxLen"`               // 工具错误信息截断长度，0 表示用 types.ToolErrorMaxLen
 }
 
 // NewAgentConfig creates a new agent configuration with reasonable defaults
 func NewAgentConfig() *AgentConfig {
 	return &AgentConfig{
-		MaxIterations:           10,
-		SystemMessage:           "",
-		ChatMessageRole:         "",
-		Temperature:             0.7,
-		MaxTokens:               4096,
-		TopP:                    1.0,
-		FrequencyPenalty:        0.0,
-		PresencePenalty:         0.0,
-		StopSequences:           []string{},
-		Timeout:                 30 * time.Second,
-		ToolExecutionTimeout:    60 * time.Second,
-		RetryAttempts:           3,
-		RetryDelay:              1 * time.Second,
-		EnableToolRetry:         true,
-		MaxHistoryMessages:      100,
-		EnableMemoryCompress:    false,
-		MemoryCompressThreshold: 50,
-		MemoryCompressRatio:     0.5,
-		LogSilent:                 false,
-		LogFile:                   "",
-		DoomLoopThreshold:         0,
-		OnDoomLoop:                nil,
-		MaxToolCallsPerIteration:   0,
-		ToolResultWriteDir:         "",
+		MaxIterations:            10,
+		SystemMessage:            "",
+		ChatMessageRole:          "",
+		Temperature:              0.7,
+		MaxTokens:                4096,
+		TopP:                     1.0,
+		FrequencyPenalty:         0.0,
+		PresencePenalty:          0.0,
+		StopSequences:            []string{},
+		Timeout:                  30 * time.Second,
+		ToolExecutionTimeout:     60 * time.Second,
+		RetryAttempts:            3,
+		RetryDelay:               1 * time.Second,
+		EnableToolRetry:          true,
+		MaxHistoryMessages:       100,
+		EnableMemoryCompress:     false,
+		MemoryCompressThreshold:  50,
+		MemoryCompressRatio:      0.5,
+		LogSilent:                false,
+		LogFile:                  "",
+		DoomLoopThreshold:        0,
+		OnDoomLoop:               nil,
+		MaxToolCallsPerIteration: 0,
+		ToolResultWriteDir:       "",
+		DefaultToolResultMaxLen:  0,
+		ToolErrorMaxLen:          0,
 	}
 }
 

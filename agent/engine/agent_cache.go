@@ -56,7 +56,17 @@ func (ae *AgentEngine) getToolTruncationLength(toolName string) int {
 			return metadata.MaxTruncationLength
 		}
 	}
+	if c := ae.getConfig(); c != nil && c.DefaultToolResultMaxLen > 0 {
+		return c.DefaultToolResultMaxLen
+	}
 	return types.MaxTruncationLength
+}
+
+func (ae *AgentEngine) getToolErrorMaxLen() int {
+	if c := ae.getConfig(); c != nil && c.ToolErrorMaxLen > 0 {
+		return c.ToolErrorMaxLen
+	}
+	return types.ToolErrorMaxLen
 }
 
 // getCachedToolResult gets cached tool result

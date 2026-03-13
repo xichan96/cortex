@@ -13,7 +13,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// LoadSkillsFromDirs scans the provided directories for SKILL.md files and loads them.
+const SkillFileName = "SKILL.md"
+
+// LoadSkillsFromDirs scans the provided directories for **/SKILL.md files and loads them (opencode-compatible).
 func LoadSkillsFromDirs(ctx context.Context, l *logger.Logger, dirs []string) ([]Skill, error) {
 	var skills []Skill
 
@@ -42,7 +44,7 @@ func LoadSkillsFromDirs(ctx context.Context, l *logger.Logger, dirs []string) ([
 				return nil
 			}
 
-			if !info.IsDir() && strings.EqualFold(info.Name(), "SKILL.MD") {
+			if !info.IsDir() && strings.EqualFold(info.Name(), SkillFileName) {
 				skill, err := loadSkillFromFile(path)
 				if err != nil {
 					// Log error but continue
