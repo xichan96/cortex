@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	stderrors "errors"
+
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
 	"github.com/xichan96/cortex/pkg/logger"
@@ -53,6 +55,24 @@ func toolCallData(tool string, toolInput interface{}, toolCallID, typeStr, obser
 		},
 		Observation: observation,
 	}
+}
+
+func toolObservationError(err error, toolName string, cached bool, maxLen int) string {
+	if maxLen <= 0 {
+		maxLen = types.ToolErrorMaxLen
+	}
+	detail := types.NormalizeToolError(err, maxLen)
+	suffix := ""
+	if cached {
+		suffix = " (cached error)"
+	}
+	if stderrors.Is(err, errors.EC_TOOL_INPUT_ERROR) {
+		return fmt.Sprintf("Tool '%s' was called with invalid arguments%s: %s. Please fix the input to match the schema.", toolName, suffix, detail)
+	}
+	if stderrors.Is(err, errors.EC_TOOL_AUTH_ERROR) {
+		return fmt.Sprintf("Tool '%s' authorization denied%s: %s", toolName, suffix, detail)
+	}
+	return fmt.Sprintf("Tool '%s' execution failed%s: %s", toolName, suffix, detail)
 }
 
 func (ae *AgentEngine) checkDoomLoop(recentKeys []string, threshold int) (doom bool, lastKey string) {
@@ -512,7 +532,7 @@ func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Me
 			if cached {
 				logger.LogToolExecution(toolCall.Function.Name, true, 0, slog.Bool("cached", true))
 				if err != nil {
-					errMsg := fmt.Sprintf("Tool '%s' execution failed (cached error): %s", toolCall.Function.Name, types.NormalizeToolError(err, types.ToolErrorMaxLen))
+					errMsg := toolObservationError(err, toolCall.Function.Name, true, types.ToolErrorMaxLen)
 					logger.LogToolExecution(toolCall.Function.Name, false, 0, slog.String("error", err.Error()), slog.Bool("cached", true))
 					intermediateSteps = append(intermediateSteps, toolCallData(toolCall.Function.Name, toolCall.Function.Arguments, toolCall.ID, toolCall.Type, errMsg))
 					continue
@@ -548,7 +568,7 @@ func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Me
 				err = lastErr
 				duration := time.Since(toolStartTime)
 				if err != nil {
-					errMsg := fmt.Sprintf("Tool '%s' execution failed: %s", toolCall.Function.Name, types.NormalizeToolError(err, types.ToolErrorMaxLen))
+					errMsg := toolObservationError(err, toolCall.Function.Name, false, types.ToolErrorMaxLen)
 					logger.LogToolExecution(toolCall.Function.Name, false, duration, slog.String("error", err.Error()), slog.String("tool_input", fmt.Sprintf("%v", toolCall.Function.Arguments)))
 					intermediateSteps = append(intermediateSteps, toolCallData(toolCall.Function.Name, toolCall.Function.Arguments, toolCall.ID, toolCall.Type, errMsg))
 					continue
@@ -904,7 +924,7 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 			if cached {
 				logger.LogToolExecution(toolCall.Tool, true, 0, slog.Bool("cached", true), slog.String("context", "streaming"))
 				if err != nil {
-					errMsg := fmt.Sprintf("Tool '%s' execution failed (cached error): %s", toolCall.Tool, types.NormalizeToolError(err, types.ToolErrorMaxLen))
+					errMsg := toolObservationError(err, toolCall.Tool, true, types.ToolErrorMaxLen)
 					logger.LogToolExecution(toolCall.Tool, false, 0, slog.String("error", err.Error()), slog.Bool("cached", true), slog.String("context", "streaming"))
 					intermediateSteps = append(intermediateSteps, toolCallData(toolCall.Tool, toolCall.ToolInput, toolCall.ToolCallID, toolCall.Type, errMsg))
 					continue
@@ -940,7 +960,7 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 				err = lastErr
 				duration := time.Since(toolStartTime)
 				if err != nil {
-					errMsg := fmt.Sprintf("Tool '%s' execution failed: %s", toolCall.Tool, types.NormalizeToolError(err, types.ToolErrorMaxLen))
+					errMsg := toolObservationError(err, toolCall.Tool, false, types.ToolErrorMaxLen)
 					logger.LogToolExecution(toolCall.Tool, false, duration, slog.String("error", err.Error()), slog.String("tool_input", fmt.Sprintf("%v", toolCall.ToolInput)), slog.String("context", "streaming"))
 					intermediateSteps = append(intermediateSteps, toolCallData(toolCall.Tool, toolCall.ToolInput, toolCall.ToolCallID, toolCall.Type, errMsg))
 					continue

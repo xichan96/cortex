@@ -37,6 +37,17 @@ func (e *Error) Unwrap() error {
 	return e.Err
 }
 
+func (e *Error) Is(target error) bool {
+	if e == nil {
+		return false
+	}
+	t, ok := target.(*Error)
+	if !ok {
+		return false
+	}
+	return e.Code == t.Code
+}
+
 // NewError creates an agent engine error
 // Creates an agent engine error with error code and detailed information
 // Parameters:
