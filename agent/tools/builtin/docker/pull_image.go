@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 
 	"github.com/xichan96/cortex/agent/types"
@@ -12,8 +13,12 @@ import (
 type PullImageTool struct{ baseTool }
 
 func (t *PullImageTool) Name() string { return "docker_pull_image" }
+
+//go:embed docker_pull_image.txt
+var dockerPullImageDescription string
+
 func (t *PullImageTool) Description() string {
-	return "Pull a Docker image. Optional: username, password for private registry."
+	return dockerPullImageDescription
 }
 func (t *PullImageTool) Schema() map[string]interface{} {
 	return map[string]interface{}{

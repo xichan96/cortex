@@ -2,6 +2,7 @@ package net
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"net"
 	"time"
@@ -20,8 +21,11 @@ func (t *PingTool) Name() string {
 	return "net_check"
 }
 
+//go:embed net_check.txt
+var netCheckDescription string
+
 func (t *PingTool) Description() string {
-	return "Check network connectivity to a remote host and port using TCP connection."
+	return netCheckDescription
 }
 
 func (t *PingTool) Schema() map[string]interface{} {

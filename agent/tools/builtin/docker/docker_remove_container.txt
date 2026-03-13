@@ -1,0 +1,5 @@
+- Stops and permanently removes a Docker container.
+- This action is irreversible and will delete the container and its associated data.
+
+Usage notes:
+  - Requires the `container_id` or name of the container to be removed.

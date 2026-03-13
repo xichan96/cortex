@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 
 	"github.com/xichan96/cortex/agent/types"
@@ -10,8 +11,14 @@ import (
 
 type InspectContainerTool struct{ baseTool }
 
-func (t *InspectContainerTool) Name() string        { return "docker_inspect_container" }
-func (t *InspectContainerTool) Description() string { return "Inspect a Docker container by ID or name." }
+func (t *InspectContainerTool) Name() string { return "docker_inspect_container" }
+
+//go:embed docker_inspect_container.txt
+var dockerInspectContainerDescription string
+
+func (t *InspectContainerTool) Description() string {
+	return dockerInspectContainerDescription
+}
 func (t *InspectContainerTool) Schema() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",

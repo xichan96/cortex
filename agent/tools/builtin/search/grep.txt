@@ -1,0 +1,6 @@
+- Searches for a literal string or regular expression in files.
+- This is useful for finding exact matches of text or patterns within the codebase.
+
+Usage notes:
+  - Requires a `pattern` to search for.
+  - Optionally, a `path` can be provided to limit the search to a specific file or directory.

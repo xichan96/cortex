@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"os"
 	"strings"
@@ -22,8 +23,11 @@ func (t *EditTool) Name() string {
 	return "edit_file"
 }
 
+//go:embed edit_file.txt
+var editFileDescription string
+
 func (t *EditTool) Description() string {
-	return "Edits a file by replacing a text segment with new content (first occurrence)."
+	return editFileDescription
 }
 
 func (t *EditTool) Schema() map[string]interface{} {

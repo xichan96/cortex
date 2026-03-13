@@ -1,0 +1,9 @@
+- Executes a command on a remote server using the SSH protocol.
+- Provides a secure way to manage and interact with remote machines.
+
+Usage notes:
+  - Authentication can be done via password, private key, or an SSH agent.
+  - Supports connecting through a bastion/jump host.
+  - Requires `username`, `address`, and `command` parameters.
+  - The `port` defaults to 22 if not specified.
+  - Returns the standard output of the executed command.

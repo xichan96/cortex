@@ -1,0 +1,7 @@
+- Executes a command inside a running Docker container.
+- Provides shell access to a container for debugging or management tasks.
+
+Usage notes:
+  - Requires the `container_id` (or name) and the `command` to execute.
+  - The command is executed via `/bin/sh -c`.
+  - The output is the combined stdout and stderr from the command.

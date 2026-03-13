@@ -1,0 +1,4 @@
+- Starts a previously created but stopped Docker container.
+
+Usage notes:
+  - Requires the `container_id` or name of the container to start.

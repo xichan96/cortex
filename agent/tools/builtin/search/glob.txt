@@ -1,0 +1,5 @@
+- Finds files and directories matching a specified pattern.
+- This is useful for discovering files when you know part of the name or extension.
+
+Usage notes:
+  - Requires a `pattern` to match against file paths (e.g., 'internal/**/*.go').

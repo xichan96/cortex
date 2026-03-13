@@ -1,0 +1,9 @@
+- Acts as a client for the Multi-provider Capability Protocol (MCP), allowing interaction with remote MCP servers.
+- Enables the agent to discover and execute tools exposed by other agents or services.
+
+Usage notes:
+  - `action` specifies the operation: `connect`, `list_tools`, `call_tool`, `disconnect`.
+  - `connect`: Establishes a connection to an MCP server at a given `server_url`.
+  - `list_tools`: Fetches the list of available tools from the connected server.
+  - `call_tool`: Executes a specific tool on the server with the provided `arguments`.
+  - `disconnect`: Terminates the current MCP session.

@@ -2,6 +2,7 @@ package system
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,8 +27,11 @@ func (t *HTTPTool) Name() string {
 	return "http_request"
 }
 
+//go:embed http.txt
+var httpDescription string
+
 func (t *HTTPTool) Description() string {
-	return "Performs an HTTP GET request to a specified URL."
+	return httpDescription
 }
 
 func (t *HTTPTool) Schema() map[string]interface{} {

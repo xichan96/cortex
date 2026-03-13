@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	_ "embed"
 	"strings"
 
 	dt "github.com/docker/docker/api/types"
@@ -13,8 +14,12 @@ import (
 type ListContainersTool struct{ baseTool }
 
 func (t *ListContainersTool) Name() string { return "docker_list_containers" }
+
+//go:embed docker_list_containers.txt
+var dockerListContainersDescription string
+
 func (t *ListContainersTool) Description() string {
-	return "List Docker containers. Optional: all (bool) to include stopped."
+	return dockerListContainersDescription
 }
 func (t *ListContainersTool) Schema() map[string]interface{} {
 	return map[string]interface{}{

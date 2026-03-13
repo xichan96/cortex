@@ -1,0 +1,6 @@
+- Performs a semantic search over the codebase using a natural language query.
+- This is useful for finding relevant code snippets without knowing the exact keywords or file names.
+
+Usage notes:
+  - Requires a `query` describing the code you are looking for.
+  - It returns a list of code snippets that are most relevant to the query.

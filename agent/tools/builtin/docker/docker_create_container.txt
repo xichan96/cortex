@@ -1,0 +1,7 @@
+- Creates a new Docker container from a specified image.
+- This tool only creates the container; it does not start it.
+
+Usage notes:
+  - Requires a `name` for the container and the `image` to use.
+  - Optional parameters include `cmd` (command to run), `env` (environment variables), and `ports` (port mappings).
+  - Set `pull_image` to `true` to force pull the image before creation.

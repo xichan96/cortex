@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"sync"
 	"time"
@@ -24,8 +25,11 @@ func (t *MCPClientTool) Name() string {
 	return "mcp_client"
 }
 
+//go:embed mcp_client.txt
+var mcpClientDescription string
+
 func (t *MCPClientTool) Description() string {
-	return "A built-in tool for interacting with MCP servers. Supports connecting to a server, listing available tools, and calling tools."
+	return mcpClientDescription
 }
 
 func (t *MCPClientTool) Schema() map[string]interface{} {

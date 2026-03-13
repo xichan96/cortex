@@ -1,0 +1,6 @@
+- Retrieves detailed information about a specific container.
+- This is equivalent to running `docker inspect` on the command line.
+
+Usage notes:
+  - Requires the `container_id` or name.
+  - Returns key details such as the container's state, name, ID, and image.

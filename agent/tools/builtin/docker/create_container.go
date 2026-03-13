@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"regexp"
 
@@ -15,8 +16,12 @@ var containerNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 type CreateContainerTool struct{ baseTool }
 
 func (t *CreateContainerTool) Name() string { return "docker_create_container" }
+
+//go:embed docker_create_container.txt
+var dockerCreateContainerDescription string
+
 func (t *CreateContainerTool) Description() string {
-	return "Create and start a Docker container. Provide name, image, and optional cmd, env, ports, pull_image."
+	return dockerCreateContainerDescription
 }
 func (t *CreateContainerTool) Schema() map[string]interface{} {
 	return map[string]interface{}{

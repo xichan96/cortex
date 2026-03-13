@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 
 	"github.com/xichan96/cortex/agent/types"
@@ -10,8 +11,14 @@ import (
 
 type RestartContainerTool struct{ baseTool }
 
-func (t *RestartContainerTool) Name() string        { return "docker_restart_container" }
-func (t *RestartContainerTool) Description() string { return "Restart a Docker container by ID or name." }
+func (t *RestartContainerTool) Name() string { return "docker_restart_container" }
+
+//go:embed docker_restart_container.txt
+var dockerRestartContainerDescription string
+
+func (t *RestartContainerTool) Description() string {
+	return dockerRestartContainerDescription
+}
 func (t *RestartContainerTool) Schema() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",

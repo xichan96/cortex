@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 
 	"github.com/xichan96/cortex/agent/types"
@@ -11,8 +12,12 @@ import (
 type ExecContainerTool struct{ baseTool }
 
 func (t *ExecContainerTool) Name() string { return "docker_exec" }
+
+//go:embed docker_exec.txt
+var dockerExecDescription string
+
 func (t *ExecContainerTool) Description() string {
-	return "Execute a command inside a running Docker container. Returns combined stdout/stderr (may contain TTY control characters)."
+	return dockerExecDescription
 }
 func (t *ExecContainerTool) Schema() map[string]interface{} {
 	return map[string]interface{}{

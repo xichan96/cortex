@@ -1,0 +1,7 @@
+- Edits a file by performing a search-and-replace operation for the first occurrence of a string.
+- This is useful for making targeted changes to a file without reading and writing the entire content manually.
+
+Usage notes:
+  - Requires the file `path`, the exact `old_str` to find, and the `new_str` to replace it with.
+  - The operation will fail if `old_str` is not found in the file.
+  - Only the first match is replaced.

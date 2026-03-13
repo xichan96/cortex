@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"strings"
 
@@ -22,8 +23,11 @@ func (t *JobKillTool) Name() string {
 	return "job_kill"
 }
 
+//go:embed job_kill.txt
+var jobKillDescription string
+
 func (t *JobKillTool) Description() string {
-	return "Terminate a background shell command by its ID."
+	return jobKillDescription
 }
 
 func (t *JobKillTool) Schema() map[string]interface{} {
@@ -71,8 +75,11 @@ func (t *JobOutputTool) Name() string {
 	return "job_output"
 }
 
+//go:embed job_output.txt
+var jobOutputDescription string
+
 func (t *JobOutputTool) Description() string {
-	return "Get the output of a background shell command."
+	return jobOutputDescription
 }
 
 func (t *JobOutputTool) Schema() map[string]interface{} {

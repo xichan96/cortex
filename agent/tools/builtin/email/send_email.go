@@ -2,6 +2,7 @@ package email
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 
 	"github.com/xichan96/cortex/agent/types"
@@ -21,8 +22,11 @@ func (t *EmailTool) Name() string {
 	return "send_email"
 }
 
+//go:embed send_email.txt
+var sendEmailDescription string
+
 func (t *EmailTool) Description() string {
-	return "Send an email to one or more recipients. Supports HTML, plain text, and markdown content types."
+	return sendEmailDescription
 }
 
 func (t *EmailTool) Schema() map[string]interface{} {

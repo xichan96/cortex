@@ -1,0 +1,7 @@
+- Checks network connectivity to a specific host and port by attempting a TCP connection.
+- Useful for diagnosing network issues or verifying if a service is reachable.
+
+Usage notes:
+  - The `address` must be in the format 'host:port'.
+  - A custom `timeout` in seconds can be specified (default: 5s).
+  - Returns a boolean `connected` status and the resolved address.

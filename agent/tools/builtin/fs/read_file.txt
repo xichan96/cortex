@@ -1,0 +1,7 @@
+- Reads the entire content of a specified file.
+- If the given path is a directory, it lists the contents of that directory instead.
+
+Usage notes:
+  - Provide the `path` to the file or directory.
+  - For files, it returns the full content as a string.
+  - For directories, it returns a list of file and directory names within it.

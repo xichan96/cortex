@@ -1,0 +1,7 @@
+- Fetches the logs from a specified Docker container.
+- Useful for debugging or monitoring containerized applications.
+
+Usage notes:
+  - Requires the `container_id` or name.
+  - `lines` can be used to specify the number of log lines to retrieve from the end (default: 100).
+  - Set `timestamps` to `true` to include timestamps in the output.

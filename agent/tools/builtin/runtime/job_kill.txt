@@ -1,0 +1,6 @@
+- Terminates a running background command by its unique shell ID.
+- This is useful for stopping long-running processes or cleaning up resources.
+
+Usage notes:
+  - The `shell_id` is returned when a command is started in the background.
+  - This tool should be used when a background task is no longer needed or needs to be restarted.
