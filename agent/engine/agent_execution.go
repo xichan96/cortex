@@ -59,13 +59,6 @@ func toolCallData(tool string, toolInput interface{}, toolCallID, typeStr, obser
 	}
 }
 
-func toolCallIDString(step types.ToolCallData) string {
-	if s, ok := step.Action.ToolCallID.(string); ok {
-		return s
-	}
-	return fmt.Sprint(step.Action.ToolCallID)
-}
-
 func toolObservationError(err error, toolName string, cached bool, maxLen int) string {
 	if maxLen <= 0 {
 		maxLen = types.ToolErrorMaxLen
@@ -76,7 +69,7 @@ func toolObservationError(err error, toolName string, cached bool, maxLen int) s
 		suffix = " (cached error)"
 	}
 	if stderrors.Is(err, errors.EC_TOOL_INPUT_ERROR) {
-		return fmt.Sprintf("Tool '%s' was called with invalid arguments%s: %s. Please fix the input to match the schema.", toolName, suffix, detail)
+		return fmt.Sprintf("Tool '%s' was called with invalid arguments%s: %s. Please rewrite the input so it satisfies the expected schema.", toolName, suffix, detail)
 	}
 	if stderrors.Is(err, errors.EC_TOOL_AUTH_ERROR) {
 		return fmt.Sprintf("Tool '%s' authorization denied%s: %s", toolName, suffix, detail)
@@ -89,6 +82,61 @@ type stepResult struct {
 	err      error
 	cached   bool
 	duration time.Duration
+}
+
+func (ae *AgentEngine) prepareToolCalls(toolCalls []types.ToolCall) ([]types.ToolCall, error) {
+	if len(toolCalls) <= 1 {
+		return toolCalls, nil
+	}
+	sorted, err := ae.sortToolCallsByDependencies(toolCalls)
+	if err != nil {
+		logger.LogError("prepareToolCalls", err, slog.String("phase", "sort_tool_calls"))
+		sorted = toolCalls
+	}
+	cfg := ae.getConfig()
+	if cfg != nil && cfg.MaxToolCallsPerIteration > 0 && len(sorted) > cfg.MaxToolCallsPerIteration {
+		logger.Info("Capping tool calls per iteration", slog.Int("requested", len(sorted)), slog.Int("cap", cfg.MaxToolCallsPerIteration))
+		sorted = sorted[:cfg.MaxToolCallsPerIteration]
+	}
+	return sorted, nil
+}
+
+func (ae *AgentEngine) buildToolCallResults(sortedToolCalls []types.ToolCall, exists []bool, results []stepResult, writeDir, logContext string) ([]types.ToolCallRequest, []types.ToolCallData) {
+	toolCalls := make([]types.ToolCallRequest, 0, len(sortedToolCalls))
+	intermediateSteps := make([]types.ToolCallData, 0, len(sortedToolCalls))
+	for i, toolCall := range sortedToolCalls {
+		name := toolCall.Function.Name
+		args := toolCall.Function.Arguments
+		if !exists[i] {
+			errMsg := fmt.Sprintf("tool '%s' not found in available tools", name)
+			intermediateSteps = append(intermediateSteps, toolCallData(name, args, toolCall.ID, toolCall.Type, errMsg))
+			continue
+		}
+		r := results[i]
+		if r.err != nil {
+			if r.cached {
+				logger.LogToolExecution(name, true, 0, slog.Bool("cached", true), slog.String("context", logContext))
+			}
+			errMsg := toolObservationError(r.err, name, r.cached, ae.getToolErrorMaxLen())
+			logger.LogToolExecution(name, false, r.duration, slog.String("error", r.err.Error()), slog.Bool("cached", r.cached), slog.String("context", logContext))
+			intermediateSteps = append(intermediateSteps, toolCallData(name, args, toolCall.ID, toolCall.Type, errMsg))
+			continue
+		}
+		if r.cached {
+			logger.LogToolExecution(name, true, 0, slog.Bool("cached", true), slog.String("context", logContext))
+		} else {
+			logger.LogToolExecution(name, true, r.duration, slog.Bool("cached", false), slog.String("context", logContext))
+		}
+		toolCalls = append(toolCalls, types.ToolCallRequest{
+			Tool: name, ToolInput: args, ToolCallID: toolCall.ID, Type: toolCall.Type,
+		})
+		truncationLength := ae.getToolTruncationLength(name)
+		sanitized := types.SanitizeToolResult(r.result, truncationLength)
+		formatted := types.FormatToolResult(sanitized)
+		observation, _, _ := types.TruncateToolResult(formatted, truncationLength, writeDir)
+		intermediateSteps = append(intermediateSteps, toolCallData(name, args, toolCall.ID, toolCall.Type, observation))
+	}
+	return toolCalls, intermediateSteps
 }
 
 func (ae *AgentEngine) getToolByName(name string) (types.Tool, bool) {
@@ -132,18 +180,35 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 			idx := idx
 			tc := sortedToolCalls[idx]
 			tool := tools[idx]
+			args := tc.Function.Arguments
+			if args == nil {
+				args = make(map[string]interface{})
+			}
 			g.Go(func() error {
 				start := time.Now()
-				// Validation errors are not retried; only execution failures go through the retry loop below.
-				if err := schema.ValidateInput(tool.Schema(), tc.Function.Arguments, tool.Name()); err != nil {
+				if err := schema.ValidateInput(tool.Schema(), args, tool.Name()); err != nil {
 					results[idx] = stepResult{err: err, cached: false, duration: 0}
 					return nil
 				}
 				canonicalName := tool.Name()
-				toolResult, err, cached := ae.getCachedToolResult(canonicalName, tc.Function.Arguments)
-				if cached {
-					results[idx] = stepResult{result: toolResult, err: err, cached: true, duration: 0}
-					return nil
+				// Check for no_cache flag in metadata
+				noCache := false
+				if meta := tool.Metadata(); meta.Extra != nil {
+					if v, ok := meta.Extra["no_cache"].(bool); ok && v {
+						noCache = true
+					}
+				}
+
+				var toolResult interface{}
+				var err error
+				var cached bool
+
+				if !noCache {
+					toolResult, err, cached = ae.getCachedToolResult(canonicalName, args)
+					if cached {
+						results[idx] = stepResult{result: toolResult, err: err, cached: true, duration: 0}
+						return nil
+					}
 				}
 				var lastErr error
 			retryLoop:
@@ -154,10 +219,12 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 						break retryLoop
 					default:
 					}
-					toolResult, err = ae.executeToolWithTimeout(gctx, tool, tc.Function.Arguments, timeout)
+					toolResult, err = ae.executeToolWithTimeout(gctx, tool, args, timeout)
 					if err == nil {
 						results[idx] = stepResult{result: toolResult, cached: false, duration: time.Since(start)}
-						ae.setCachedToolResult(canonicalName, tc.Function.Arguments, toolResult, nil)
+						if !noCache {
+							ae.setCachedToolResult(canonicalName, args, toolResult, nil)
+						}
 						return nil
 					}
 					lastErr = err
@@ -180,36 +247,6 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 		_ = g.Wait()
 	}
 	return exists, results
-}
-
-func (ae *AgentEngine) checkDoomLoop(recentKeys []string, threshold int) (doom bool, lastKey string) {
-	if threshold <= 0 || len(recentKeys) < threshold {
-		return false, ""
-	}
-	last := recentKeys[len(recentKeys)-1]
-	count := 0
-	for _, key := range recentKeys {
-		if key == last {
-			count++
-		}
-	}
-	if count >= threshold {
-		return true, last
-	}
-	return false, ""
-}
-
-func generateLoopKey(toolName string, args map[string]interface{}) string {
-	// For execute_command, we normalize the command string to catch trivial variations
-	if toolName == "execute_command" {
-		if cmd, ok := args["command"].(string); ok {
-			// Trim whitespace and collapse internal spaces?
-			// Just trimming space is a good start.
-			return toolName + ":" + strings.TrimSpace(cmd)
-		}
-	}
-	// For other tools, we fallback to the standard cache key which is strict
-	return generateToolCacheKey(toolName, args)
 }
 
 func (ae *AgentEngine) enrichContextWithConfig(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -340,8 +377,7 @@ func (ae *AgentEngine) Execute(ctx context.Context, input types.AgentInput, prev
 		doomThreshold = config.DoomLoopThreshold
 		onDoomLoop = config.OnDoomLoop
 	}
-	var recentKeys []string
-	const maxRecentKeys = 20
+	var doomState doomLoopState
 	for iteration < maxIterations {
 		select {
 		case <-ctx.Done():
@@ -368,31 +404,10 @@ func (ae *AgentEngine) Execute(ctx context.Context, input types.AgentInput, prev
 			break
 		}
 
-		for _, step := range result.IntermediateSteps {
-			toolInput, _ := step.Action.ToolInput.(map[string]interface{})
-			recentKeys = append(recentKeys, generateLoopKey(step.Action.Tool, toolInput))
-		}
-		if len(recentKeys) > maxRecentKeys {
-			recentKeys = recentKeys[len(recentKeys)-maxRecentKeys:]
-		}
-		if doom, lastKey := ae.checkDoomLoop(recentKeys, doomThreshold); doom {
-			toolName := lastKey
-			if idx := strings.Index(lastKey, ":"); idx > 0 {
-				toolName = lastKey[:idx]
-			}
-			var lastInput map[string]interface{}
-			for _, step := range result.IntermediateSteps {
-				if step.Action.Tool == toolName {
-					if m, _ := step.Action.ToolInput.(map[string]interface{}); m != nil {
-						lastInput = m
-					}
-					break
-				}
-			}
-			if onDoomLoop == nil || !onDoomLoop(toolName, lastInput) {
-				logger.LogExecution("Execute", iteration, "Doom loop detected, stopping")
-				break
-			}
+		doomState.appendSteps(result.IntermediateSteps)
+		if doomState.shouldStop(doomThreshold, onDoomLoop) {
+			logger.LogExecution("Execute", iteration, "Doom loop detected, stopping")
+			break
 		}
 
 		messages = ae.buildNextMessages(messages, result)
@@ -556,18 +571,6 @@ func (ae *AgentEngine) prepareMessages(ctx context.Context, input types.AgentInp
 	return messages, nil
 }
 
-// buildContextFromPreviousRequests builds context from previous requests
-func (ae *AgentEngine) buildContextFromPreviousRequests(requests []types.ToolCallData) string {
-	var builder strings.Builder
-	builder.Grow(256 * len(requests))
-	builder.WriteString("Previous tool calls:\n")
-	for _, req := range requests {
-		builder.WriteString(fmt.Sprintf("Tool: %s, Input: %v, Result: %s\n",
-			req.Action.Tool, req.Action.ToolInput, req.Observation))
-	}
-	return builder.String()
-}
-
 // executeIteration executes a single iteration
 // Processes one round of LLM calling and tool execution, supporting caching and error handling
 // Parameters:
@@ -621,63 +624,14 @@ func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Me
 			return result, false, nil
 		}
 
-		sortedToolCalls, err := ae.sortToolCallsByDependencies(response.ToolCalls)
-		if err != nil {
-			logger.LogError("executeIteration", err, slog.String("phase", "sort_tool_calls"))
-			sortedToolCalls = response.ToolCalls
-		}
-		cfg := ae.getConfig()
-		maxPerIter := 0
-		if cfg != nil && cfg.MaxToolCallsPerIteration > 0 {
-			maxPerIter = cfg.MaxToolCallsPerIteration
-		}
-		if maxPerIter > 0 && len(sortedToolCalls) > maxPerIter {
-			logger.Info("Capping tool calls per iteration", slog.Int("requested", len(sortedToolCalls)), slog.Int("cap", maxPerIter))
-			sortedToolCalls = sortedToolCalls[:maxPerIter]
-		}
-
-		toolCalls := make([]types.ToolCallRequest, 0, len(sortedToolCalls))
-		intermediateSteps := make([]types.ToolCallData, 0, len(sortedToolCalls))
+		sortedToolCalls, _ := ae.prepareToolCalls(response.ToolCalls)
 		exists, results := ae.runToolCallsByLayer(ctx, sortedToolCalls, toolExecutionTimeout)
+		cfg := ae.getConfig()
 		writeDir := ""
 		if cfg != nil {
 			writeDir = cfg.ToolResultWriteDir
 		}
-		for i, toolCall := range sortedToolCalls {
-			name := toolCall.Function.Name
-			args := toolCall.Function.Arguments
-			logger.Info("Executing tool", slog.String("tool_name", name), slog.Int("iteration", iteration+1))
-			if !exists[i] {
-				errMsg := fmt.Sprintf("tool '%s' not found in available tools", name)
-				logger.Info("Tool not found", slog.String("tool_name", name), slog.Int("iteration", iteration+1))
-				intermediateSteps = append(intermediateSteps, toolCallData(name, args, toolCall.ID, toolCall.Type, errMsg))
-				continue
-			}
-			r := results[i]
-			if r.err != nil {
-				if r.cached {
-					logger.LogToolExecution(name, true, 0, slog.Bool("cached", true))
-				}
-				errMsg := toolObservationError(r.err, name, r.cached, ae.getToolErrorMaxLen())
-				logger.LogToolExecution(name, false, r.duration, slog.String("error", r.err.Error()), slog.Bool("cached", r.cached))
-				intermediateSteps = append(intermediateSteps, toolCallData(name, args, toolCall.ID, toolCall.Type, errMsg))
-				continue
-			}
-			if r.cached {
-				logger.LogToolExecution(name, true, 0, slog.Bool("cached", true))
-			} else {
-				logger.LogToolExecution(name, true, r.duration, slog.Bool("cached", false))
-			}
-			logger.Info("Tool executed successfully", slog.String("tool_name", name), slog.Int("iteration", iteration+1))
-			toolCalls = append(toolCalls, types.ToolCallRequest{
-				Tool: name, ToolInput: args, ToolCallID: toolCall.ID, Type: toolCall.Type,
-			})
-			truncationLength := ae.getToolTruncationLength(name)
-			sanitized := types.SanitizeToolResult(r.result, truncationLength)
-			formatted := types.FormatToolResult(sanitized)
-			observation, _, _ := types.TruncateToolResult(formatted, truncationLength, writeDir)
-			intermediateSteps = append(intermediateSteps, toolCallData(name, args, toolCall.ID, toolCall.Type, observation))
-		}
+		toolCalls, intermediateSteps := ae.buildToolCallResults(sortedToolCalls, exists, results, writeDir, "")
 
 		result.ToolCalls = toolCalls
 		result.IntermediateSteps = intermediateSteps
@@ -695,67 +649,6 @@ func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Me
 	return result, false, nil
 }
 
-// ==================== Message Building Methods ====================
-
-// buildNextMessages builds messages for the next round
-func (ae *AgentEngine) buildNextMessages(previousMessages []types.Message, result *types.AgentResult) []types.Message {
-	// Keep system messages, user's original question, and assistant's previous response
-	// Pre-allocate slice capacity: system messages + user message + assistant response + tool results
-	messages := make([]types.Message, 0, 4)
-
-	// Keep system messages (if any)
-	for _, msg := range previousMessages {
-		if msg.Role == "system" {
-			messages = append(messages, msg)
-		}
-	}
-
-	// Keep user's original question (last user/human message)
-	for i := len(previousMessages) - 1; i >= 0; i-- {
-		if previousMessages[i].Role == "user" || previousMessages[i].Role == "human" {
-			messages = append(messages, previousMessages[i])
-			break
-		}
-	}
-
-	if result != nil && (result.Output != "" || len(result.IntermediateSteps) > 0) {
-		assistantToolCalls := make([]types.ToolCall, 0, len(result.IntermediateSteps))
-		for _, step := range result.IntermediateSteps {
-			args, _ := step.Action.ToolInput.(map[string]interface{})
-			if args == nil {
-				args = make(map[string]interface{})
-			}
-			assistantToolCalls = append(assistantToolCalls, types.ToolCall{
-				ID:   toolCallIDString(step),
-				Type: fmt.Sprint(step.Action.Type),
-				Function: types.ToolFunction{
-					Name:      step.Action.Tool,
-					Arguments: args,
-				},
-			})
-		}
-		messages = append(messages, types.Message{
-			Role:      "assistant",
-			Content:   result.Output,
-			ToolCalls: assistantToolCalls,
-		})
-	}
-
-	if result != nil && len(result.IntermediateSteps) > 0 {
-		for _, step := range result.IntermediateSteps {
-			messages = append(messages, types.Message{
-				Role:       "tool",
-				Content:    step.Observation,
-				ToolCallID: toolCallIDString(step),
-			})
-		}
-	}
-
-	return messages
-}
-
-// ==================== Streaming Execution Methods ====================
-
 // executeStreamWithIterations executes streaming iterations (supports multi-round tool calling)
 func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialMessages []types.Message, resultChan chan<- types.StreamResult) {
 	messages := initialMessages
@@ -771,8 +664,7 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 		doomThreshold = config.DoomLoopThreshold
 		onDoomLoop = config.OnDoomLoop
 	}
-	var recentKeys []string
-	const maxRecentKeys = 20
+	var doomState doomLoopState
 	var iteration int
 
 	for iteration = 0; iteration < maxIterations; iteration++ {
@@ -815,31 +707,10 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 			break
 		}
 
-		for _, step := range iterationResult.IntermediateSteps {
-			toolInput, _ := step.Action.ToolInput.(map[string]interface{})
-			recentKeys = append(recentKeys, generateLoopKey(step.Action.Tool, toolInput))
-		}
-		if len(recentKeys) > maxRecentKeys {
-			recentKeys = recentKeys[len(recentKeys)-maxRecentKeys:]
-		}
-		if doom, lastKey := ae.checkDoomLoop(recentKeys, doomThreshold); doom {
-			toolName := lastKey
-			if idx := strings.Index(lastKey, ":"); idx > 0 {
-				toolName = lastKey[:idx]
-			}
-			var lastInput map[string]interface{}
-			for _, step := range iterationResult.IntermediateSteps {
-				if step.Action.Tool == toolName {
-					if m, _ := step.Action.ToolInput.(map[string]interface{}); m != nil {
-						lastInput = m
-					}
-					break
-				}
-			}
-			if onDoomLoop == nil || !onDoomLoop(toolName, lastInput) {
-				logger.LogExecution("executeStreamWithIterations", iteration, "Doom loop detected, stopping")
-				break
-			}
+		doomState.appendSteps(iterationResult.IntermediateSteps)
+		if doomState.shouldStop(doomThreshold, onDoomLoop) {
+			logger.LogExecution("executeStreamWithIterations", iteration, "Doom loop detected, stopping")
+			break
 		}
 
 		if iteration+1 < maxIterations {
@@ -917,7 +788,6 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 		return nil, false, errors.NewError(errors.EC_STREAM_CHAT_FAILED.Code, "failed to chat with tools stream").Wrap(err)
 	}
 
-	intermediateSteps := []types.ToolCallData{}
 	var outputBuilder strings.Builder
 	outputBuilder.Grow(2048)
 
@@ -970,61 +840,14 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 			})
 		}
 
-		sortedToolCalls, err := ae.sortToolCallsByDependencies(toolCallsForSorting)
-		if err != nil {
-			logger.LogError("executeStreamIteration", err, slog.String("phase", "sort_tool_calls"))
-			sortedToolCalls = toolCallsForSorting
-		}
-		cfg := ae.getConfig()
-		maxPerIter := 0
-		if cfg != nil && cfg.MaxToolCallsPerIteration > 0 {
-			maxPerIter = cfg.MaxToolCallsPerIteration
-		}
-		if maxPerIter > 0 && len(sortedToolCalls) > maxPerIter {
-			logger.Info("Capping tool calls per iteration", slog.Int("requested", len(sortedToolCalls)), slog.Int("cap", maxPerIter), slog.String("context", "streaming"))
-			sortedToolCalls = sortedToolCalls[:maxPerIter]
-		}
-
-		streamToolCalls := make([]types.ToolCallRequest, 0, len(sortedToolCalls))
+		sortedToolCalls, _ := ae.prepareToolCalls(toolCallsForSorting)
 		existsStream, resultsStream := ae.runToolCallsByLayer(ctx, sortedToolCalls, toolExecutionTimeout)
+		cfg := ae.getConfig()
 		writeDir := ""
 		if cfg != nil {
 			writeDir = cfg.ToolResultWriteDir
 		}
-		for i, tc := range sortedToolCalls {
-			name := tc.Function.Name
-			args := tc.Function.Arguments
-			logger.LogExecution("executeStreamIteration", iteration, "Executing tool", slog.String("tool_name", name))
-			if !existsStream[i] {
-				errMsg := fmt.Sprintf("tool '%s' not found in available tools", name)
-				logger.LogError("executeStreamIteration", fmt.Errorf("tool %q not found in available tools", name), slog.String("tool_name", name))
-				intermediateSteps = append(intermediateSteps, toolCallData(name, args, tc.ID, tc.Type, errMsg))
-				continue
-			}
-			r := resultsStream[i]
-			if r.err != nil {
-				if r.cached {
-					logger.LogToolExecution(name, true, 0, slog.Bool("cached", true), slog.String("context", "streaming"))
-				}
-				errMsg := toolObservationError(r.err, name, r.cached, ae.getToolErrorMaxLen())
-				logger.LogToolExecution(name, false, r.duration, slog.String("error", r.err.Error()), slog.Bool("cached", r.cached), slog.String("context", "streaming"))
-				intermediateSteps = append(intermediateSteps, toolCallData(name, args, tc.ID, tc.Type, errMsg))
-				continue
-			}
-			if r.cached {
-				logger.LogToolExecution(name, true, 0, slog.Bool("cached", true), slog.String("context", "streaming"))
-			} else {
-				logger.LogToolExecution(name, true, r.duration, slog.Bool("cached", false), slog.String("context", "streaming"))
-			}
-			streamToolCalls = append(streamToolCalls, types.ToolCallRequest{
-				Tool: name, ToolInput: args, ToolCallID: tc.ID, Type: tc.Type,
-			})
-			truncationLength := ae.getToolTruncationLength(name)
-			sanitized := types.SanitizeToolResult(r.result, truncationLength)
-			formatted := types.FormatToolResult(sanitized)
-			observation, _, _ := types.TruncateToolResult(formatted, truncationLength, writeDir)
-			intermediateSteps = append(intermediateSteps, toolCallData(name, args, tc.ID, tc.Type, observation))
-		}
+		streamToolCalls, intermediateSteps := ae.buildToolCallResults(sortedToolCalls, existsStream, resultsStream, writeDir, "streaming")
 
 		result.ToolCalls = streamToolCalls
 		result.IntermediateSteps = intermediateSteps
