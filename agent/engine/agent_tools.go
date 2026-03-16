@@ -231,13 +231,11 @@ func (ae *AgentEngine) groupSortedToolCallsByLayer(sorted []types.ToolCall) [][]
 	}
 	nameToIdx := make(map[string]int)
 	toolRefs := make([]types.Tool, len(sorted))
-	ae.mu.RLock()
 	for i, tc := range sorted {
 		name := tc.Function.Name
 		nameToIdx[name] = i
-		toolRefs[i], _ = ae.toolsMap[name]
+		toolRefs[i], _ = ae.getToolByName(name)
 	}
-	ae.mu.RUnlock()
 	depGraph := make(map[string][]string)
 	for i, tool := range toolRefs {
 		if tool == nil {

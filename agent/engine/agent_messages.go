@@ -1,0 +1,78 @@
+package engine
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/xichan96/cortex/agent/types"
+)
+
+func toolCallIDString(step types.ToolCallData) string {
+	if s, ok := step.Action.ToolCallID.(string); ok {
+		return s
+	}
+	return fmt.Sprint(step.Action.ToolCallID)
+}
+
+func (ae *AgentEngine) buildContextFromPreviousRequests(requests []types.ToolCallData) string {
+	var builder strings.Builder
+	builder.Grow(256 * len(requests))
+	builder.WriteString("Previous tool calls:\n")
+	for _, req := range requests {
+		builder.WriteString(fmt.Sprintf("Tool: %s, Input: %v, Result: %s\n",
+			req.Action.Tool, req.Action.ToolInput, req.Observation))
+	}
+	return builder.String()
+}
+
+func (ae *AgentEngine) buildNextMessages(previousMessages []types.Message, result *types.AgentResult) []types.Message {
+	messages := make([]types.Message, 0, 4)
+
+	for _, msg := range previousMessages {
+		if msg.Role == "system" {
+			messages = append(messages, msg)
+		}
+	}
+
+	for i := len(previousMessages) - 1; i >= 0; i-- {
+		if previousMessages[i].Role == "user" || previousMessages[i].Role == "human" {
+			messages = append(messages, previousMessages[i])
+			break
+		}
+	}
+
+	if result != nil && (result.Output != "" || len(result.IntermediateSteps) > 0) {
+		assistantToolCalls := make([]types.ToolCall, 0, len(result.IntermediateSteps))
+		for _, step := range result.IntermediateSteps {
+			args, _ := step.Action.ToolInput.(map[string]interface{})
+			if args == nil {
+				args = make(map[string]interface{})
+			}
+			assistantToolCalls = append(assistantToolCalls, types.ToolCall{
+				ID:   toolCallIDString(step),
+				Type: fmt.Sprint(step.Action.Type),
+				Function: types.ToolFunction{
+					Name:      step.Action.Tool,
+					Arguments: args,
+				},
+			})
+		}
+		messages = append(messages, types.Message{
+			Role:      "assistant",
+			Content:   result.Output,
+			ToolCalls: assistantToolCalls,
+		})
+	}
+
+	if result != nil && len(result.IntermediateSteps) > 0 {
+		for _, step := range result.IntermediateSteps {
+			messages = append(messages, types.Message{
+				Role:       "tool",
+				Content:    step.Observation,
+				ToolCallID: toolCallIDString(step),
+			})
+		}
+	}
+
+	return messages
+}
