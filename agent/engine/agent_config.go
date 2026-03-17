@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/xichan96/cortex/agent/hooks"
 	"github.com/xichan96/cortex/agent/ratelimit"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/logger"
@@ -133,4 +134,18 @@ func (ae *AgentEngine) SetRateLimiter(ctx context.Context, limiter ratelimit.Rat
 	ae.mu.Lock()
 	defer ae.mu.Unlock()
 	ae.rateLimiter = limiter
+}
+
+// SetToolCallback sets the tool callback for real-time tool execution events
+func (ae *AgentEngine) SetToolCallback(ctx context.Context, callback types.ToolCallback) {
+	ae.mu.Lock()
+	defer ae.mu.Unlock()
+	ae.toolCallback = callback
+}
+
+// SetHooks sets the hooks for lifecycle events
+func (ae *AgentEngine) SetHooks(ctx context.Context, h hooks.Hooks) {
+	ae.mu.Lock()
+	defer ae.mu.Unlock()
+	ae.hooks = h
 }

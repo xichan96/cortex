@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xichan96/cortex/agent/hooks"
 	"github.com/xichan96/cortex/agent/ratelimit"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
@@ -358,6 +359,16 @@ func (e *LangChainAgentEngine) SetConfig(ctx context.Context, config *types.Agen
 // SetRateLimiter sets the rate limiter (not implemented for LangChain engine)
 func (e *LangChainAgentEngine) SetRateLimiter(ctx context.Context, limiter ratelimit.RateLimiter) {
 	// LangChain engine does not implement rate limiting
+}
+
+// SetToolCallback sets the tool callback (not implemented for LangChain engine)
+func (e *LangChainAgentEngine) SetToolCallback(ctx context.Context, callback types.ToolCallback) {
+	// LangChain engine does not implement tool callback
+}
+
+// SetHooks sets the hooks (not implemented for LangChain engine)
+func (e *LangChainAgentEngine) SetHooks(ctx context.Context, h hooks.Hooks) {
+	// LangChain engine does not implement hooks
 }
 
 // limitMemory limits memory size based on maxHistoryMessages

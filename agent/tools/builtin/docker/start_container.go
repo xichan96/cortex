@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 
 	"github.com/xichan96/cortex/agent/types"

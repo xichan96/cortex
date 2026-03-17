@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -35,6 +36,49 @@ func getLLMProvider() (types.LLMProvider, error) {
 		return nil, fmt.Errorf("failed to create Volcengine client: %w", err)
 	}
 	return llmProvider, nil
+}
+
+// ToolEventCallback demonstrates the ToolCallback interface for real-time tool events
+type ToolEventCallback struct{}
+
+func (t *ToolEventCallback) OnToolCall(toolName string, toolCallID string, input map[string]interface{}) {
+	inputJSON, _ := json.Marshal(input)
+	fmt.Printf("\n🔧 [Tool Event] Tool Call: %s (ID: %s)\n   Input: %s\n", toolName, toolCallID, inputJSON)
+}
+
+func (t *ToolEventCallback) OnToolInputStart(toolName string, toolCallID string, input map[string]interface{}) {
+	fmt.Printf("   📥 [Tool Event] Input Start: %s\n", toolName)
+}
+
+func (t *ToolEventCallback) OnToolInputEnd(toolName string, toolCallID string, input map[string]interface{}) {
+	fmt.Printf("   ✅ [Tool Event] Input End: %s\n", toolName)
+}
+
+func (t *ToolEventCallback) OnToolResult(toolName string, toolCallID string, output interface{}) {
+	outputStr := ""
+	switch v := output.(type) {
+	case string:
+		if len(v) > 200 {
+			outputStr = v[:200] + "..."
+		} else {
+			outputStr = v
+		}
+	case nil:
+		outputStr = "(no output)"
+	default:
+		b, _ := json.Marshal(v)
+		s := string(b)
+		if len(s) > 200 {
+			outputStr = s[:200] + "..."
+		} else {
+			outputStr = s
+		}
+	}
+	fmt.Printf("   📤 [Tool Event] Result: %s\n   Output: %s\n", toolName, outputStr)
+}
+
+func (t *ToolEventCallback) OnToolError(toolName string, toolCallID string, err error) {
+	fmt.Printf("   ❌ [Tool Event] Error: %s - %v\n", toolName, err)
 }
 
 // loadAndInjectSkills handles skill loading and system prompt injection
@@ -113,6 +157,10 @@ func main() {
 
 	// 4. Create Agent Engine
 	agentEngine := engine.NewAgentEngine(llmProvider, agentConfig)
+
+	// 4.1 Set up tool callback for real-time tool execution events
+	agentEngine.SetToolCallback(ctx, &ToolEventCallback{})
+	fmt.Println("✅ Tool callback registered for real-time events")
 
 	// 5. Initialize Memory (Explicitly using SimpleMemoryProvider)
 	memory := providers.NewSimpleMemoryProvider()

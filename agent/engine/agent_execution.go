@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	stderrors "errors"
 
+	"github.com/xichan96/cortex/agent/hooks"
 	"github.com/xichan96/cortex/agent/tools/schema"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
@@ -20,6 +22,15 @@ func (ae *AgentEngine) getConfig() *types.AgentConfig {
 	ae.mu.RLock()
 	defer ae.mu.RUnlock()
 	return ae.config
+}
+
+func (ae *AgentEngine) getHooks() hooks.Hooks {
+	ae.mu.RLock()
+	defer ae.mu.RUnlock()
+	if ae.hooks != nil {
+		return ae.hooks
+	}
+	return hooks.NoOpHooks{}
 }
 
 func (ae *AgentEngine) getMaxIterations() int {
@@ -82,6 +93,132 @@ type stepResult struct {
 	err      error
 	cached   bool
 	duration time.Duration
+}
+
+// streamToolCallback wraps ToolCallback to send events to stream result channel
+type streamToolCallback struct {
+	userCallback  types.ToolCallback
+	resultSender  func(types.StreamResult)
+	mu            sync.Mutex
+	toolCallState map[string]time.Time // toolCallID -> startTime
+	closed        bool
+}
+
+func newStreamToolCallback(userCallback types.ToolCallback, sender func(types.StreamResult)) *streamToolCallback {
+	return &streamToolCallback{
+		userCallback:  userCallback,
+		resultSender:  sender,
+		toolCallState: make(map[string]time.Time),
+		closed:        false,
+	}
+}
+
+func (c *streamToolCallback) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
+	c.toolCallState = make(map[string]time.Time)
+}
+
+func (c *streamToolCallback) sendEvent(event *types.ToolEvent) {
+	if c.closed || c.resultSender == nil {
+		return
+	}
+	c.resultSender(types.StreamResult{
+		Type:      "tool_event",
+		ToolEvent: event,
+	})
+}
+
+func (c *streamToolCallback) OnToolCall(toolName string, toolCallID string, input map[string]interface{}) {
+	c.sendEvent(&types.ToolEvent{
+		Event:      types.StreamEventToolCall,
+		ToolName:   toolName,
+		ToolCallID: toolCallID,
+		State:      types.ToolStatePending,
+		Input:      input,
+	})
+	if c.userCallback != nil {
+		c.userCallback.OnToolCall(toolName, toolCallID, input)
+	}
+}
+
+func (c *streamToolCallback) OnToolInputStart(toolName string, toolCallID string, input map[string]interface{}) {
+	c.mu.Lock()
+	c.toolCallState[toolCallID] = time.Now()
+	c.mu.Unlock()
+
+	c.sendEvent(&types.ToolEvent{
+		Event:      types.StreamEventToolInputStart,
+		ToolName:   toolName,
+		ToolCallID: toolCallID,
+		State:      types.ToolStateRunning,
+		Input:      input,
+	})
+	if c.userCallback != nil {
+		c.userCallback.OnToolInputStart(toolName, toolCallID, input)
+	}
+}
+
+func (c *streamToolCallback) OnToolInputEnd(toolName string, toolCallID string, input map[string]interface{}) {
+	c.sendEvent(&types.ToolEvent{
+		Event:      types.StreamEventToolInputEnd,
+		ToolName:   toolName,
+		ToolCallID: toolCallID,
+		State:      types.ToolStateRunning,
+		Input:      input,
+	})
+	if c.userCallback != nil {
+		c.userCallback.OnToolInputEnd(toolName, toolCallID, input)
+	}
+}
+
+func (c *streamToolCallback) OnToolResult(toolName string, toolCallID string, output interface{}) {
+	var duration time.Duration
+	c.mu.Lock()
+	if start, ok := c.toolCallState[toolCallID]; ok {
+		duration = time.Since(start)
+		delete(c.toolCallState, toolCallID)
+	}
+	c.mu.Unlock()
+
+	c.sendEvent(&types.ToolEvent{
+		Event:      types.StreamEventToolResult,
+		ToolName:   toolName,
+		ToolCallID: toolCallID,
+		State:      types.ToolStateCompleted,
+		Output:     output,
+		Duration:   duration,
+	})
+	if c.userCallback != nil {
+		c.userCallback.OnToolResult(toolName, toolCallID, output)
+	}
+}
+
+func (c *streamToolCallback) OnToolError(toolName string, toolCallID string, err error) {
+	var duration time.Duration
+	errMsg := ""
+	if err != nil {
+		errMsg = err.Error()
+	}
+	c.mu.Lock()
+	if start, ok := c.toolCallState[toolCallID]; ok {
+		duration = time.Since(start)
+		delete(c.toolCallState, toolCallID)
+	}
+	c.mu.Unlock()
+
+	c.sendEvent(&types.ToolEvent{
+		Event:      types.StreamEventToolError,
+		ToolName:   toolName,
+		ToolCallID: toolCallID,
+		State:      types.ToolStateError,
+		Error:      errMsg,
+		Duration:   duration,
+	})
+	if c.userCallback != nil {
+		c.userCallback.OnToolError(toolName, toolCallID, err)
+	}
 }
 
 func (ae *AgentEngine) prepareToolCalls(toolCalls []types.ToolCall) ([]types.ToolCall, error) {
@@ -171,6 +308,15 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 		retryDelay = cfg.RetryDelay
 	}
 	layers := ae.groupSortedToolCallsByLayer(sortedToolCalls)
+
+	// Get callback for tool events
+	ae.mu.RLock()
+	callback := ae.toolCallback
+	ae.mu.RUnlock()
+
+	// Get hooks
+	hookRunner := hooks.NewRunner(ae.getHooks(), "", "")
+
 	for _, layer := range layers {
 		g, gctx := errgroup.WithContext(ctx)
 		for _, idx := range layer {
@@ -180,14 +326,27 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 			idx := idx
 			tc := sortedToolCalls[idx]
 			tool := tools[idx]
+			toolCallID := tc.ID
 			args := tc.Function.Arguments
 			if args == nil {
 				args = make(map[string]interface{})
 			}
 			g.Go(func() error {
 				start := time.Now()
+
+				// Emit tool call event and call OnBeforeToolCall hook
+				if callback != nil {
+					callback.OnToolCall(tool.Name(), toolCallID, args)
+					callback.OnToolInputStart(tool.Name(), toolCallID, args)
+				}
+				hookRunner.BeforeToolCall(tool.Name(), args)
+
 				if err := schema.ValidateInput(tool.Schema(), args, tool.Name()); err != nil {
 					results[idx] = stepResult{err: err, cached: false, duration: 0}
+					if callback != nil {
+						callback.OnToolInputEnd(tool.Name(), toolCallID, args)
+						callback.OnToolError(tool.Name(), toolCallID, err)
+					}
 					return nil
 				}
 				canonicalName := tool.Name()
@@ -207,6 +366,10 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 					toolResult, err, cached = ae.getCachedToolResult(canonicalName, args)
 					if cached {
 						results[idx] = stepResult{result: toolResult, err: err, cached: true, duration: 0}
+						if callback != nil {
+							callback.OnToolInputEnd(tool.Name(), toolCallID, args)
+							callback.OnToolResult(tool.Name(), toolCallID, toolResult)
+						}
 						return nil
 					}
 				}
@@ -219,12 +382,20 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 						break retryLoop
 					default:
 					}
+					// Emit running state
+					if callback != nil && attempt == 0 {
+						callback.OnToolInputEnd(tool.Name(), toolCallID, args)
+					}
 					toolResult, err = ae.executeToolWithTimeout(gctx, tool, args, timeout)
 					if err == nil {
 						results[idx] = stepResult{result: toolResult, cached: false, duration: time.Since(start)}
 						if !noCache {
 							ae.setCachedToolResult(canonicalName, args, toolResult, nil)
 						}
+						if callback != nil {
+							callback.OnToolResult(tool.Name(), toolCallID, toolResult)
+						}
+						hookRunner.AfterToolCall(tool.Name(), toolResult, nil)
 						return nil
 					}
 					lastErr = err
@@ -241,6 +412,10 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 					}
 				}
 				results[idx] = stepResult{err: lastErr, cached: false, duration: time.Since(start)}
+				if callback != nil {
+					callback.OnToolError(tool.Name(), toolCallID, lastErr)
+				}
+				hookRunner.AfterToolCall(tool.Name(), nil, lastErr)
 				return nil
 			})
 		}
@@ -466,12 +641,65 @@ func (ae *AgentEngine) ExecuteStream(ctx context.Context, input types.AgentInput
 
 	resultChan := make(chan types.StreamResult, types.DefaultChannelBuffer)
 
+	// Set result sender for tool events
+	ae.mu.Lock()
+	ae.resultSender = func(result types.StreamResult) {
+		select {
+		case resultChan <- result:
+		default:
+			// Channel full, skip event
+		}
+	}
+	ae.mu.Unlock()
+
+	// Create wrapped tool callback that sends events to stream
+	userCallback := ae.toolCallback
+	var wrappedCallback *streamToolCallback
+	if userCallback != nil || ae.resultSender != nil {
+		wrappedCallback = newStreamToolCallback(userCallback, ae.resultSender)
+		ae.mu.Lock()
+		ae.toolCallback = wrappedCallback
+		ae.mu.Unlock()
+	}
+
 	go func() {
-		defer close(resultChan)
-		defer ae.isRunning.Store(false)
+		// Create hooks runner
+		ae.mu.RLock()
+		hookRunner := hooks.NewRunner(ae.hooks, "", "")
+		ae.mu.RUnlock()
+
+		defer func() {
+			// Clear result sender and restore original callback
+			ae.mu.Lock()
+			ae.resultSender = nil
+			if userCallback != nil {
+				ae.toolCallback = userCallback
+			} else {
+				ae.toolCallback = nil
+			}
+			ae.mu.Unlock()
+
+			// Close stream callback to clean up resources
+			if wrappedCallback != nil {
+				wrappedCallback.Close()
+			}
+
+			close(resultChan)
+			ae.isRunning.Store(false)
+		}()
 
 		startTime := time.Now()
 		logger.LogExecution("ExecuteStream", 0, "Starting stream execution", slog.String("input", types.TruncateString(input.String(), 100)), slog.Int("previousRequests", len(previousRequests)))
+
+		// Call OnBeforeStart hook
+		if err := hookRunner.BeforeStart(&input); err != nil {
+			logger.LogError("ExecuteStream", err, slog.String("phase", "on_before_start"))
+			resultChan <- types.StreamResult{
+				Type:  "error",
+				Error: errors.NewError(errors.EC_HOOK_FAILED.Code, "hook OnBeforeStart failed").Wrap(err),
+			}
+			return
+		}
 
 		if err := ae.waitRateLimit(ctx); err != nil {
 			logger.LogError("ExecuteStream", err, slog.String("phase", "rate_limit"))
@@ -485,6 +713,7 @@ func (ae *AgentEngine) ExecuteStream(ctx context.Context, input types.AgentInput
 		defer func() {
 			if r := recover(); r != nil {
 				logger.LogError("ExecuteStream", fmt.Errorf("panic recovered: %v", r))
+				hookRunner.OnError(fmt.Errorf("panic: %v", r))
 				resultChan <- types.StreamResult{
 					Type:  "error",
 					Error: errors.NewError(errors.EC_STREAM_PANIC.Code, "panic in stream execution").Wrap(fmt.Errorf("%v", r)),
@@ -667,9 +896,18 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 	var doomState doomLoopState
 	var iteration int
 
+	// Get hooks
+	hookRunner := hooks.NewRunner(ae.getHooks(), "", "")
+
 	for iteration = 0; iteration < maxIterations; iteration++ {
+		// Call OnBeforeIteration hook
+		if err := hookRunner.BeforeIteration(iteration); err != nil {
+			logger.LogError("executeStreamWithIterations", err, slog.Int("iteration", iteration+1), slog.String("phase", "on_before_iteration"))
+		}
+
 		select {
 		case <-ctx.Done():
+			hookRunner.OnError(ctx.Err())
 			resultChan <- types.StreamResult{
 				Type:  "error",
 				Error: ctx.Err(),
@@ -685,6 +923,7 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 		iterationResult, hasMore, err := ae.executeStreamIteration(ctx, messages, resultChan, iteration)
 		if err != nil {
 			logger.LogError("executeStreamWithIterations", err, slog.Int("iteration", iteration+1))
+			hookRunner.OnError(err)
 			resultChan <- types.StreamResult{
 				Type:  "error",
 				Error: errors.NewError(errors.EC_STREAM_ITERATION_FAILED.Code, fmt.Sprintf("iteration %d failed", iteration+1)).Wrap(err),
@@ -698,6 +937,9 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 		finalResult.Usage.TotalTokens += iterationResult.Usage.TotalTokens
 		toolCalls = append(toolCalls, iterationResult.ToolCalls...)
 		intermediateSteps = append(intermediateSteps, iterationResult.IntermediateSteps...)
+
+		// Call OnAfterIteration hook
+		hookRunner.AfterIteration(iteration, iterationResult)
 
 		if !hasMore {
 			logger.LogExecution("executeStreamWithIterations", iteration,
@@ -748,6 +990,9 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 		slog.Int("total_tools", len(toolCalls)),
 		slog.Int("total_tokens", finalResult.Usage.TotalTokens))
 
+	// Call OnAfterEnd hook
+	hookRunner.AfterEnd(finalResult)
+
 	resultChan <- types.StreamResult{
 		Type:   "end",
 		Result: finalResult,
@@ -779,12 +1024,19 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 	ctx, cancel := ae.enrichContextWithConfig(ctx)
 	defer cancel()
 
+	// Get hooks
+	hookRunner := hooks.NewRunner(ae.getHooks(), "", "")
+
 	if ae.model == nil {
 		return nil, false, errors.NewError(errors.EC_STREAM_CHAT_FAILED.Code, "LLM model provider is nil")
 	}
 
+	// Call OnBeforeLLMCall hook
+	hookRunner.BeforeLLMCall(messages)
+
 	stream, err := ae.model.ChatWithToolsStream(ctx, messages, tools)
 	if err != nil {
+		hookRunner.OnError(err)
 		return nil, false, errors.NewError(errors.EC_STREAM_CHAT_FAILED.Code, "failed to chat with tools stream").Wrap(err)
 	}
 
@@ -812,9 +1064,17 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 				})
 			}
 		case "error":
-			return nil, false, errors.NewError(errors.EC_STREAM_ERROR.Code, "stream error occurred").Wrap(fmt.Errorf("%s", msg.Error))
+			err := errors.NewError(errors.EC_STREAM_ERROR.Code, "stream error occurred").Wrap(fmt.Errorf("%s", msg.Error))
+			hookRunner.OnError(err)
+			return nil, false, err
 		}
 	}
+
+	// Call OnAfterLLMCall hook with the response
+	responseMsg := &types.Message{
+		Content: outputBuilder.String(),
+	}
+	hookRunner.AfterLLMCall(responseMsg)
 
 	result.Output = outputBuilder.String()
 
