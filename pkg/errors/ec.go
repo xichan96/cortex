@@ -13,16 +13,17 @@ var (
 	EC_ITERATION_FAILED        = NewError(1008, "iteration failed")                          // 1008
 	EC_BLOCKING_CHAT_FAILED    = NewError(1009, "failed to get tool calls in blocking mode") // 1009
 	EC_MEMORY_HISTORY_FAILED   = NewError(1010, "failed to get chat history")                // 1010
+	EC_HOOK_FAILED             = NewError(1011, "hook execution failed")                     // 1011
 
 	// Tool-related errors (2xxx)
-	EC_TOOL_EXECUTION_FAILED   = NewError(2001, "tool execution failed")   // 2001
-	EC_TOOL_NOT_FOUND          = NewError(2002, "tool not found")          // 2002
-	EC_TOOL_VALIDATION_FAILED  = NewError(2003, "tool validation failed")  // 2003
-	EC_TOOL_PARAMETER_INVALID  = NewError(2004, "tool parameter invalid")  // 2004
-	EC_TOOL_EXECUTION_TIMEOUT  = NewRetryableError(2005, "tool execution timeout", 5000)  // 2005
-	EC_TOOL_ALREADY_REGISTERED = NewError(2006, "tool already registered") // 2006
-	EC_TOOL_INPUT_ERROR        = NewError(2400, "tool input invalid")     // 2400
-	EC_TOOL_AUTH_ERROR         = NewError(2403, "tool authorization denied") // 2403
+	EC_TOOL_EXECUTION_FAILED   = NewError(2001, "tool execution failed")                 // 2001
+	EC_TOOL_NOT_FOUND          = NewError(2002, "tool not found")                        // 2002
+	EC_TOOL_VALIDATION_FAILED  = NewError(2003, "tool validation failed")                // 2003
+	EC_TOOL_PARAMETER_INVALID  = NewError(2004, "tool parameter invalid")                // 2004
+	EC_TOOL_EXECUTION_TIMEOUT  = NewRetryableError(2005, "tool execution timeout", 5000) // 2005
+	EC_TOOL_ALREADY_REGISTERED = NewError(2006, "tool already registered")               // 2006
+	EC_TOOL_INPUT_ERROR        = NewError(2400, "tool input invalid")                    // 2400
+	EC_TOOL_AUTH_ERROR         = NewError(2403, "tool authorization denied")             // 2403
 
 	// Configuration errors (3xxx)
 	EC_INVALID_CONFIG           = NewError(3001, "invalid configuration")           // 3001
@@ -51,11 +52,11 @@ var (
 	EC_PARAMETER_INVALID = NewError(6005, "parameter invalid") // 6005
 
 	// System errors (7xxx)
-	EC_INTERNAL_ERROR     = NewError(7001, "internal error")     // 7001
-	EC_RESOURCE_EXHAUSTED = NewError(7002, "resource exhausted") // 7002
-	EC_NOT_IMPLEMENTED    = NewError(7003, "not implemented")    // 7003
-	EC_UNKNOWN_ERROR      = NewError(7004, "unknown error")      // 7004
-	EC_SYSTEM_OVERLOAD    = NewRetryableError(7005, "system overload", 1000)    // 7005
+	EC_INTERNAL_ERROR     = NewError(7001, "internal error")                 // 7001
+	EC_RESOURCE_EXHAUSTED = NewError(7002, "resource exhausted")             // 7002
+	EC_NOT_IMPLEMENTED    = NewError(7003, "not implemented")                // 7003
+	EC_UNKNOWN_ERROR      = NewError(7004, "unknown error")                  // 7004
+	EC_SYSTEM_OVERLOAD    = NewRetryableError(7005, "system overload", 1000) // 7005
 	ErrRateLimitExceeded  = NewError(7006, "rate limit exceeded")
 
 	// Data errors (8xxx)
@@ -110,9 +111,9 @@ var (
 	EC_CACHE_NO_FOUND = NewError(14001, "cache not found") // 14001
 
 	// SQL/database errors (15xxx)
-	EC_SQL_NOT_FOUND      = NewError(15001, "record not found")        // 15001
-	EC_SQL_DUPLICATE_KEY  = NewError(15002, "duplicate key error")    // 15002
-	EC_SQL_DB_KEY_ERROR   = NewError(15003, "ctx dbkey type error")   // 15003
+	EC_SQL_NOT_FOUND        = NewError(15001, "record not found")     // 15001
+	EC_SQL_DUPLICATE_KEY    = NewError(15002, "duplicate key error")  // 15002
+	EC_SQL_DB_KEY_ERROR     = NewError(15003, "ctx dbkey type error") // 15003
 	EC_SQL_DEFAULT_DB_ERROR = NewError(15004, "empty default db")     // 15004
-	EC_SQL_ERROR          = NewError(15005, "SQL error")              // 15005
+	EC_SQL_ERROR            = NewError(15005, "SQL error")            // 15005
 )

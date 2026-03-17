@@ -22,6 +22,23 @@ const (
 	IterationDelay        = 100 * time.Millisecond // inter-iteration delay
 )
 
+// Tool state constants (aligned with OpenCode)
+const (
+	ToolStatePending   = "pending"
+	ToolStateRunning   = "running"
+	ToolStateCompleted = "completed"
+	ToolStateError     = "error"
+)
+
+// StreamResult tool event types
+const (
+	StreamEventToolCall       = "tool_call"
+	StreamEventToolInputStart = "tool_input_start"
+	StreamEventToolInputEnd   = "tool_input_end"
+	StreamEventToolResult     = "tool_result"
+	StreamEventToolError      = "tool_error"
+)
+
 // Context keys
 const (
 	ContextKeyTemperature         = "temperature"
@@ -125,6 +142,68 @@ type StreamResult struct {
 	Content string
 	Result  *AgentResult
 	Error   error
+	// Tool event fields
+	ToolEvent *ToolEvent
+}
+
+// ToolEvent represents a tool execution lifecycle event
+type ToolEvent struct {
+	Event      string                 // Event type: tool_call, tool_input_start, tool_input_end, tool_result, tool_error
+	ToolName   string                 // Tool name
+	ToolCallID string                 // Tool call ID
+	State      string                 // State: pending, running, completed, error
+	Input      map[string]interface{} // Tool input arguments
+	Output     interface{}            // Tool execution result
+	Error      string                 // Error message if failed
+	Duration   time.Duration          // Execution duration
+}
+
+// ToolCallback is an interface for receiving tool execution events in real-time
+type ToolCallback interface {
+	OnToolCall(toolName string, toolCallID string, input map[string]interface{})
+	OnToolInputStart(toolName string, toolCallID string, input map[string]interface{})
+	OnToolInputEnd(toolName string, toolCallID string, input map[string]interface{})
+	OnToolResult(toolName string, toolCallID string, output interface{})
+	OnToolError(toolName string, toolCallID string, err error)
+}
+
+// ToolCallbackFunc is a functional adapter for ToolCallback
+type ToolCallbackFunc struct {
+	onToolCall       func(toolName string, toolCallID string, input map[string]interface{})
+	onToolInputStart func(toolName string, toolCallID string, input map[string]interface{})
+	onToolInputEnd   func(toolName string, toolCallID string, input map[string]interface{})
+	onToolResult     func(toolName string, toolCallID string, output interface{})
+	onToolError      func(toolName string, toolCallID string, err error)
+}
+
+func (f *ToolCallbackFunc) OnToolCall(toolName string, toolCallID string, input map[string]interface{}) {
+	if f.onToolCall != nil {
+		f.onToolCall(toolName, toolCallID, input)
+	}
+}
+
+func (f *ToolCallbackFunc) OnToolInputStart(toolName string, toolCallID string, input map[string]interface{}) {
+	if f.onToolInputStart != nil {
+		f.onToolInputStart(toolName, toolCallID, input)
+	}
+}
+
+func (f *ToolCallbackFunc) OnToolInputEnd(toolName string, toolCallID string, input map[string]interface{}) {
+	if f.onToolInputEnd != nil {
+		f.onToolInputEnd(toolName, toolCallID, input)
+	}
+}
+
+func (f *ToolCallbackFunc) OnToolResult(toolName string, toolCallID string, output interface{}) {
+	if f.onToolResult != nil {
+		f.onToolResult(toolName, toolCallID, output)
+	}
+}
+
+func (f *ToolCallbackFunc) OnToolError(toolName string, toolCallID string, err error) {
+	if f.onToolError != nil {
+		f.onToolError(toolName, toolCallID, err)
+	}
 }
 
 // TruncateString truncates a string to the specified length

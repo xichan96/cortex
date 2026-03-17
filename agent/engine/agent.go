@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/xichan96/cortex/agent/hooks"
 	"github.com/xichan96/cortex/agent/ratelimit"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/logger"
@@ -28,6 +29,8 @@ type Agent interface {
 	SetEnableToolRetry(ctx context.Context, enable bool)
 	SetConfig(ctx context.Context, config *types.AgentConfig)
 	SetRateLimiter(ctx context.Context, limiter ratelimit.RateLimiter)
+	SetToolCallback(ctx context.Context, callback types.ToolCallback)
+	SetHooks(ctx context.Context, h hooks.Hooks)
 
 	// Tool management methods
 	AddTool(ctx context.Context, tool types.Tool)
@@ -77,7 +80,19 @@ type AgentEngine struct {
 
 	// Usage tracking
 	totalUsage types.Usage // Total token usage
+
+	// Tool callback for real-time events
+	toolCallback types.ToolCallback
+
+	// Result sender for streaming tool events
+	resultSender func(types.StreamResult)
+
+	// Hooks for lifecycle events
+	hooks hooks.Hooks
 }
+
+// ResultSender is a function type for sending stream results
+type ResultSender func(types.StreamResult)
 
 // NewAgentEngine creates a new agent engine
 // Parameters:
