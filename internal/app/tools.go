@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	emailtool "github.com/xichan96/cortex/agent/tools/builtin/email"
 	dockerpkg "github.com/xichan96/cortex/agent/tools/builtin/docker"
+	emailtool "github.com/xichan96/cortex/agent/tools/builtin/email"
 	"github.com/xichan96/cortex/agent/tools/builtin/fs"
 	"github.com/xichan96/cortex/agent/tools/builtin/math"
 	"github.com/xichan96/cortex/agent/tools/builtin/net"
@@ -54,7 +54,7 @@ func (a *agent) initBuiltinTools() []types.Tool {
 	}
 
 	if cfg.Command.Enabled {
-		tools = append(tools, runtime.NewCommandTool())
+		tools = append(tools, runtime.NewCommandTool(""))
 	}
 
 	if cfg.Math.Enabled {

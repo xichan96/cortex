@@ -4,15 +4,21 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"path/filepath"
 
+	"github.com/xichan96/cortex/agent/tools/builtin/fs"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
 )
 
-type GlobTool struct{}
+type GlobTool struct {
+	workspace string
+}
 
-func NewGlobTool() types.Tool {
-	return &GlobTool{}
+func NewGlobTool(workspace string) types.Tool {
+	return &GlobTool{
+		workspace: workspace,
+	}
 }
 
 func (t *GlobTool) Name() string {
@@ -40,12 +46,34 @@ func (t *GlobTool) Schema() map[string]interface{} {
 }
 
 func (t *GlobTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
-	// Placeholder implementation
 	pattern, ok := input["pattern"].(string)
 	if !ok || pattern == "" {
 		return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("pattern is required"))
 	}
-	return "Glob is not yet implemented.", nil
+
+	searchPath := pattern
+	if !filepath.IsAbs(pattern) {
+		searchPath = filepath.Join(t.workspace, pattern)
+	}
+
+	// Check if the search path is within workspace
+	if _, err := fs.SafePath(t.workspace, searchPath); err != nil {
+		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(err)
+	}
+
+	matches, err := filepath.Glob(searchPath)
+	if err != nil {
+		return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(fmt.Errorf("glob failed: %w", err))
+	}
+
+	var filtered []string
+	for _, m := range matches {
+		if _, err := fs.SafePath(t.workspace, m); err == nil {
+			filtered = append(filtered, m)
+		}
+	}
+
+	return filtered, nil
 }
 
 func (t *GlobTool) Metadata() types.ToolMetadata {

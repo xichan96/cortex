@@ -11,10 +11,14 @@ import (
 	"github.com/xichan96/cortex/pkg/shell"
 )
 
-type CommandTool struct{}
+type CommandTool struct {
+	workspace string
+}
 
-func NewCommandTool() types.Tool {
-	return &CommandTool{}
+func NewCommandTool(workspace string) types.Tool {
+	return &CommandTool{
+		workspace: workspace,
+	}
 }
 
 func (t *CommandTool) Name() string {
@@ -59,7 +63,7 @@ func (t *CommandTool) Execute(ctx context.Context, input map[string]interface{})
 	}
 
 	if background, _ := input["background"].(bool); background {
-		bs, err := defaultBgManager.Start(ctx, "", nil, command)
+		bs, err := defaultBgManager.Start(ctx, t.workspace, nil, command)
 		if err != nil {
 			return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(err)
 		}
@@ -79,7 +83,9 @@ func (t *CommandTool) Execute(ctx context.Context, input map[string]interface{})
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	sh := shell.NewShell(nil)
+	sh := shell.NewShell(&shell.Options{
+		WorkingDir: t.workspace,
+	})
 	stdout, stderr, err := sh.Exec(execCtx, command)
 
 	if execCtx.Err() == context.DeadlineExceeded {

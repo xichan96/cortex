@@ -79,6 +79,22 @@ func (ae *AgentEngine) executeToolWithTimeout(ctx context.Context, tool types.To
 	}
 }
 
+func (ae *AgentEngine) getToolTimeout(toolName string, args map[string]interface{}) time.Duration {
+	cfg := ae.getConfig()
+	if cfg == nil {
+		return 0
+	}
+	if cfg.ToolTimeoutCalculator != nil {
+		if timeout := cfg.ToolTimeoutCalculator(toolName, args); timeout > 0 {
+			return timeout
+		}
+	}
+	if toolTimeout, ok := cfg.ToolTimeouts[toolName]; ok {
+		return toolTimeout
+	}
+	return cfg.ToolExecutionTimeout
+}
+
 // ==================== Tool Dependency Management Methods ====================
 
 // sortToolCallsByDependencies sorts tool calls by priority and dependencies using topological sort

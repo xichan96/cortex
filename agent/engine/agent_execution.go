@@ -386,7 +386,8 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 					if callback != nil && attempt == 0 {
 						callback.OnToolInputEnd(tool.Name(), toolCallID, args)
 					}
-					toolResult, err = ae.executeToolWithTimeout(gctx, tool, args, timeout)
+					toolTimeout := ae.getToolTimeout(tool.Name(), args)
+					toolResult, err = ae.executeToolWithTimeout(gctx, tool, args, toolTimeout)
 					if err == nil {
 						results[idx] = stepResult{result: toolResult, cached: false, duration: time.Since(start)}
 						if !noCache {
@@ -1053,6 +1054,11 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 			resultChan <- types.StreamResult{
 				Type:    "chunk",
 				Content: msg.Content,
+			}
+		case "reasoning":
+			resultChan <- types.StreamResult{
+				Type:    "reasoning",
+				Content: msg.Reasoning,
 			}
 		case "tool_calls":
 			for _, tc := range msg.ToolCalls {

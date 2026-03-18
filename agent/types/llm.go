@@ -42,6 +42,8 @@ type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+	ReasoningTokens  int `json:"reasoning_tokens,omitempty"` // Thinking tokens (o1, o3 series etc.)
+	CachedTokens     int `json:"cached_tokens,omitempty"`    // Cache read tokens
 }
 
 // MessagePart message part interface
@@ -87,11 +89,18 @@ type ToolFunction struct {
 
 // StreamMessage streaming message
 type StreamMessage struct {
-	Type      string     `json:"type"` // "chunk", "end", "error", "tool_calls"
+	Type      string     `json:"type"` // "chunk", "end", "error", "tool_calls", "reasoning"
 	Content   string     `json:"content,omitempty"`
+	Reasoning string     `json:"reasoning,omitempty"` // Thinking/reasoning content
 	Error     string     `json:"error,omitempty"`
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 	Usage     *Usage     `json:"usage,omitempty"`
+}
+
+// ReasoningMessage represents a message with reasoning/thinking content
+type ReasoningMessage struct {
+	Content   string `json:"content"`
+	Reasoning string `json:"reasoning,omitempty"`
 }
 
 // MemoryProvider memory system interface
