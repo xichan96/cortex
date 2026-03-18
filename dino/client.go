@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/pkg/logger"
 )
 
 type Client struct {
@@ -84,12 +85,16 @@ func (c *Client) CreateSession(ctx context.Context, sessionID string) (*ClientSe
 		outputChan: make(chan *Event, bufSize),
 		doneChan:   make(chan struct{}),
 		errChan:    make(chan error, 1),
+		wg:         sync.WaitGroup{},
 	}
 
+	clientSession.wg.Add(1)
 	go clientSession.forwardOutput()
+	clientSession.wg.Add(1)
 	go clientSession.handleInput()
 
 	c.sessions[sessionID] = clientSession
+
 	return clientSession, nil
 }
 
@@ -234,14 +239,16 @@ func (cs *ClientSession) Close() {
 }
 
 func (cs *ClientSession) handleInput() {
-	cs.wg.Add(1)
 	defer cs.wg.Done()
 
 	defer func() {
 		if r := recover(); r != nil {
 			err := fmt.Errorf("handleInput panic: %v", r)
-			log.Printf("[ClientSession] %v", err)
-			cs.sendError(err)
+			logger.Error("[ClientSession]", slog.String("error", err.Error()))
+			select {
+			case cs.errChan <- err:
+			case <-cs.doneChan:
+			}
 		}
 	}()
 
@@ -273,14 +280,16 @@ func (cs *ClientSession) sendError(err error) {
 }
 
 func (cs *ClientSession) forwardOutput() {
-	cs.wg.Add(1)
 	defer cs.wg.Done()
 
 	defer func() {
 		if r := recover(); r != nil {
 			err := fmt.Errorf("forwardOutput panic: %v", r)
-			log.Printf("[ClientSession] %v", err)
-			cs.sendError(err)
+			logger.Error("[ClientSession]", slog.String("error", err.Error()))
+			select {
+			case cs.errChan <- err:
+			case <-cs.doneChan:
+			}
 		}
 	}()
 

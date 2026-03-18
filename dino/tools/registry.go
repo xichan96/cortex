@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"sort"
 	"sync"
 
 	"github.com/xichan96/cortex/agent/types"
@@ -50,6 +51,10 @@ func (r *Registry) GetAll() []types.Tool {
 	for _, tool := range r.tools {
 		result = append(result, tool)
 	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name() < result[j].Name()
+	})
 
 	return result
 }

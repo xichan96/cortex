@@ -56,8 +56,50 @@ type Detector interface {
 
 type detector struct {
 	config  *Config
-	actions map[string][]Action
+	actions map[string]*sessionActions
 	mu      sync.RWMutex
+}
+
+type ringBuffer struct {
+	data  []Action
+	size  int
+	head  int
+	count int
+}
+
+func newRingBuffer(size int) *ringBuffer {
+	return &ringBuffer{
+		data: make([]Action, size),
+		size: size,
+	}
+}
+
+func (r *ringBuffer) Add(action Action) {
+	r.data[r.head] = action
+	r.head = (r.head + 1) % r.size
+	if r.count < r.size {
+		r.count++
+	}
+}
+
+func (r *ringBuffer) GetAll() []Action {
+	if r.count == 0 {
+		return nil
+	}
+	result := make([]Action, r.count)
+	for i := 0; i < r.count; i++ {
+		idx := (r.head - r.count + i + r.size) % r.size
+		result[i] = r.data[idx]
+	}
+	return result
+}
+
+func (r *ringBuffer) Len() int {
+	return r.count
+}
+
+type sessionActions struct {
+	buffer *ringBuffer
 }
 
 func NewDetector(cfg *Config) Detector {
@@ -66,7 +108,7 @@ func NewDetector(cfg *Config) Detector {
 	}
 	return &detector{
 		config:  cfg,
-		actions: make(map[string][]Action),
+		actions: make(map[string]*sessionActions),
 	}
 }
 
@@ -78,11 +120,12 @@ func (d *detector) Detect(ctx context.Context, sessionID string, action Action) 
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	actions, exists := d.actions[sessionID]
-	if !exists || len(actions) == 0 {
+	sa, exists := d.actions[sessionID]
+	if !exists || sa.buffer.Len() == 0 {
 		return &Result{IsLoop: false}
 	}
 
+	actions := sa.buffer.GetAll()
 	windowSize := WindowSize
 	if len(actions) < windowSize {
 		windowSize = len(actions)
@@ -126,15 +169,15 @@ func (d *detector) Record(sessionID string, action Action) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if _, exists := d.actions[sessionID]; !exists {
-		d.actions[sessionID] = make([]Action, 0)
+	sa, exists := d.actions[sessionID]
+	if !exists {
+		sa = &sessionActions{
+			buffer: newRingBuffer(WindowSize),
+		}
+		d.actions[sessionID] = sa
 	}
 
-	d.actions[sessionID] = append(d.actions[sessionID], action)
-
-	if len(d.actions[sessionID]) > WindowSize*2 {
-		d.actions[sessionID] = d.actions[sessionID][len(d.actions[sessionID])-WindowSize:]
-	}
+	sa.buffer.Add(action)
 }
 
 func (d *detector) Reset(sessionID string) {
@@ -147,13 +190,14 @@ func (d *detector) GetStats(sessionID string) Stats {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	actions, exists := d.actions[sessionID]
+	sa, exists := d.actions[sessionID]
 	if !exists {
 		return Stats{
 			ActionCounts: make(map[string]int),
 		}
 	}
 
+	actions := sa.buffer.GetAll()
 	counts := make(map[string]int)
 	for _, a := range actions {
 		key := generateKey(a.Type, a.Content)
@@ -161,7 +205,7 @@ func (d *detector) GetStats(sessionID string) Stats {
 	}
 
 	return Stats{
-		TotalActions: len(actions),
+		TotalActions: sa.buffer.Len(),
 		ActionCounts: counts,
 	}
 }

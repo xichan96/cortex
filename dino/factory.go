@@ -4,16 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/xichan96/cortex/agent/engine"
 	agentTools "github.com/xichan96/cortex/agent/tools/builtin/fs"
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/pkg/logger"
 
+	dinoAgent "github.com/xichan96/cortex/dino/agent"
 	dinoLoop "github.com/xichan96/cortex/dino/loop"
 	"github.com/xichan96/cortex/dino/memory"
+	"github.com/xichan96/cortex/dino/permission"
 	"github.com/xichan96/cortex/dino/session"
 	dinoSkills "github.com/xichan96/cortex/dino/skills"
 	dinoTools "github.com/xichan96/cortex/dino/tools"
@@ -35,7 +39,11 @@ func (m *memoryAdapter) SaveContext(ctx context.Context, input, output map[strin
 		} else {
 			role = "user"
 		}
-		inputJSON, _ := json.Marshal(input)
+		inputJSON, err := json.Marshal(input)
+		if err != nil {
+			logger.Warn("[memoryAdapter] failed to marshal input", slog.String("error", err.Error()))
+			inputJSON = []byte(fmt.Sprintf("%v", input))
+		}
 		if err := m.provider.AddMessage(ctx, memory.Message{
 			Role:      role,
 			Content:   fmt.Sprintf("Input: %s", string(inputJSON)),
@@ -46,7 +54,11 @@ func (m *memoryAdapter) SaveContext(ctx context.Context, input, output map[strin
 	}
 
 	if output != nil {
-		outputJSON, _ := json.Marshal(output)
+		outputJSON, err := json.Marshal(output)
+		if err != nil {
+			logger.Warn("[memoryAdapter] failed to marshal output", slog.String("error", err.Error()))
+			outputJSON = []byte(fmt.Sprintf("%v", output))
+		}
 		if err := m.provider.AddMessage(ctx, memory.Message{
 			Role:      "assistant",
 			Content:   fmt.Sprintf("Output: %s", string(outputJSON)),
@@ -135,16 +147,18 @@ type DinoFactory interface {
 }
 
 type dinoFactory struct {
-	config        *Config
-	llmProvider   types.LLMProvider
-	tools         *dinoTools.Registry
-	loopDetector  dinoLoop.Detector
-	budget        Budget
-	skills        []*Skill
-	approvalStore *ApprovalStore
-	sessions      map[string]*session.Session
-	mu            sync.RWMutex
-	streamSender  StreamEventSender
+	config          *Config
+	llmProvider     types.LLMProvider
+	tools           *dinoTools.Registry
+	loopDetector    dinoLoop.Detector
+	budget          Budget
+	skills          []*Skill
+	approvalStore   *ApprovalStore
+	sessions        map[string]*session.Session
+	mu              sync.RWMutex
+	streamSender    StreamEventSender
+	subagentManager *dinoAgent.SubagentManager
+	mcpManager      *dinoTools.MCPManager
 }
 
 func (f *dinoFactory) LoopDetector() dinoLoop.Detector {
@@ -162,6 +176,19 @@ func (f *dinoFactory) GetLLMProvider() types.LLMProvider {
 func (f *dinoFactory) GetPlannerConfig() *PlannerModeConfig {
 	c := f.config.PlannerMode
 	return &c
+}
+
+func (f *dinoFactory) GetSubagentManager() *dinoAgent.SubagentManager {
+	return f.subagentManager
+}
+
+func (f *dinoFactory) GetMCPManager() *dinoTools.MCPManager {
+	return f.mcpManager
+}
+
+func (f *dinoFactory) GetAgent(name string) (*dinoAgent.Info, bool) {
+	info, exists := dinoAgent.DefaultAgents()[name]
+	return info, exists
 }
 
 func (f *dinoFactory) RecordLoop(sessionID string, action dinoLoop.Action) {
@@ -204,12 +231,12 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 	if cfg.Skills.Path != "" {
 		loader := dinoSkills.NewLoader()
 		if err := loader.LoadFromDirs(context.Background(), []string{cfg.Skills.Path}); err != nil {
-			log.Printf("failed to load skills from %s: %v", cfg.Skills.Path, err)
+			logger.Warn("failed to load skills", slog.String("path", cfg.Skills.Path), slog.String("error", err.Error()))
 		} else {
 			cortexSkills = loader.All()
-			log.Printf("loaded %d skills from %s", len(cortexSkills), cfg.Skills.Path)
+			logger.Info("loaded skills", slog.Int("count", len(cortexSkills)), slog.String("path", cfg.Skills.Path))
 			for _, s := range cortexSkills {
-				log.Printf("  - skill: %s", s.Name)
+				logger.Info("skill loaded", slog.String("name", s.Name))
 				loadedSkills = append(loadedSkills, &Skill{
 					Name:        s.Name,
 					Description: s.Description,
@@ -221,7 +248,7 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 
 	if len(cortexSkills) > 0 {
 		if err := toolRegistry.Register(dinoTools.NewSkillTool(cortexSkills)); err != nil {
-			log.Printf("failed to register skill tool: %v", err)
+			logger.Warn("failed to register skill tool", slog.String("error", err.Error()))
 		}
 	}
 
@@ -241,6 +268,29 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 		approvalStore: approvalStore,
 		sessions:      make(map[string]*session.Session),
 	}
+
+	f.subagentManager = dinoAgent.NewSubagentManager(&cfg.Subagent, f)
+
+	if cfg.MCP.Enabled {
+		f.mcpManager = dinoTools.NewMCPManager()
+		for name, serverCfg := range cfg.MCP.Servers {
+			if serverCfg.Enabled {
+				logger.Info("[DinoFactory] Initializing MCP server", slog.String("name", name), slog.String("type", serverCfg.Type))
+				serverConfig := &dinoTools.ServerConfig{
+					Name:      name,
+					URL:       serverCfg.URL,
+					Transport: serverCfg.Type,
+					Headers:   serverCfg.Headers,
+					Type:      serverCfg.Type,
+					Command:   strings.Split(serverCfg.Command, " "),
+					Env:       serverCfg.Env,
+				}
+				if err := f.mcpManager.AddServer(context.Background(), name, serverConfig); err != nil {
+					logger.Warn("[DinoFactory] Failed to add MCP server", slog.String("name", name), slog.String("error", err.Error()))
+				}
+			}
+		}
+	}
 	for _, opt := range opts {
 		opt(f)
 	}
@@ -253,6 +303,10 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 
 	if s, exists := f.sessions[sessionID]; exists {
 		return s, nil
+	}
+
+	if f.config.MaxSessions > 0 && len(f.sessions) >= f.config.MaxSessions {
+		return nil, fmt.Errorf("max sessions limit reached: %d", f.config.MaxSessions)
 	}
 
 	cfg := session.DefaultConfig()
@@ -284,51 +338,47 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	agent := engine.NewAgentEngine(f.llmProvider, agentConfig)
 
 	sessionTools := f.tools.GetAll()
-	log.Printf("[DinoFactory] Total tools in registry: %d", len(sessionTools))
-	for _, t := range sessionTools {
-		log.Printf("[DinoFactory] Available tool: %s", t.Name())
+	logger.Info("[DinoFactory] Total tools in registry", slog.Int("count", len(sessionTools)))
+	var ruleset permission.Ruleset
+	if len(f.config.Permission) > 0 {
+		ruleset = permission.Merge(permission.FromConfig(f.config.Permission), permission.DefaultRuleset())
+	} else {
+		ruleset = permission.Merge(
+			permission.FromAllowDenyAsk(f.config.Tools.Denied, f.config.Tools.ApprovalRequired, f.config.Tools.Allowed),
+			permission.DefaultRuleset(),
+		)
 	}
-	var wrappedTools []types.Tool
-	allowed := make(map[string]bool)
-	denied := make(map[string]bool)
-	dangerous := make(map[string]bool)
-	if f.config != nil {
-		log.Printf("[DinoFactory] Tools config - Allowed: %v, Denied: %v, ApprovalRequired: %v",
-			f.config.Tools.Allowed, f.config.Tools.Denied, f.config.Tools.ApprovalRequired)
-		for _, name := range f.config.Tools.Allowed {
-			allowed[name] = true
-		}
-		for _, name := range f.config.Tools.Denied {
-			denied[name] = true
-		}
-		for _, name := range f.config.Tools.ApprovalRequired {
-			dangerous[name] = true
-		}
-	}
-
+	evaluator := permission.NewEvaluator(ruleset)
 	senderAdapter := &toolEventSenderAdapter{sender: f.streamSender}
-
+	var wrappedTools []types.Tool
+	needApproval := make(map[string]bool)
 	for _, t := range sessionTools {
 		name := t.Name()
-		if len(denied) > 0 && denied[name] {
-			log.Printf("[DinoFactory] Tool %s denied by denied list", name)
+		action := evaluator.Evaluate(name, nil)
+		if action == permission.ActionDeny {
+			logger.Info("[DinoFactory] Tool denied by permission", slog.String("tool", name))
 			continue
 		}
-		if len(allowed) > 0 && !allowed[name] {
-			log.Printf("[DinoFactory] Tool %s not in allowed list, skipping", name)
-			continue
+		if action == permission.ActionAsk {
+			needApproval[name] = true
 		}
-		log.Printf("[DinoFactory] Adding tool: %s", name)
+		logger.Info("[DinoFactory] Adding tool", slog.String("tool", name), slog.String("permission", string(action)))
 		wrapped := t
-		if len(dangerous) > 0 && dangerous[name] {
-			log.Printf("[DinoFactory] Tool %s requires approval", name)
-			wrapped = NewApprovalTool(wrapped, sessionID, f.approvalStore, dangerous)
+		if needApproval[name] {
+			wrapped = NewApprovalTool(wrapped, sessionID, f.approvalStore, needApproval)
 		}
 		wrapped = dinoTools.WrapLoopDetection(wrapped, sessionID, f.loopDetector, senderAdapter)
 		wrappedTools = append(wrappedTools, wrapped)
 	}
 
-	log.Printf("[DinoFactory] Total tools added to agent: %d", len(wrappedTools))
+	if f.subagentManager != nil {
+		delegateTool := dinoAgent.NewSubagentTool(f.subagentManager)
+		wrapped := dinoTools.WrapLoopDetection(delegateTool, sessionID, f.loopDetector, senderAdapter)
+		wrappedTools = append(wrappedTools, wrapped)
+		logger.Info("[DinoFactory] Adding tool", slog.String("tool", delegateTool.Name()))
+	}
+
+	logger.Info("[DinoFactory] Total tools added to agent", slog.Int("count", len(wrappedTools)))
 
 	agent.AddTools(ctx, wrappedTools)
 
@@ -347,17 +397,20 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 		if f.config.Memory.Type == "sqlite" || f.config.Memory.PersistEnabled {
 			memProvider, err = memory.NewSQLite(sessionID, memConfig)
 			if err != nil {
-				log.Printf("[DinoFactory] Failed to create SQLite memory, falling back to in-memory: %v", err)
+				logger.Warn("[DinoFactory] Failed to create SQLite memory, falling back to in-memory", slog.String("error", err.Error()))
 				memProvider = memory.NewInMemory(sessionID, memConfig)
 			} else {
-				log.Printf("[DinoFactory] SQLite memory enabled for session %s", sessionID)
+				logger.Info("[DinoFactory] SQLite memory enabled", slog.String("session_id", sessionID))
 			}
 		} else {
 			memProvider = memory.NewInMemory(sessionID, memConfig)
 		}
 
 		agent.SetMemory(ctx, &memoryAdapter{provider: memProvider})
-		log.Printf("[DinoFactory] Memory enabled for session %s (max history: %d, type: %s)", sessionID, f.config.Memory.MaxHistoryMessages, f.config.Memory.Type)
+		logger.Info("[DinoFactory] Memory enabled",
+			slog.String("session_id", sessionID),
+			slog.Int("max_history", f.config.Memory.MaxHistoryMessages),
+			slog.String("type", f.config.Memory.Type))
 	}
 
 	var toolSchemas []map[string]interface{}
@@ -373,7 +426,7 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 		toolSchemas,
 	)
 
-	sess := session.NewSession(sessionID, agent, f, ctx, cfg, plannerHelper)
+	sess := session.NewSession(sessionID, agent, f, ctx, cfg, plannerHelper, f.budget)
 	f.sessions[sessionID] = sess
 
 	sess.Start()
@@ -428,6 +481,14 @@ func (f *dinoFactory) Shutdown(ctx context.Context) error {
 		resettable.ResetAll()
 	}
 
+	if f.subagentManager != nil {
+		f.subagentManager.Close()
+	}
+
+	if f.mcpManager != nil {
+		f.mcpManager.Close()
+	}
+
 	return nil
 }
 
@@ -446,6 +507,7 @@ func loadBuiltinTools(reg *dinoTools.Registry, workspace string) error {
 		dinoTools.NewWebFetchTool(),
 		dinoTools.NewWebSearchTool(),
 		dinoTools.NewTodoTool(),
+		dinoTools.NewMCPClientTool(),
 	}
 	for _, t := range builtinTools {
 		if err := reg.Register(t); err != nil {

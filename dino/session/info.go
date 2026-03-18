@@ -5,13 +5,12 @@ import (
 )
 
 type Info struct {
-	ID         string      `json:"id"`
-	Title      string      `json:"title"`
-	Summary    *Summary    `json:"summary,omitempty"`
-	Permission *Permission `json:"permission,omitempty"`
-	Time       Time        `json:"time"`
-	CreatedAt  time.Time   `json:"created_at"`
-	UpdatedAt  time.Time   `json:"updated_at"`
+	ID        string     `json:"id"`
+	Title     string     `json:"title"`
+	Summary   *Summary   `json:"summary,omitempty"`
+	Time      Time       `json:"time"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 type Summary struct {
@@ -26,13 +25,6 @@ type Time struct {
 	Updated    int64 `json:"updated"`
 	Compacting int64 `json:"compacting,omitempty"`
 	Archived   int64 `json:"archived,omitempty"`
-}
-
-type Permission struct {
-	Allow     []string `json:"allow,omitempty"`
-	Deny      []string `json:"deny,omitempty"`
-	Ask       []string `json:"ask,omitempty"`
-	AutoAllow bool     `json:"auto_allow,omitempty"`
 }
 
 func NewInfo(id, title string) *Info {
@@ -71,10 +63,5 @@ func (s *Info) Archive() {
 
 func (s *Info) SetTitle(title string) {
 	s.Title = title
-	s.Touch()
-}
-
-func (s *Info) SetPermission(p *Permission) {
-	s.Permission = p
 	s.Touch()
 }

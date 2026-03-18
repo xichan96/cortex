@@ -6,6 +6,7 @@ import (
 
 	"github.com/xichan96/cortex/agent/llm"
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/dino/agent"
 )
 
 type Config struct {
@@ -17,17 +18,21 @@ type Config struct {
 	Timeout               time.Duration            `yaml:"timeout"`
 	SystemPrompt          string                   `yaml:"system_prompt"`
 	MaxIterations         int                      `yaml:"max_iterations"`
+	MaxSessions           int                      `yaml:"max_sessions"`
 	ToolExecutionTimeout  time.Duration            `yaml:"tool_execution_timeout"`
 	ToolTimeouts          map[string]time.Duration `yaml:"tool_timeouts"`
 	ToolTimeoutCalculator func(toolName string, input map[string]interface{}) time.Duration
 	LoopDetection         LoopDetectionConfig `yaml:"loop_detection"`
 	Budget                BudgetConfig        `yaml:"budget"`
 	Tools                 ToolConfig          `yaml:"tools"`
+	Permission            map[string]interface{} `yaml:"permission"`
 	WorkspaceRoot         string              `yaml:"workspace_root"`
 	Skills                SkillsConfig        `yaml:"skills"`
 	Provider              ProviderConfig      `yaml:"provider"`
 	PlannerMode           PlannerModeConfig   `yaml:"planner_mode"`
 	Memory                MemoryConfig        `yaml:"memory"`
+	Subagent              agent.SubagentConfig `yaml:"subagent"`
+	MCP                   MCPConfig           `yaml:"mcp"`
 }
 
 type MemoryConfig struct {
@@ -72,6 +77,29 @@ type LoopDetectionConfig struct {
 	SimilarityThreshold float64 `yaml:"similarity_threshold"`
 }
 
+type MCPConfig struct {
+	Enabled bool                       `yaml:"enabled"`
+	Servers map[string]MCPServerConfig `yaml:"servers"`
+}
+
+type MCPServerConfig struct {
+	Type    string            `yaml:"type"` // "remote" | "stdio"
+	URL     string            `yaml:"url,omitempty"`
+	Command string            `yaml:"command,omitempty"`
+	Args    []string          `yaml:"args,omitempty"`
+	Env     map[string]string `yaml:"env,omitempty"`
+	Headers map[string]string `yaml:"headers,omitempty"`
+	Timeout time.Duration     `yaml:"timeout,omitempty"`
+	OAuth   *OAuthConfig      `yaml:"oauth,omitempty"`
+	Enabled bool              `yaml:"enabled"`
+}
+
+type OAuthConfig struct {
+	ClientID     string `yaml:"client_id"`
+	ClientSecret string `yaml:"client_secret"`
+	Scope        string `yaml:"scope"`
+}
+
 type BudgetConfig struct {
 	Enabled      bool  `yaml:"enabled"`
 	MaxTokens    int   `yaml:"max_tokens"`
@@ -89,6 +117,7 @@ func DefaultConfig() *Config {
 		Timeout:              30 * time.Second,
 		SystemPrompt:         "You are a helpful AI assistant.",
 		MaxIterations:        10,
+		MaxSessions:          100,
 		ToolExecutionTimeout: 60 * time.Second,
 		ToolTimeouts: map[string]time.Duration{
 			"bash":       120 * time.Second,
@@ -153,6 +182,28 @@ func DefaultConfig() *Config {
 			PersistDirectory:   "./dino_sessions",
 			PersistEnabled:     false,
 			Type:               "memory",
+		},
+		Subagent: agent.SubagentConfig{
+			Enabled:          true,
+			TriggerOnKeyword: true,
+			Triggers: []agent.SubagentTrigger{
+				{
+					AgentName: "explore",
+					Keywords:  []string{"search", "find", "explore", "lookup", "locate", "查找", "搜索", "探索"},
+					Patterns:  []string{`(?i)(search|find|explore|lookup|locate)\s+(for|.*\s+in\s+)`, `(?i)where\s+is\s+`},
+					Priority:  10,
+				},
+				{
+					AgentName: "general",
+					Keywords:  []string{"research", "analyze", "investigate", "research", "study", "research", "研究", "分析", "调查"},
+					Patterns:  []string{`(?i)(research|analyze|investigate|study)\s+(about|on|the)`, `(?i)what\s+is\s+.*about`},
+					Priority:  5,
+				},
+			},
+		},
+		MCP: MCPConfig{
+			Enabled: false,
+			Servers: make(map[string]MCPServerConfig),
 		},
 	}
 }

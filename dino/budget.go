@@ -40,6 +40,7 @@ type Budget interface {
 	ResetAll()
 	RecordToolCall(ctx context.Context, sessionID string)
 	RecordTokens(ctx context.Context, sessionID string, tokens int)
+	CanExecute(sessionID string) bool
 }
 
 type budget struct {
@@ -164,4 +165,22 @@ func (b *budget) RecordToolCall(ctx context.Context, sessionID string) {
 
 func (b *budget) RecordTokens(ctx context.Context, sessionID string, tokens int) {
 	b.Consume(ctx, sessionID, Cost{Tokens: tokens})
+}
+
+func (b *budget) CanExecute(sessionID string) bool {
+	if !b.config.Enabled {
+		return true
+	}
+
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	state, exists := b.sessions[sessionID]
+	if !exists {
+		return true
+	}
+
+	return state.UsedCalls < b.config.MaxToolCalls &&
+		state.UsedTokens < b.config.MaxTokens &&
+		state.UsedTimeMs < b.config.MaxTimeMs
 }

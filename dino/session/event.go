@@ -39,8 +39,10 @@ type Event struct {
 }
 
 type Plan struct {
-	Steps    []PlanStep `json:"steps"`
-	Approved bool       `json:"approved"`
+	Goal      string     `json:"goal,omitempty"`
+	Steps     []PlanStep `json:"steps"`
+	Reasoning string     `json:"reasoning,omitempty"`
+	Approved  bool       `json:"approved"`
 }
 
 type PlanStep struct {

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/xichan96/cortex/agent/types"
-	"github.com/xichan96/cortex/dino/session"
 )
 
 type ToolDefinition struct {
@@ -141,7 +140,7 @@ func (t *Tool) Execute(ctx context.Context, input map[string]interface{}) (inter
 			localMeta.Extra = metadata
 		},
 		Ask: func(request PermissionRequest) error {
-			return nil
+			return ErrApprovalNotAvailable
 		},
 	}
 
@@ -178,11 +177,10 @@ func (a *toolAdapter) Execute(ctx context.Context, input map[string]interface{})
 }
 
 type PermissionRequest struct {
-	Patterns  []string
-	SessionID string
-	Metadata  map[string]interface{}
-	Always    []string
-	Ruleset   *session.Permission
+	Permission string
+	SessionID  string
+	Input      map[string]interface{}
+	Metadata   map[string]interface{}
 }
 
 func ToolFromAgent(agentTool types.Tool) *Tool {
@@ -353,7 +351,7 @@ func (a *ApprovalTool) Execute(ctx context.Context, input map[string]interface{}
 
 	argsJSON, errMarshal := marshalJSON(input)
 	if errMarshal != nil {
-		argsJSON = fmt.Sprintf("%v", input)
+		return nil, fmt.Errorf("failed to marshal tool arguments: %w", errMarshal)
 	}
 	approved, err := a.store.RequestApproval(ctx, a.sessionID, toolName, argsJSON)
 
@@ -395,4 +393,7 @@ func (e ApprovalError) Error() string {
 	return string(e)
 }
 
-const ErrApprovalTimeout ApprovalError = "approval timeout"
+const (
+	ErrApprovalTimeout      ApprovalError = "approval timeout"
+	ErrApprovalNotAvailable ApprovalError = "approval not available in this context"
+)

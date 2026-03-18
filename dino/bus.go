@@ -77,6 +77,9 @@ const (
 	EventApprovalRequired = "approval.required"
 	EventApprovalGiven    = "approval.given"
 	EventApprovalDenied   = "approval.denied"
+
+	EventPermissionAsked = "permission.asked"
+	EventPermissionReply = "permission.reply"
 )
 
 func Publish(eventType string, sessionID string, data interface{}) {
@@ -112,22 +115,18 @@ func WaitAsync() {
 }
 
 var (
-	globalBusOnce  sync.Once
-	globalBus      *Bus
-	globalBusMutex sync.RWMutex
+	globalBusOnce sync.Once
+	globalBus     *Bus
 )
 
 func GetGlobalBus() *Bus {
 	globalBusOnce.Do(func() {
 		globalBus = NewBus()
 	})
-	globalBusMutex.RLock()
-	defer globalBusMutex.RUnlock()
 	return globalBus
 }
 
 func SetGlobalBus(bus *Bus) {
-	globalBusMutex.Lock()
-	defer globalBusMutex.Unlock()
+	globalBusOnce.Do(func() {})
 	globalBus = bus
 }

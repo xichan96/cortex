@@ -65,16 +65,18 @@ type Stats struct {
 }
 
 type queue struct {
-	config     *Config
-	inputChan  chan *Item
-	outputChan chan *Item
-	processing map[string]*Item
-	mu         sync.RWMutex
-	closed     bool
-	stats      Stats
-	waitTimes  []time.Duration
-	done       chan struct{}
-	doneWg     sync.WaitGroup
+	config        *Config
+	inputChan     chan *Item
+	outputChan    chan *Item
+	processing    map[string]*Item
+	mu            sync.RWMutex
+	closed        bool
+	stats         Stats
+	waitTimesMu   sync.Mutex
+	totalWaitTime int64
+	waitTimeCount int64
+	done          chan struct{}
+	doneWg        sync.WaitGroup
 }
 
 func New(cfg *Config) Interface {
@@ -184,18 +186,12 @@ func (q *queue) Complete(item *Item, result *Result) {
 
 	waitTime := time.Since(item.CreatedAt)
 	q.stats.TotalProcessed++
-	q.waitTimes = append(q.waitTimes, waitTime)
-	if len(q.waitTimes) > 100 {
-		q.waitTimes = q.waitTimes[1:]
-	}
 
-	if len(q.waitTimes) > 0 {
-		var total time.Duration
-		for _, t := range q.waitTimes {
-			total += t
-		}
-		q.stats.AvgWaitTime = total / time.Duration(len(q.waitTimes))
-	}
+	q.waitTimesMu.Lock()
+	q.totalWaitTime += waitTime.Nanoseconds()
+	q.waitTimeCount++
+	q.stats.AvgWaitTime = time.Duration(q.totalWaitTime / q.waitTimeCount)
+	q.waitTimesMu.Unlock()
 
 	delete(q.processing, item.ID)
 	q.stats.Pending = len(q.processing)

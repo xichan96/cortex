@@ -4,14 +4,19 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/xichan96/cortex/pkg/logger"
 )
+
+const maxSessionIDLen = 128
 
 type SQLite struct {
 	db        *sql.DB
@@ -35,6 +40,8 @@ func NewSQLite(sessionID string, config *Config) (Provider, error) {
 		config = DefaultConfig()
 	}
 
+	sanitizedID := sanitizeSessionID(sessionID)
+
 	dir := config.PersistDirectory
 	if dir == "" {
 		dir = "./dino_sessions"
@@ -44,7 +51,7 @@ func NewSQLite(sessionID string, config *Config) (Provider, error) {
 		return nil, fmt.Errorf("create persist directory: %w", err)
 	}
 
-	dbPath := filepath.Join(dir, fmt.Sprintf("session_%s.db", sessionID))
+	dbPath := filepath.Join(dir, fmt.Sprintf("session_%s.db", sanitizedID))
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
@@ -114,12 +121,17 @@ func (s *SQLite) GetMessages(ctx context.Context, limit int) ([]Message, error) 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	query := "SELECT role, content, timestamp, tool_calls FROM messages ORDER BY timestamp ASC"
+	var query string
+	var args []interface{}
+
 	if limit > 0 {
-		query = fmt.Sprintf("SELECT role, content, timestamp, tool_calls FROM messages ORDER BY timestamp ASC LIMIT %d", limit)
+		query = "SELECT role, content, timestamp, tool_calls FROM messages ORDER BY timestamp ASC LIMIT ?"
+		args = append(args, limit)
+	} else {
+		query = "SELECT role, content, timestamp, tool_calls FROM messages ORDER BY timestamp ASC"
 	}
 
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +221,7 @@ func (s *SQLite) compressAsync(ctx context.Context) {
 	}()
 
 	if err := s.Compress(ctx); err != nil {
-		fmt.Printf("[SQLite] Compress error: %v\n", err)
+		logger.Warn("[SQLite] Compress error", slog.String("error", err.Error()))
 	}
 }
 
@@ -290,13 +302,26 @@ func extractKeywords(text string) []string {
 	}
 
 	for _, w := range words {
-		lower := ""
-		for _, c := range w {
-			lower += string(c + 'a' - 'A')
-		}
+		lower := strings.ToLower(w)
 		if !stopWords[lower] {
 			keywords = append(keywords, lower)
 		}
 	}
 	return keywords
+}
+
+func sanitizeSessionID(id string) string {
+	if len(id) > maxSessionIDLen {
+		id = id[:maxSessionIDLen]
+	}
+	result := make([]byte, 0, len(id))
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' {
+			result = append(result, c)
+		} else {
+			result = append(result, '_')
+		}
+	}
+	return string(result)
 }

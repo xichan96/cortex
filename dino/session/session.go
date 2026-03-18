@@ -2,18 +2,24 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/xichan96/cortex/agent/engine"
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/pkg/logger"
 
 	dinoLoop "github.com/xichan96/cortex/dino/loop"
 	dinoQueue "github.com/xichan96/cortex/dino/queue"
 )
+
+type Budget interface {
+	CanExecute(sessionID string) bool
+}
 
 type Config struct {
 	InputBufferSize    int
@@ -75,6 +81,10 @@ type SessionFactory interface {
 	Detect(ctx context.Context, sessionID string, action dinoLoop.Action) *dinoLoop.Result
 }
 
+type budgetChecker interface {
+	CanExecute(sessionID string) bool
+}
+
 type Session struct {
 	id      string
 	input   chan string
@@ -89,6 +99,7 @@ type Session struct {
 	wg      sync.WaitGroup
 	config  *Config
 	planner *PlannerHelper
+	budget  budgetChecker
 
 	observers   map[string]Observer
 	observersMu sync.RWMutex
@@ -104,7 +115,7 @@ func (f ObserverFunc) OnEvent(event *Event) {
 	f(event)
 }
 
-func NewSession(id string, agent *engine.AgentEngine, factory SessionFactory, ctx context.Context, cfg *Config, planner *PlannerHelper) *Session {
+func NewSession(id string, agent *engine.AgentEngine, factory SessionFactory, ctx context.Context, cfg *Config, planner *PlannerHelper, budget interface{ CanExecute(sessionID string) bool }) *Session {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
 	queue := dinoQueue.New(&dinoQueue.Config{
@@ -125,6 +136,7 @@ func NewSession(id string, agent *engine.AgentEngine, factory SessionFactory, ct
 		queue:     queue,
 		config:    cfg,
 		planner:   planner,
+		budget:    budget,
 		observers: make(map[string]Observer),
 	}
 }
@@ -172,9 +184,13 @@ func (s *Session) Unsubscribe(id string) {
 
 func (s *Session) notifyObservers(event *Event) {
 	s.observersMu.RLock()
-	defer s.observersMu.RUnlock()
-
+	observers := make([]Observer, 0, len(s.observers))
 	for _, obs := range s.observers {
+		observers = append(observers, obs)
+	}
+	s.observersMu.RUnlock()
+
+	for _, obs := range observers {
 		obs.OnEvent(event)
 	}
 }
@@ -183,11 +199,20 @@ func (s *Session) emit(event *Event) {
 	event.Timestamp = time.Now()
 	event.SessionID = s.id
 	s.notifyObservers(event)
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
 	select {
 	case s.output <- event:
-	case <-s.ctx.Done():
-	default:
-		log.Printf("[session %s] event dropped: type=%s", s.id, event.Type)
+	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			logger.Error("[session] event send timeout",
+				slog.String("session_id", s.id),
+				slog.String("type", string(event.Type)))
+		} else {
+			logger.Warn("[session] event not sent: session closed",
+				slog.String("session_id", s.id),
+				slog.String("type", string(event.Type)))
+		}
 	}
 }
 
@@ -268,6 +293,14 @@ func (s *Session) processInputWithResult(input string) *ExecuteResponse {
 		}
 	}
 
+	if s.budget != nil && !s.budget.CanExecute(s.id) {
+		s.emit(&Event{Type: EventTypeError, Error: "Budget exceeded"})
+		return &ExecuteResponse{
+			SessionID: s.id,
+			Error:     fmt.Errorf("budget exceeded"),
+		}
+	}
+
 	s.emit(&Event{
 		Type:    EventTypeMessage,
 		Content: input,
@@ -276,12 +309,16 @@ func (s *Session) processInputWithResult(input string) *ExecuteResponse {
 	if s.factory != nil {
 		if result := s.factory.Detect(s.ctx, s.id, dinoLoop.Action{Type: "input", Content: input}); result != nil {
 			if result.IsLoop {
-				log.Printf("[session %s] loop detected: %s", s.id, result.Suggestion)
+				logger.Warn("[session] loop detected",
+					slog.String("session_id", s.id),
+					slog.String("suggestion", result.Suggestion))
 				s.emit(&Event{Type: EventTypeError, Error: result.Suggestion})
 				return &ExecuteResponse{SessionID: s.id, Error: fmt.Errorf("%s", result.Suggestion)}
 			}
 			if result.Count > 0 {
-				log.Printf("[session %s] repeated action count: %d", s.id, result.Count)
+				logger.Info("[session] repeated action count",
+					slog.String("session_id", s.id),
+					slog.Int("count", result.Count))
 			}
 		}
 	}

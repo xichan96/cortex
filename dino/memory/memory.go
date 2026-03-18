@@ -152,8 +152,10 @@ func (m *InMemory) compress(ctx context.Context) error {
 	}
 
 	recentCount := m.config.KeepRecentCount
-	recentMessages := m.messages[len(m.messages)-recentCount:]
-	olderMessages := m.messages[:len(m.messages)-recentCount]
+	recentMessages := make([]Message, recentCount)
+	copy(recentMessages, m.messages[len(m.messages)-recentCount:])
+	olderMessages := make([]Message, len(m.messages)-recentCount)
+	copy(olderMessages, m.messages[:len(m.messages)-recentCount])
 
 	summaryText := m.generateSummary(m.summary, olderMessages)
 
@@ -163,7 +165,6 @@ func (m *InMemory) compress(ctx context.Context) error {
 	m.stats.MessageCount = len(m.messages)
 	m.stats.SummaryLength = len(summaryText)
 
-	_ = recentMessages
 	return nil
 }
 
