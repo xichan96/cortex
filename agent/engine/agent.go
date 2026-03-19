@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/xichan96/cortex/agent/hooks"
-	"github.com/xichan96/cortex/agent/ratelimit"
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/agent/utils"
 	"github.com/xichan96/cortex/pkg/logger"
 )
 
@@ -28,7 +28,7 @@ type Agent interface {
 	SetRetryDelay(ctx context.Context, delay time.Duration)
 	SetEnableToolRetry(ctx context.Context, enable bool)
 	SetConfig(ctx context.Context, config *types.AgentConfig)
-	SetRateLimiter(ctx context.Context, limiter ratelimit.RateLimiter)
+	SetRateLimiter(ctx context.Context, limiter utils.RateLimiter)
 	SetToolCallback(ctx context.Context, callback types.ToolCallback)
 	SetHooks(ctx context.Context, h hooks.Hooks)
 
@@ -76,7 +76,7 @@ type AgentEngine struct {
 	toolCacheTail *types.ToolCacheEntry            // LRU list tail (least recently used)
 
 	// Rate limiting
-	rateLimiter ratelimit.RateLimiter // Rate limiter for request throttling
+	rateLimiter utils.RateLimiter
 
 	// Usage tracking
 	totalUsage types.Usage // Total token usage
@@ -117,7 +117,7 @@ func NewAgentEngine(model types.LLMProvider, config *types.AgentConfig) *AgentEn
 		toolCacheSize: types.DefaultCacheSize, // Using constant-defined cache size
 		ctx:           ctx,
 		cancel:        cancel,
-		rateLimiter:   ratelimit.NewTokenBucketLimiter(10, 10), // 10 req/s default
+		rateLimiter:   utils.NewTokenBucket(10, 10),
 	}
 
 	// Propagate logger to model if supported

@@ -1,0 +1,5 @@
+Generate a summary of the conversation. Include:
+- Main goals and accomplishments
+- Key decisions made
+- Important files modified
+- Remaining tasks or follow-ups

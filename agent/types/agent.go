@@ -45,7 +45,83 @@ const (
 	ContextKeyMaxTokens           = "max_tokens"
 	ContextKeyTopP                = "top_p"
 	ContextKeyMaxCompletionTokens = "max_completion_tokens"
+	ContextKeyReasoningEffort     = "reasoning_effort"
 )
+
+// AgentConfig agent configuration
+type AgentConfig struct {
+	MaxIterations            int                                                               `json:"maxIterations"`
+	SystemMessage            string                                                            `json:"systemMessage"`
+	ChatMessageRole          string                                                            `json:"chatMessageRole,omitempty"`
+	Temperature              float32                                                           `json:"temperature"`
+	MaxTokens                int                                                               `json:"maxTokens,omitempty"`
+	MaxCompletionTokens      int                                                               `json:"maxCompletionTokens,omitempty"`
+	TopP                     float32                                                           `json:"topP"`
+	FrequencyPenalty         float32                                                           `json:"frequencyPenalty"`
+	PresencePenalty          float32                                                           `json:"presencePenalty"`
+	StopSequences            []string                                                          `json:"stopSequences"`
+	Timeout                  time.Duration                                                     `json:"timeout"`
+	ToolExecutionTimeout     time.Duration                                                     `json:"toolExecutionTimeout"`
+	ToolTimeouts             map[string]time.Duration                                          `json:"toolTimeouts"`
+	RetryAttempts            int                                                               `json:"retryAttempts"`
+	RetryDelay               time.Duration                                                     `json:"retryDelay"`
+	EnableToolRetry          bool                                                              `json:"enableToolRetry"`
+	MaxHistoryMessages       int                                                               `json:"maxHistoryMessages"`
+	EnableMemoryCompress     bool                                                              `json:"enableMemoryCompress"`
+	MemoryCompressThreshold  int                                                               `json:"memoryCompressThreshold"`
+	MemoryCompressRatio      float32                                                           `json:"memoryCompressRatio"`
+	LogSilent                bool                                                              `json:"logSilent"`
+	LogFile                  string                                                            `json:"logFile"`
+	DoomLoopThreshold        int                                                               `json:"doomLoopThreshold"`
+	OnDoomLoop               func(toolName string, input map[string]interface{}) bool          `json:"-"`
+	ToolTimeoutCalculator    func(toolName string, input map[string]interface{}) time.Duration `json:"-"`
+	MaxToolCallsPerIteration int                                                               `json:"maxToolCallsPerIteration"`
+	ToolResultWriteDir       string                                                            `json:"toolResultWriteDir"`
+	DefaultToolResultMaxLen  int                                                               `json:"defaultToolResultMaxLen"`
+	ToolErrorMaxLen          int                                                               `json:"toolErrorMaxLen"`
+	ReasoningEffort          string                                                            `json:"reasoningEffort"`
+}
+
+func NewAgentConfig() *AgentConfig {
+	return &AgentConfig{
+		MaxIterations:            10,
+		SystemMessage:            "",
+		ChatMessageRole:          "",
+		Temperature:              0.7,
+		MaxTokens:                4096,
+		TopP:                     1.0,
+		FrequencyPenalty:         0.0,
+		PresencePenalty:          0.0,
+		StopSequences:            []string{},
+		Timeout:                  30 * time.Second,
+		ToolExecutionTimeout:     60 * time.Second,
+		RetryAttempts:            3,
+		RetryDelay:               1 * time.Second,
+		EnableToolRetry:          true,
+		MaxHistoryMessages:       100,
+		EnableMemoryCompress:     false,
+		MemoryCompressThreshold:  50,
+		MemoryCompressRatio:      0.5,
+		LogSilent:                false,
+		LogFile:                  "",
+		DoomLoopThreshold:        3,
+		OnDoomLoop:               nil,
+		MaxToolCallsPerIteration: 0,
+		ToolResultWriteDir:       "",
+		DefaultToolResultMaxLen:  0,
+		ToolErrorMaxLen:          0,
+		ReasoningEffort:          "",
+	}
+}
+
+// StreamEvent stream event
+type StreamEvent struct {
+	Type       string      `json:"type"`
+	Content    string      `json:"content,omitempty"`
+	ToolResult interface{} `json:"toolResult,omitempty"`
+	EventName  string      `json:"eventName,omitempty"`
+	Data       interface{} `json:"data,omitempty"`
+}
 
 // AgentInput agent execution input
 type AgentInput struct {

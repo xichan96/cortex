@@ -9,14 +9,14 @@ import (
 )
 
 func TestCommandTool_Name(t *testing.T) {
-	tool := NewCommandTool()
+	tool := NewCommandTool("")
 	if tool.Name() != "command" {
 		t.Errorf("Expected name 'command', got '%s'", tool.Name())
 	}
 }
 
 func TestCommandTool_Description(t *testing.T) {
-	tool := NewCommandTool()
+	tool := NewCommandTool("")
 	desc := tool.Description()
 	if desc == "" {
 		t.Error("Description should not be empty")
@@ -24,7 +24,7 @@ func TestCommandTool_Description(t *testing.T) {
 }
 
 func TestCommandTool_Schema(t *testing.T) {
-	tool := NewCommandTool()
+	tool := NewCommandTool("")
 	schema := tool.Schema()
 
 	if schema["type"] != "object" {
@@ -62,7 +62,7 @@ func TestCommandTool_Schema(t *testing.T) {
 }
 
 func TestCommandTool_Metadata(t *testing.T) {
-	tool := NewCommandTool()
+	tool := NewCommandTool("")
 	metadata := tool.Metadata()
 
 	if metadata.SourceNodeName != "command" {
@@ -79,7 +79,7 @@ func TestCommandTool_Metadata(t *testing.T) {
 }
 
 func TestCommandTool_Execute_Success(t *testing.T) {
-	tool := NewCommandTool()
+	tool := NewCommandTool("")
 
 	input := map[string]interface{}{
 		"command": "echo hello",
@@ -105,7 +105,7 @@ func TestCommandTool_Execute_Success(t *testing.T) {
 }
 
 func TestCommandTool_Execute_CommandFailure(t *testing.T) {
-	tool := NewCommandTool()
+	tool := NewCommandTool("")
 
 	input := map[string]interface{}{
 		"command": "false",
@@ -131,7 +131,7 @@ func TestCommandTool_Execute_CommandFailure(t *testing.T) {
 }
 
 func TestCommandTool_Execute_InvalidCommandType(t *testing.T) {
-	tool := NewCommandTool()
+	tool := NewCommandTool("")
 
 	input := map[string]interface{}{
 		"command": 123,
@@ -153,7 +153,7 @@ func TestCommandTool_Execute_InvalidCommandType(t *testing.T) {
 }
 
 func TestCommandTool_Execute_EmptyCommand(t *testing.T) {
-	tool := NewCommandTool()
+	tool := NewCommandTool("")
 
 	input := map[string]interface{}{
 		"command": "",
@@ -175,7 +175,7 @@ func TestCommandTool_Execute_EmptyCommand(t *testing.T) {
 }
 
 func TestCommandTool_Execute_WithTimeoutFloat64(t *testing.T) {
-	tool := NewCommandTool()
+	tool := NewCommandTool("")
 
 	input := map[string]interface{}{
 		"command": "echo test",
@@ -198,7 +198,7 @@ func TestCommandTool_Execute_WithTimeoutFloat64(t *testing.T) {
 }
 
 func TestCommandTool_Execute_Timeout(t *testing.T) {
-	tool := NewCommandTool()
+	tool := NewCommandTool("")
 
 	input := map[string]interface{}{
 		"command": "sleep 2",
@@ -221,7 +221,7 @@ func TestCommandTool_Execute_Timeout(t *testing.T) {
 }
 
 func TestCommandTool_Execute_DefaultTimeout(t *testing.T) {
-	tool := NewCommandTool()
+	tool := NewCommandTool("")
 
 	input := map[string]interface{}{
 		"command": "echo test",
@@ -250,7 +250,7 @@ func TestCommandTool_Execute_DefaultTimeout(t *testing.T) {
 }
 
 func TestCommandTool_Execute_Stderr(t *testing.T) {
-	tool := NewCommandTool()
+	tool := NewCommandTool("")
 
 	input := map[string]interface{}{
 		"command": "sh -c 'echo error >&2'",

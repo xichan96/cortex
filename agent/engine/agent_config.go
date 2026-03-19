@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/xichan96/cortex/agent/hooks"
-	"github.com/xichan96/cortex/agent/ratelimit"
+	"github.com/xichan96/cortex/agent/utils"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/logger"
 )
@@ -130,7 +130,7 @@ func (ae *AgentEngine) SetConfig(ctx context.Context, config *types.AgentConfig)
 }
 
 // SetRateLimiter sets the rate limiter
-func (ae *AgentEngine) SetRateLimiter(ctx context.Context, limiter ratelimit.RateLimiter) {
+func (ae *AgentEngine) SetRateLimiter(ctx context.Context, limiter utils.RateLimiter) {
 	ae.mu.Lock()
 	defer ae.mu.Unlock()
 	ae.rateLimiter = limiter

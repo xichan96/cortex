@@ -1,4 +1,5 @@
-package ratelimit
+// ratelimit.go: token-bucket rate limiting for request throttling.
+package utils
 
 import (
 	"context"
@@ -12,17 +13,17 @@ import (
 type RateLimiter interface {
 	Allow(ctx context.Context) error
 	Wait(ctx context.Context) error
-	Stats() Stats
+	Stats() RateLimitStats
 }
 
-type Stats struct {
+type RateLimitStats struct {
 	Allowed  int64
 	Rejected int64
 	WaitTime time.Duration
 	HitRate  float64
 }
 
-type TokenBucketLimiter struct {
+type rateLimitTokenBucket struct {
 	tokens     atomic.Int64
 	capacity   int64
 	refillRate int64
@@ -34,17 +35,17 @@ type TokenBucketLimiter struct {
 	totalWait atomic.Int64
 }
 
-func NewTokenBucketLimiter(capacity int64, refillRate int64) *TokenBucketLimiter {
-	limiter := &TokenBucketLimiter{
+func NewTokenBucket(capacity int64, refillRate int64) RateLimiter {
+	t := &rateLimitTokenBucket{
 		capacity:   capacity,
 		refillRate: refillRate,
 	}
-	limiter.tokens.Store(capacity)
-	limiter.lastRefill.Store(time.Now().UnixNano())
-	return limiter
+	t.tokens.Store(capacity)
+	t.lastRefill.Store(time.Now().UnixNano())
+	return t
 }
 
-func (t *TokenBucketLimiter) refill() {
+func (t *rateLimitTokenBucket) refill() {
 	now := time.Now().UnixNano()
 	lastRefill := t.lastRefill.Load()
 	elapsed := time.Duration(now - lastRefill)
@@ -67,7 +68,7 @@ func (t *TokenBucketLimiter) refill() {
 	}
 }
 
-func (t *TokenBucketLimiter) Allow(ctx context.Context) error {
+func (t *rateLimitTokenBucket) Allow(ctx context.Context) error {
 	t.refill()
 
 	for {
@@ -88,34 +89,29 @@ func (t *TokenBucketLimiter) Allow(ctx context.Context) error {
 	}
 }
 
-func (t *TokenBucketLimiter) Wait(ctx context.Context) error {
+func (t *rateLimitTokenBucket) Wait(ctx context.Context) error {
 	startTime := time.Now()
 	defer func() {
 		waitDuration := time.Since(startTime)
 		t.totalWait.Add(int64(waitDuration))
 	}()
 
-	// Calculate adaptive polling interval based on refill rate
-	// We want to poll slightly faster than the refill rate to capture tokens as soon as they are available
-	// but not too fast to burn CPU.
-	// Interval = 1s / refillRate / 2 (Nyquist-ish, check twice per period)
 	var pollInterval time.Duration
 	if t.refillRate > 0 {
 		pollInterval = time.Second / time.Duration(t.refillRate)
 		if pollInterval > 100*time.Millisecond {
-			pollInterval = 100 * time.Millisecond // Cap max wait at 100ms for responsiveness
+			pollInterval = 100 * time.Millisecond
 		} else if pollInterval < 1*time.Millisecond {
-			pollInterval = 1 * time.Millisecond // Cap min wait at 1ms
+			pollInterval = 1 * time.Millisecond
 		}
 	} else {
-		pollInterval = 10 * time.Millisecond // Fallback
+		pollInterval = 10 * time.Millisecond
 	}
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
 	for {
-		// Check context first
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -130,12 +126,11 @@ func (t *TokenBucketLimiter) Wait(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			// Continue loop to try Allow() again
 		}
 	}
 }
 
-func (t *TokenBucketLimiter) Stats() Stats {
+func (t *rateLimitTokenBucket) Stats() RateLimitStats {
 	allowed := t.allowed.Load()
 	rejected := t.rejected.Load()
 	total := allowed + rejected
@@ -150,7 +145,7 @@ func (t *TokenBucketLimiter) Stats() Stats {
 		waitTime = waitTime / time.Duration(allowed)
 	}
 
-	return Stats{
+	return RateLimitStats{
 		Allowed:  allowed,
 		Rejected: rejected,
 		WaitTime: waitTime,

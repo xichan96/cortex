@@ -2,6 +2,7 @@ package tools
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/xichan96/cortex/agent/types"
@@ -65,7 +66,7 @@ func (r *Registry) Get(name string) (types.Tool, error) {
 	return tool, nil
 }
 
-// GetAll gets all tools
+// GetAll gets all tools (sorted by name)
 func (r *Registry) GetAll() []types.Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -74,7 +75,7 @@ func (r *Registry) GetAll() []types.Tool {
 	for _, tool := range r.tools {
 		tools = append(tools, tool)
 	}
-
+	sort.Slice(tools, func(i, j int) bool { return tools[i].Name() < tools[j].Name() })
 	return tools
 }
 
@@ -139,6 +140,15 @@ func (r *Registry) Size() int {
 	defer r.mu.RUnlock()
 
 	return len(r.tools)
+}
+
+// Has reports whether a tool is registered by name
+func (r *Registry) Has(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	_, exists := r.tools[name]
+	return exists
 }
 
 // Manager tool manager

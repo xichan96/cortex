@@ -171,7 +171,7 @@ func main() {
 	toolRegistry := tools.NewRegistry()
 	// Register basic tools to the registry so scheduled agents can use them
 	toolRegistry.Register(fs.NewFileTool(""))
-	toolRegistry.Register(runtime.NewCommandTool())
+	toolRegistry.Register(runtime.NewCommandTool(""))
 
 	// Configure agent for scheduler with per-session memory (SQLite)
 	memFactory := func(sessionID string) types.MemoryProvider {
@@ -187,7 +187,7 @@ func main() {
 	// 6. Register Essential Tools
 	// The agent needs 'read_file' to read skill definitions, and 'command' to execute skill instructions.
 	agentEngine.AddTool(ctx, fs.NewFileTool(""))
-	agentEngine.AddTool(ctx, runtime.NewCommandTool())
+	agentEngine.AddTool(ctx, runtime.NewCommandTool(""))
 
 	// Register Scheduler Tools
 	schedulerTools := scheduler.NewTools(schedulerService)

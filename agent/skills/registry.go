@@ -1,9 +1,12 @@
 package skills
 
 import (
+	"context"
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/xichan96/cortex/pkg/logger"
 )
 
 type regexEntry struct {
@@ -148,4 +151,14 @@ func (r *Registry) LoadSkills(skills []Skill) {
 	for i := range skills {
 		r.Register(&skills[i])
 	}
+}
+
+// LoadFromDirs scans dirs for SKILL.md, loads them and registers into the registry.
+func (r *Registry) LoadFromDirs(ctx context.Context, l *logger.Logger, dirs []string) error {
+	list, err := LoadSkillsFromDirs(ctx, l, dirs)
+	if err != nil {
+		return err
+	}
+	r.LoadSkills(list)
+	return nil
 }
