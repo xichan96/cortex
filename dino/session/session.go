@@ -168,6 +168,19 @@ func (s *Session) IsRunning() bool {
 	return s.running
 }
 
+func (s *Session) GetAgent() *engine.AgentEngine {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.agent
+}
+
+func (s *Session) GetMemory() types.MemoryProvider {
+	if s.agent == nil {
+		return nil
+	}
+	return s.agent.GetMemory()
+}
+
 func (s *Session) Subscribe(obs Observer) string {
 	id := generateUUID()
 	s.observersMu.Lock()

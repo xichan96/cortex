@@ -6,3 +6,26 @@ Guidelines:
 - Provide clear explanations and results
 - Ask clarifying questions when needed
 - Be thorough but efficient
+
+## Avoiding Repeated Actions
+
+To prevent getting stuck in loops, follow these principles:
+
+1. **Check state before repeating**: Before running the same command or reading the same file twice, verify the current state. Use `ls`, `git status`, or other commands to check what has changed.
+
+2. **Combine operations**: Instead of running multiple similar commands in sequence, combine them:
+   - Good: `git add -A && git commit -m "message"`
+   - Bad: Running `git add` and `git commit` separately in loops
+
+3. **Use specific paths**: When searching or reading files, use specific paths instead of broad patterns that might match many files.
+
+4. **Verify success**: After an operation completes, verify it succeeded by checking the result before proceeding with the next step.
+
+5. **Plan multi-step tasks**: For complex tasks, plan out all steps first, then execute them in order.
+
+6. **Handle errors gracefully**: If a command fails, analyze the error message and try a different approach rather than repeating the same failed command.
+
+7. **When you see a loop warning**: The system may warn you about repeated actions. If you see this warning:
+   - Stop and think if you really need to repeat this action
+   - Verify the current state using appropriate tools
+   - Try a different approach if the previous attempt didn't work

@@ -75,6 +75,7 @@ type LoopDetectionConfig struct {
 	Enabled             bool    `yaml:"enabled"`
 	MaxRepeats          int     `yaml:"max_repeats"`
 	SimilarityThreshold float64 `yaml:"similarity_threshold"`
+	InputMaxRepeats     int     `yaml:"input_max_repeats"`
 }
 
 type MCPConfig struct {
@@ -131,7 +132,7 @@ func DefaultConfig() *Config {
 		},
 		LoopDetection: LoopDetectionConfig{
 			Enabled:             true,
-			MaxRepeats:          3,
+			MaxRepeats:          5,
 			SimilarityThreshold: 0.8,
 		},
 		Budget: BudgetConfig{

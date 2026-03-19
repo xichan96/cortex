@@ -36,7 +36,7 @@ func main() {
 You can execute commands, read/write files, search the web, and use skills.
 Always provide clear and concise responses.`
 
-	cfg.MaxIterations = 10
+	cfg.MaxIterations = 100
 	cfg.Temperature = 0.7
 	cfg.MaxTokens = 2048
 	cfg.Timeout = 60 * time.Second
@@ -107,8 +107,9 @@ Always provide clear and concise responses.`
 	}
 
 	cfg.LoopDetection.Enabled = true
-	cfg.LoopDetection.MaxRepeats = 3
+	cfg.LoopDetection.MaxRepeats = 5
 	cfg.LoopDetection.SimilarityThreshold = 0.8
+	cfg.LoopDetection.InputMaxRepeats = 10
 
 	cfg.Budget.Enabled = true
 	cfg.Budget.MaxTokens = 100000
