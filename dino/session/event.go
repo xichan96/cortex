@@ -3,6 +3,8 @@ package session
 import (
 	"encoding/json"
 	"time"
+
+	agenttypes "github.com/xichan96/cortex/agent/types"
 )
 
 type EventType string
@@ -52,12 +54,7 @@ type PlanStep struct {
 	Reasoning string                 `json:"reasoning"`
 }
 
-type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-	ReasoningTokens  int `json:"reasoning_tokens,omitempty"`
-}
+type Usage = agenttypes.Usage
 
 func (e *Event) IsMessage() bool    { return e.Type == EventTypeMessage }
 func (e *Event) IsThinking() bool   { return e.Type == EventTypeThinking }

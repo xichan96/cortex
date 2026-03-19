@@ -63,12 +63,12 @@ func NewSubagent(info *Info, llmProvider types.LLMProvider, tools []types.Tool) 
 
 func (s *subagentImpl) Execute(ctx context.Context, req *Request) (*Result, error) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	cfg := s.buildConfig(req)
-	eng := engine.NewAgentEngine(s.llmProvider, cfg)
-
 	filteredTools := s.filterTools(req.Prompt)
+	llmProvider := s.llmProvider
+	s.mu.RUnlock()
+
+	eng := engine.NewAgentEngine(llmProvider, cfg)
 	eng.AddTools(ctx, filteredTools)
 
 	agentInput := types.NewAgentInput(req.Input)
@@ -88,7 +88,6 @@ func (s *subagentImpl) Execute(ctx context.Context, req *Request) (*Result, erro
 			output += result.Content
 		case "tool_call":
 			if result.ToolEvent != nil {
-				// tool events tracked
 			}
 		}
 		if result.Result != nil {

@@ -7,14 +7,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	agentproviders "github.com/xichan96/cortex/agent/providers"
+	agenttypes "github.com/xichan96/cortex/agent/types"
 )
 
-type Message struct {
-	Role      string     `json:"role"`
-	Content   string     `json:"content"`
-	Timestamp time.Time  `json:"timestamp"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
-}
+type Message = agenttypes.Message
 
 type ToolCall struct {
 	Name   string `json:"name"`
@@ -58,13 +56,13 @@ func DefaultConfig() *Config {
 }
 
 type InMemory struct {
-	mu          sync.RWMutex
-	messages    []Message
-	summary     string
-	config      *Config
-	sessionID   string
-	stats       Stats
-	compressing atomic.Bool
+	*agentproviders.SimpleMemoryProvider
+	mu        sync.RWMutex
+	summary   string
+	config    *Config
+	sessionID string
+	stats     Stats
+	comparing atomic.Bool
 }
 
 func NewInMemory(sessionID string, config *Config) Provider {
@@ -73,10 +71,11 @@ func NewInMemory(sessionID string, config *Config) Provider {
 	}
 
 	return &InMemory{
-		messages:  make([]Message, 0),
-		config:    config,
-		sessionID: sessionID,
-		stats:     Stats{},
+		SimpleMemoryProvider: agentproviders.NewSimpleMemoryProviderWithLimit(config.MaxHistoryMessages),
+		summary:              "",
+		config:               config,
+		sessionID:            sessionID,
+		stats:                Stats{},
 	}
 }
 
@@ -84,16 +83,16 @@ func (m *InMemory) AddMessage(ctx context.Context, msg Message) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if msg.Timestamp.IsZero() {
-		msg.Timestamp = time.Now()
+	if msg.Role == "" {
+		msg.Role = "user"
 	}
 
-	m.messages = append(m.messages, msg)
-	m.stats.MessageCount = len(m.messages)
+	m.SimpleMemoryProvider.AddMessage(ctx, msg)
+	m.stats.MessageCount++
 	m.stats.TotalTokens += estimateTokens(msg.Content)
 
-	if m.config.EnableMemoryCompress && len(m.messages) > m.config.MemoryCompressThreshold {
-		if m.compressing.CompareAndSwap(false, true) {
+	if m.config.EnableMemoryCompress && m.stats.MessageCount > m.config.MemoryCompressThreshold {
+		if m.comparing.CompareAndSwap(false, true) {
 			go m.compressAsync(ctx)
 		}
 	}
@@ -102,23 +101,12 @@ func (m *InMemory) AddMessage(ctx context.Context, msg Message) error {
 }
 
 func (m *InMemory) GetMessages(ctx context.Context, limit int) ([]Message, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	if limit <= 0 || limit > len(m.messages) {
-		limit = len(m.messages)
-	}
-
-	result := make([]Message, limit)
-	copy(result, m.messages[len(m.messages)-limit:])
-
-	return result, nil
+	return m.SimpleMemoryProvider.GetMessages(ctx, limit)
 }
 
 func (m *InMemory) GetSummary(ctx context.Context) (string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-
 	return m.summary, nil
 }
 
@@ -130,7 +118,7 @@ func (m *InMemory) Clear(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.messages = make([]Message, 0)
+	m.SimpleMemoryProvider.Clear(ctx)
 	m.summary = ""
 	m.stats = Stats{}
 
@@ -147,29 +135,36 @@ func (m *InMemory) compress(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if len(m.messages) <= m.config.KeepRecentCount {
+	allMsgs, err := m.SimpleMemoryProvider.GetMessages(ctx, 0)
+	if err != nil {
+		return err
+	}
+	if len(allMsgs) <= m.config.KeepRecentCount {
 		return nil
 	}
 
 	recentCount := m.config.KeepRecentCount
 	recentMessages := make([]Message, recentCount)
-	copy(recentMessages, m.messages[len(m.messages)-recentCount:])
-	olderMessages := make([]Message, len(m.messages)-recentCount)
-	copy(olderMessages, m.messages[:len(m.messages)-recentCount])
+	copy(recentMessages, allMsgs[len(allMsgs)-recentCount:])
+	olderMessages := make([]Message, len(allMsgs)-recentCount)
+	copy(olderMessages, allMsgs[:len(allMsgs)-recentCount])
 
 	summaryText := m.generateSummary(m.summary, olderMessages)
 
 	m.summary = summaryText
-	m.messages = recentMessages
-
-	m.stats.MessageCount = len(m.messages)
+	m.stats.MessageCount = len(recentMessages)
 	m.stats.SummaryLength = len(summaryText)
 
 	return nil
 }
 
 func (m *InMemory) compressAsync(ctx context.Context) {
-	defer m.compressing.Store(false)
+	defer m.comparing.Store(false)
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
 	_ = m.compress(ctx)
 }
 
@@ -306,9 +301,8 @@ func (m *Hybrid) GetMessages(ctx context.Context, limit int) ([]Message, error) 
 
 	if summary != "" {
 		summaryMsg := Message{
-			Role:      "system",
-			Content:   summary,
-			Timestamp: time.Now(),
+			Role:    "system",
+			Content: summary,
 		}
 		messages = append([]Message{summaryMsg}, messages...)
 	}
@@ -341,9 +335,8 @@ func (m *Hybrid) Compress(ctx context.Context) error {
 
 	if existingSummary != "" {
 		summaryMsg := Message{
-			Role:      "system",
-			Content:   "Previous Summary:\n" + existingSummary,
-			Timestamp: time.Now(),
+			Role:    "system",
+			Content: "Previous Summary:\n" + existingSummary,
 		}
 		olderMessages = append([]Message{summaryMsg}, olderMessages...)
 	}
@@ -393,6 +386,11 @@ func (m *Hybrid) GetStats() Stats {
 
 func (m *Hybrid) autoCompress(ctx context.Context) {
 	defer m.compressing.Store(false)
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
 	_ = m.Compress(ctx)
 }
 
@@ -426,6 +424,5 @@ func estimateTokens(text string) int {
 			nonAsciiCount++
 		}
 	}
-	// English: ~4 chars per token. CJK: ~1-2 tokens per char, we use 2 to be safe.
 	return (asciiCount / 4) + (nonAsciiCount * 2)
 }

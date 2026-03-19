@@ -94,13 +94,13 @@ func (s *SQLite) AddMessage(ctx context.Context, msg Message) error {
 	defer s.mu.Unlock()
 
 	toolCallsJSON := ""
-	if len(msg.ToolCalls) > 0 {
+	if msg.ToolCalls != nil {
 		toolCallsJSON = fmt.Sprintf("%v", msg.ToolCalls)
 	}
 
 	_, err := s.db.ExecContext(ctx,
 		"INSERT INTO messages (role, content, timestamp, tool_calls) VALUES (?, ?, ?, ?)",
-		msg.Role, msg.Content, msg.Timestamp.Format(time.RFC3339), toolCallsJSON)
+		msg.Role, msg.Content, time.Now().Format(time.RFC3339), toolCallsJSON)
 	if err != nil {
 		return err
 	}
@@ -139,14 +139,14 @@ func (s *SQLite) GetMessages(ctx context.Context, limit int) ([]Message, error) 
 
 	var messages []Message
 	for rows.Next() {
-		var msg Message
-		var timestamp string
-		var toolCalls string
-		if err := rows.Scan(&msg.Role, &msg.Content, &timestamp, &toolCalls); err != nil {
+		var role, content, timestampStr, toolCalls string
+		if err := rows.Scan(&role, &content, &timestampStr, &toolCalls); err != nil {
 			return nil, err
 		}
-		msg.Timestamp, _ = time.Parse(time.RFC3339, timestamp)
-		messages = append(messages, msg)
+		messages = append(messages, Message{
+			Role:    role,
+			Content: content,
+		})
 	}
 
 	return messages, rows.Err()
@@ -201,14 +201,14 @@ func (s *SQLite) getAllMessages() ([]Message, error) {
 
 	var messages []Message
 	for rows.Next() {
-		var msg Message
-		var timestamp string
-		var toolCalls string
-		if err := rows.Scan(&msg.Role, &msg.Content, &timestamp, &toolCalls); err != nil {
+		var role, content, timestampStr, toolCalls string
+		if err := rows.Scan(&role, &content, &timestampStr, &toolCalls); err != nil {
 			return nil, err
 		}
-		msg.Timestamp, _ = time.Parse(time.RFC3339, timestamp)
-		messages = append(messages, msg)
+		messages = append(messages, Message{
+			Role:    role,
+			Content: content,
+		})
 	}
 	return messages, rows.Err()
 }

@@ -1,0 +1,5 @@
+## Skill Usage Protocol
+1. Identify relevant skill from the list based on the user's request.
+2. Use the `read_file` tool to read the content of the 'Definition File'.
+3. Follow the instructions found in the SKILL.md file strictly.
+4. Do not guess the skill capabilities; always read the definition first.

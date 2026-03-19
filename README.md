@@ -12,10 +12,12 @@
   · <a href="#features">Features</a>
   · <a href="#quick-start">Quick Start</a>
   · <a href="#core-components">Core Components</a>
+  · <a href="#dino">Dino</a>
   · <a href="#tools">Tools</a>
   · <a href="#agent-skills">Agent Skills</a>
   · <a href="#memory-system">Memory System</a>
   · <a href="#examples">Examples</a>
+  · <a href="#triggers">Triggers</a>
   · <a href="#license">License</a>
 </p>
 
@@ -31,18 +33,21 @@ Designed for production environments, CORTEX prioritizes reliability, configurab
 
 **Design Philosophy**: CORTEX adopts a minimalist approach, focusing on streamlined integration and low resource footprint. It eliminates heavy dependencies and complex orchestration overhead, making it the ideal choice for developers who need powerful Agent capabilities without the bloat of a full-fledged workflow automation platform.
 
+**`agent` vs Dino**: **`agent`** (`github.com/xichan96/cortex/agent`) is the baseline—when you do **not** need complex multi-turn chat with the model **autonomously deciding and chaining tools**, integrate it directly into your project: one-shot report generation, summarization, extraction, classification, structured output, etc., using `engine` + `llm` and optional tools (no Dino required). **`dino`** (`github.com/xichan96/cortex/dino`) is the advanced stack for **intelligent agents** (assistants, IDE agents, bots): multi-turn dialogue, automatic tool decisions and multi-step execution, plus session isolation, budgets, approvals, and observability.
+
 ## Features
 
 - **Intelligent Agent Engine**: A robust core for building agents with advanced reasoning and tool-calling capabilities.
 - **Broad LLM Support**: Seamless integration with OpenAI, DeepSeek, Volce, and custom providers.
 - **Multi-Modal Native**: Effortlessly process and generate text, images, and other media formats.
 - **Dynamic Skills**: File-system-based skill management with Lazy Loading for optimal performance.
-- **Extensible Tooling**: Built-in support for MCP and HTTP clients, making tool extension trivial.
+- **Extensible Tooling**: `agent/tools/builtin` spans fs, search, shell/background jobs, net/web, Docker, email, math, and `mcp_client`; register custom `types.Tool` as needed.
 - **Real-Time Streaming**: Full support for response streaming, enabling interactive, low-latency user experiences.
 - **Hybrid Memory Architecture**: Implements a hybrid strategy combining full conversation history with rolling summaries. This approach optimizes token usage while retaining full context, backed by asynchronous compression to ensure low latency under high concurrency. Compatible with LangChain, MongoDB, Redis, MySQL, and SQLite.
 - **Granular Configuration**: Extensive options to fine-tune agent behavior and performance.
 - **Parallel Execution**: Efficiently execute multiple tool calls concurrently to minimize wait times.
 - **Production-Grade Reliability**: Comprehensive error handling and retry mechanisms built for stability.
+- **Dino production orchestration**: Multi-session isolation, real-time event subscription, token/tool/time budgets, loop detection, approval for risky tools, priority task queue, planner mode, and subagents; curated builtins plus MCP and skills integration.
 
 ## Architecture Overview
 
@@ -53,18 +58,25 @@ Cortex follows a modular architecture with the following key components:
 ```
 cortex/
 ├── agent/             # Core agent functionality
-│   ├── engine/        # Agent engine implementation
-│   ├── llm/           # LLM provider integrations
-│   ├── skills/        # Skill loading and management
-│   ├── tools/         # Tool ecosystem (MCP, HTTP)
-│   ├── types/         # Core type definitions
-│   ├── providers/     # External service providers
-│   ├── errors/        # Error handling
-│   └── logger/        # Structured logging
-├── trigger/           # Trigger modules
-│   ├── http/          # HTTP trigger (REST API)
-│   └── mcp/           # MCP trigger (MCP server)
-└── examples/          # Example applications
+│   ├── engine/       # Agent engine implementation
+│   ├── llm/          # LLM provider integrations
+│   ├── skills/       # Skill loading and management (prompt/ templates)
+│   ├── tools/        # Tool ecosystem (MCP, HTTP, builtins)
+│   ├── types/        # Core type definitions
+│   ├── providers/    # External service providers (memory, LLM adapters)
+│   ├── hooks/        # Lifecycle hooks
+│   └── utils/        # Ratelimit, loop detection, permission, budget
+├── dino/             # Advanced orchestration (Client/Factory, budget, approval, queue, bus)
+│   ├── agent/        # Subagent and prompts
+│   ├── session/      # Session implementation and planner helpers
+│   ├── memory/       # Memory management (e.g. SQLite)
+│   ├── queue/        # Priority task queue
+│   ├── tools/        # Registry, builtins, MCP, skill tool
+│   └── permission/   # Tool permission and approval
+├── trigger/          # Trigger modules
+│   ├── http/         # HTTP trigger (REST API)
+│   └── mcp/          # MCP trigger (MCP server)
+└── examples/         # Example applications
 ```
 
 ## Quick Start
@@ -137,6 +149,10 @@ Default endpoints (port `:5678`):
 
 ## Core Components
 
+### The `agent` package (baseline)
+
+Without Dino, `agent` is the full baseline: LLM, engine, tools, and memory for one-shot or shallow calls where **you** own the request lifecycle—not a long-running loop where the model repeatedly picks tools. The LLM snippet below is part of that path.
+
 ### LLM Integration
 
 Unified interface for major LLM providers:
@@ -152,26 +168,91 @@ llmProvider, _ := llm.QuickDeepSeekProvider("sk-...", "deepseek-chat")
 llmProvider, _ := llm.VolceClient("ak-...", "doubao-pro-32k")
 ```
 
-### Triggers
+## Dino
 
-Expose your agent via different protocols.
+[Dino](dino/README.md) targets **intelligent agent** workloads: multi-turn dialogue, automatic tool choice and chained execution, long-lived runs. It reuses `agent` for execution while owning session lifecycle, observability, and guardrails.
 
-#### HTTP Trigger
-Standard RESTful API for chat and streaming.
+### Role split
 
-#### MCP Trigger
-Fully compliant with the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), allowing your agent to serve as a tool for MCP clients (e.g., Claude Desktop).
+- **`agent`**: Baseline integration; single-request/batch jobs, one-shot report-style tasks, simple APIs; LLM providers, engine, skills, memory providers, hooks, builtins.
+- **`dino`**: Intelligent-agent stack; multi-turn plus automatic tool choice and execution loops; `NewDinoFactory` / `NewClient` / `Session`, event bus (`bus`), `DefinedTool` and tool callbacks, per-tool and global timeouts, budgets, loop detection, allow/deny/approval lists, SQLite memory, subagents and manager, optional `queue` batching, and planner mode.
+
+### Sessions and observability
+
+- Isolated context per session; drive turns with `Send`, `SendAndWait`, etc.
+- `Subscribe` / `SubscribeFunc` for `Message`, `Thinking`, `ToolCall`, `Done`, and related events—ideal for terminals, logging, and analytics.
+- Factory options can attach a stream event sink for SSE/WebSocket bridges.
+
+### Tools and safety
+
+- `Config.Tools`: `Allowed`, `Denied`, `ApprovalRequired`; `ToolTimeouts` plus `ToolTimeoutCalculator` for dynamic limits.
+- `defined_tool`: `DefinedTool`, `ToolContext`, and approval storage for human-in-the-loop risky operations.
+- Builtins cover read/write/edit files, `glob`/`grep`, `bash`, `list_directory`, and more; wire MCP and filesystem skills via `cfg.Skills`.
+
+### Resources and stability
+
+- **Budget**: caps tokens, tool calls, and wall time.
+- **Loop detection**: semantic similarity and repeat counts to break infinite loops.
+- **Planner mode**: optional plan-then-execute flow with auto-approve when trusted.
+
+### Minimal usage
+
+```bash
+go get github.com/xichan96/cortex/dino
+```
+
+```go
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/xichan96/cortex/dino"
+)
+
+func main() {
+	cfg := dino.DefaultConfig()
+	cfg.Provider.APIKey = "your-api-key"
+	cfg.WorkspaceRoot = "/path/to/workspace"
+
+	factory, err := dino.NewDinoFactory(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer factory.Shutdown(context.Background())
+
+	client := dino.NewClient(factory)
+	session, err := client.CreateSession(context.Background(), "sid-1")
+	if err != nil {
+		log.Fatal(err)
+	}
+	ev, err := session.SendAndWait(context.Background(), "List this directory")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(ev.Content)
+}
+```
+
+Full options, queue APIs, subagents, and event types: [dino/README.md](dino/README.md). Runnable sample: [examples/dino](examples/dino).
 
 ## Tools
 
-Extensive built-in tool library:
+Builtins live under `agent/tools/builtin/` by package; register `types.Tool` instances with the engine to enable them (defaults depend on your agent config).
 
-- **MCP Tools**: Connect to any MCP Server.
-- **File Operations**: Safe filesystem access.
-- **SSH**: Remote server management.
-- **Email**: Send HTML/Text emails.
-- **Math**: Complex calculations.
-- **System Command**: Secure shell execution.
+| Package | Tool names |
+|---------|------------|
+| `fs/` | `read_file`, `write_file`, `edit_file`, `file` |
+| `search/` | `glob`, `grep`, `codesearch` (placeholder) |
+| `runtime/` | `command`, `question`, `job_kill`, `job_output` |
+| `task/` | `todo` |
+| `net/` | `ssh`, `net_check` |
+| `web/` | `web_search`, `web_fetch` |
+| `system/` | `get_time`, `http_request` |
+| `email/` | `send_email` |
+| `math/` | `math_calculate` |
+| `docker/` | `docker_list_containers`, `docker_inspect_container`, `docker_container_logs`, `docker_exec`, `docker_create_container`, `docker_start_container`, `docker_stop_container`, `docker_restart_container`, `docker_remove_container`, `docker_pull_image` |
+| `mcp/` | `mcp_client` |
 
 ### Custom Tools
 
@@ -276,10 +357,21 @@ agentEngine.SetMemory(context.Background(), memory)
 ## Examples
 
 - [Basic Example](examples/basic): Fundamental usage patterns.
+- [Dino Example](examples/dino): Dino orchestration (sessions, budget, tool approval).
 - [Chat Web](examples/chat-web): Full-stack chat application (Gin + React).
 - [MCP Server](examples/mcp-server): Expose Agent as an MCP service.
 - [Agent Skills](examples/skills): Dynamic skill loading and usage.
 - [Task Scheduling](examples/xcron): Task scheduling with xcron.
+
+## Triggers
+
+`trigger/` exposes the agent over different protocols for external integration.
+
+#### HTTP Trigger
+Standard RESTful API for chat and streaming.
+
+#### MCP Trigger
+Compliant with the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), so the agent can be used as a tool from clients such as Claude Desktop.
 
 ## Contributing
 

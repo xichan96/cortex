@@ -4,17 +4,17 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/xichan96/cortex/agent/skills"
 	"github.com/xichan96/cortex/agent/types"
-	dinoSkills "github.com/xichan96/cortex/dino/skills"
 )
 
 type SkillTool struct {
-	skills map[string]*dinoSkills.Skill
+	skills map[string]*skills.Skill
 }
 
-func NewSkillTool(skills []*dinoSkills.Skill) types.Tool {
-	skillMap := make(map[string]*dinoSkills.Skill)
-	for _, s := range skills {
+func NewSkillTool(list []*skills.Skill) types.Tool {
+	skillMap := make(map[string]*skills.Skill)
+	for _, s := range list {
 		skillMap[s.Name] = s
 	}
 	return &SkillTool{skills: skillMap}

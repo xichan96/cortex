@@ -174,14 +174,10 @@ factory, _ := dino.NewDinoFactory(cfg, dino.WithStreamEventSender(handler))
 ### With Task Queue
 
 ```go
-session, _ := client.CreateSession(ctx, "queue-session")
+import "github.com/xichan96/cortex/dino/queue"
 
-// Enable queue
-session, _ = client.CreateSession(ctx, "queue-session", 
-    dino.WithQueueEnabled(100, 10))
-
-// Enqueue tasks
-resultChan, _ := session.Enqueue("task 1", dinoQueue.Normal)
+session, _ := client.CreateSession(ctx, "queue-session", dino.WithQueueEnabled(100, 10))
+resultChan, _ := session.Enqueue("task 1", queue.PriorityNormal)
 result := <-resultChan
 ```
 
@@ -222,19 +218,21 @@ session.SubscribeFunc(func(event *dino.Event) {
 ```
 dino/
 ├── client.go        # Client and session management
-├── factory.go       # Session factory and tool registry
+├── factory.go       # Session factory, tool registry, budget
 ├── config.go        # Configuration types
-├── budget.go        # Budget control
-├── tool.go          # Tool wrappers
+├── defined_tool.go  # DefinedTool, ToolContext, ApprovalStore
 ├── types.go         # Core type definitions
-├── session/        # Session implementation
-│   ├── session.go  # Core session logic
-│   ├── event.go    # Event definitions
-│   └── planner.go  # Planner helper
-├── loop/           # Loop detection
-├── queue/          # Task queue
-├── memory/         # Memory management
-└── skills/         # Skill loading
+├── bus.go           # Event bus
+├── session/         # Session implementation
+│   ├── session.go   # Core session logic
+│   ├── event.go     # Event definitions
+│   ├── info.go      # Session info
+│   └── planner.go   # Planner helper
+├── queue/           # Task queue
+├── memory/          # Memory management
+├── permission/      # Tool permission
+├── agent/           # Subagent and prompts
+└── tools/           # Registry, builtin, skill, MCP
 ```
 
 ---

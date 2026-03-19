@@ -105,11 +105,6 @@ func TestShouldDelegate_KeywordMatch(t *testing.T) {
 		TriggerOnKeyword: true,
 		Triggers: []SubagentTrigger{
 			{
-				AgentName: "explore",
-				Keywords:  []string{"search", "find", "explore"},
-				Priority:  10,
-			},
-			{
 				AgentName: "general",
 				Keywords:  []string{"research", "analyze"},
 				Priority:  5,
@@ -127,9 +122,6 @@ func TestShouldDelegate_KeywordMatch(t *testing.T) {
 		input     string
 		wantAgent string
 	}{
-		{"search keyword", "search for files in the codebase", "explore"},
-		{"find keyword", "find all test files", "explore"},
-		{"explore keyword", "explore the project structure", "explore"},
 		{"research keyword", "research about the codebase", "general"},
 		{"analyze keyword", "analyze the code quality", "general"},
 		{"no match", "just a simple greeting", ""},
@@ -158,13 +150,6 @@ func TestShouldDelegate_KeywordMatch(t *testing.T) {
 func TestShouldDelegate_Disabled(t *testing.T) {
 	config := &SubagentConfig{
 		Enabled: false,
-		Triggers: []SubagentTrigger{
-			{
-				AgentName: "explore",
-				Keywords:  []string{"search"},
-				Priority:  10,
-			},
-		},
 	}
 
 	manager := NewSubagentManager(config, &subagentMockFactory{})
@@ -186,9 +171,9 @@ func TestSubagentHandler_ProcessInput(t *testing.T) {
 		TriggerOnKeyword: true,
 		Triggers: []SubagentTrigger{
 			{
-				AgentName: "explore",
-				Keywords:  []string{"search"},
-				Priority:  10,
+				AgentName: "general",
+				Keywords:  []string{"research"},
+				Priority:  5,
 			},
 		},
 	}
@@ -203,7 +188,7 @@ func TestSubagentHandler_ProcessInput(t *testing.T) {
 		t.Fatal("expected handler to be created")
 	}
 
-	handled, err := handler.ProcessInput(nil, "search for files")
+	handled, err := handler.ProcessInput(nil, "research about files")
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}

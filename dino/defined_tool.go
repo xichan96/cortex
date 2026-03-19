@@ -80,14 +80,14 @@ type ToolResult struct {
 
 type ToolExecutor func(args map[string]interface{}, ctx ToolContext) (*ToolResult, error)
 
-type Tool struct {
+type DefinedTool struct {
 	definition  *ToolDefinition
 	executor    ToolExecutor
 	paramSchema map[string]interface{}
 }
 
-func NewTool(id, name, description string, executor ToolExecutor) *Tool {
-	return &Tool{
+func NewDefinedTool(id, name, description string, executor ToolExecutor) *DefinedTool {
+	return &DefinedTool{
 		definition: &ToolDefinition{
 			ID:          id,
 			Name:        name,
@@ -97,35 +97,35 @@ func NewTool(id, name, description string, executor ToolExecutor) *Tool {
 	}
 }
 
-func (t *Tool) WithParameters(params map[string]interface{}) *Tool {
+func (t *DefinedTool) WithParameters(params map[string]interface{}) *DefinedTool {
 	t.definition.Parameters = params
 	return t
 }
 
-func (t *Tool) Name() string {
+func (t *DefinedTool) Name() string {
 	return t.definition.Name
 }
 
-func (t *Tool) Description() string {
+func (t *DefinedTool) Description() string {
 	return t.definition.Description
 }
 
-func (t *Tool) Schema() map[string]interface{} {
+func (t *DefinedTool) Schema() map[string]interface{} {
 	if t.definition.Parameters != nil {
 		return t.definition.Parameters
 	}
 	return map[string]interface{}{}
 }
 
-func (t *Tool) Metadata() types.ToolMetadata {
+func (t *DefinedTool) Metadata() types.ToolMetadata {
 	return types.ToolMetadata{
 		ToolType: "builtin",
 	}
 }
 
-func (t *Tool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+func (t *DefinedTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	if t.executor == nil {
-		return nil, fmt.Errorf("tool %s: no executor (e.g. from ToolFromJSON)", t.definition.Name)
+		return nil, fmt.Errorf("tool %s: no executor (e.g. from DefinedToolFromJSON)", t.definition.Name)
 	}
 	var abortChan <-chan struct{}
 	if ctx != nil {
@@ -157,22 +157,22 @@ func (t *Tool) Execute(ctx context.Context, input map[string]interface{}) (inter
 	}, nil
 }
 
-func (t *Tool) ToAgentTool() types.Tool {
-	return &toolAdapter{
+func (t *DefinedTool) ToAgentTool() types.Tool {
+	return &definedToolAdapter{
 		tool: t,
 	}
 }
 
-type toolAdapter struct {
-	tool *Tool
+type definedToolAdapter struct {
+	tool *DefinedTool
 }
 
-func (a *toolAdapter) Name() string                   { return a.tool.Name() }
-func (a *toolAdapter) Description() string            { return a.tool.Description() }
-func (a *toolAdapter) Schema() map[string]interface{} { return a.tool.Schema() }
-func (a *toolAdapter) Metadata() types.ToolMetadata   { return a.tool.Metadata() }
+func (a *definedToolAdapter) Name() string                   { return a.tool.Name() }
+func (a *definedToolAdapter) Description() string            { return a.tool.Description() }
+func (a *definedToolAdapter) Schema() map[string]interface{} { return a.tool.Schema() }
+func (a *definedToolAdapter) Metadata() types.ToolMetadata   { return a.tool.Metadata() }
 
-func (a *toolAdapter) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+func (a *definedToolAdapter) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	return a.tool.Execute(ctx, input)
 }
 
@@ -183,12 +183,12 @@ type PermissionRequest struct {
 	Metadata   map[string]interface{}
 }
 
-func ToolFromAgent(agentTool types.Tool) *Tool {
+func DefinedToolFromAgent(agentTool types.Tool) *DefinedTool {
 	id := agentTool.Name()
 	if meta := agentTool.Metadata(); meta.SourceNodeName != "" {
 		id = meta.SourceNodeName
 	}
-	return &Tool{
+	return &DefinedTool{
 		definition: &ToolDefinition{
 			ID:          id,
 			Name:        agentTool.Name(),
@@ -199,7 +199,7 @@ func ToolFromAgent(agentTool types.Tool) *Tool {
 	}
 }
 
-func (t *Tool) ToJSON() (string, error) {
+func (t *DefinedTool) ToJSON() (string, error) {
 	data, err := json.Marshal(t.definition)
 	if err != nil {
 		return "", err
@@ -207,12 +207,12 @@ func (t *Tool) ToJSON() (string, error) {
 	return string(data), nil
 }
 
-func ToolFromJSON(jsonStr string) (*Tool, error) {
+func DefinedToolFromJSON(jsonStr string) (*DefinedTool, error) {
 	var def ToolDefinition
 	if err := json.Unmarshal([]byte(jsonStr), &def); err != nil {
 		return nil, err
 	}
-	return &Tool{
+	return &DefinedTool{
 		definition: &def,
 	}, nil
 }
@@ -259,28 +259,35 @@ func (s *ApprovalStore) RequestApproval(
 	sender := s.sender
 	s.mu.Unlock()
 
-	defer func() {
+	sendRequest := func() {
+		if sender != nil {
+			sender.SendToolApprovalRequest(sessionID, requestID, toolName, arguments)
+		}
+	}
+
+	cleanup := func() {
 		s.mu.Lock()
 		delete(s.pending, requestID)
 		s.mu.Unlock()
-	}()
-
-	if sender != nil {
-		sender.SendToolApprovalRequest(sessionID, requestID, toolName, arguments)
 	}
 
 	timer := time.NewTimer(s.timeout)
 	defer timer.Stop()
 
+	sendRequest()
+
 	select {
 	case approved = <-ch:
+		cleanup()
 		if sender != nil {
 			sender.SendToolApprovalResponse(sessionID, requestID, toolName, approved)
 		}
 		return approved, nil
 	case <-ctx.Done():
+		cleanup()
 		return false, ctx.Err()
 	case <-timer.C:
+		cleanup()
 		return false, ErrApprovalTimeout
 	}
 }

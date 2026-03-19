@@ -1,4 +1,5 @@
-package loop
+// loopdetect.go: loop detection for repeated/similar actions.
+package utils
 
 import (
 	"context"
@@ -11,57 +12,57 @@ import (
 )
 
 const (
-	WindowSize = 10
-	MaxRepeats = 5
+	LoopDetectWindowSize = 10
+	LoopDetectMaxRepeats = 5
 )
 
-type Action struct {
+type LoopDetectAction struct {
 	Type      string    `json:"type"`
 	Content   string    `json:"content"`
 	Timestamp time.Time `json:"timestamp"`
 }
 
-type Result struct {
+type LoopDetectResult struct {
 	IsLoop     bool    `json:"is_loop"`
 	Count      int     `json:"count"`
 	Similarity float64 `json:"similarity"`
 	Suggestion string  `json:"suggestion"`
 }
 
-type Stats struct {
+type LoopDetectStats struct {
 	TotalActions int            `json:"total_actions"`
 	ActionCounts map[string]int `json:"action_counts"`
 }
 
-type Config struct {
-	Enabled             bool    `yaml:"enabled"`
-	MaxRepeats          int     `yaml:"max_repeats"`
-	SimilarityThreshold float64 `yaml:"similarity_threshold"`
+type LoopDetectConfig struct {
+	Enabled             bool
+	MaxRepeats          int
+	SimilarityThreshold float64
 }
 
-func DefaultConfig() *Config {
-	return &Config{
+func DefaultLoopDetectConfig() *LoopDetectConfig {
+	return &LoopDetectConfig{
 		Enabled:             true,
-		MaxRepeats:          MaxRepeats,
+		MaxRepeats:          LoopDetectMaxRepeats,
 		SimilarityThreshold: 0.8,
 	}
 }
 
-type Detector interface {
-	Detect(ctx context.Context, sessionID string, action Action) *Result
-	Record(sessionID string, action Action)
+type LoopDetector interface {
+	Detect(ctx context.Context, sessionID string, action LoopDetectAction) *LoopDetectResult
+	Record(sessionID string, action LoopDetectAction)
 	Reset(sessionID string)
-	GetStats(sessionID string) Stats
+	GetStats(sessionID string) LoopDetectStats
 }
 
-type detector struct {
-	config  *Config
+type loopDetector struct {
+	config  *LoopDetectConfig
 	actions map[string]*sessionActions
 	mu      sync.RWMutex
 }
 
 type ringBuffer struct {
-	data  []Action
+	data  []LoopDetectAction
 	size  int
 	head  int
 	count int
@@ -69,12 +70,12 @@ type ringBuffer struct {
 
 func newRingBuffer(size int) *ringBuffer {
 	return &ringBuffer{
-		data: make([]Action, size),
+		data: make([]LoopDetectAction, size),
 		size: size,
 	}
 }
 
-func (r *ringBuffer) Add(action Action) {
+func (r *ringBuffer) add(action LoopDetectAction) {
 	r.data[r.head] = action
 	r.head = (r.head + 1) % r.size
 	if r.count < r.size {
@@ -82,11 +83,11 @@ func (r *ringBuffer) Add(action Action) {
 	}
 }
 
-func (r *ringBuffer) GetAll() []Action {
+func (r *ringBuffer) getAll() []LoopDetectAction {
 	if r.count == 0 {
 		return nil
 	}
-	result := make([]Action, r.count)
+	result := make([]LoopDetectAction, r.count)
 	for i := 0; i < r.count; i++ {
 		idx := (r.head - r.count + i + r.size) % r.size
 		result[i] = r.data[idx]
@@ -94,7 +95,7 @@ func (r *ringBuffer) GetAll() []Action {
 	return result
 }
 
-func (r *ringBuffer) Len() int {
+func (r *ringBuffer) len() int {
 	return r.count
 }
 
@@ -102,31 +103,31 @@ type sessionActions struct {
 	buffer *ringBuffer
 }
 
-func NewDetector(cfg *Config) Detector {
+func NewLoopDetector(cfg *LoopDetectConfig) LoopDetector {
 	if cfg == nil {
-		cfg = DefaultConfig()
+		cfg = DefaultLoopDetectConfig()
 	}
-	return &detector{
+	return &loopDetector{
 		config:  cfg,
 		actions: make(map[string]*sessionActions),
 	}
 }
 
-func (d *detector) Detect(ctx context.Context, sessionID string, action Action) *Result {
+func (d *loopDetector) Detect(ctx context.Context, sessionID string, action LoopDetectAction) *LoopDetectResult {
 	if !d.config.Enabled {
-		return &Result{IsLoop: false}
+		return &LoopDetectResult{IsLoop: false}
 	}
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	sa, exists := d.actions[sessionID]
-	if !exists || sa.buffer.Len() == 0 {
-		return &Result{IsLoop: false}
+	if !exists || sa.buffer.len() == 0 {
+		return &LoopDetectResult{IsLoop: false}
 	}
 
-	actions := sa.buffer.GetAll()
-	windowSize := WindowSize
+	actions := sa.buffer.getAll()
+	windowSize := LoopDetectWindowSize
 	if len(actions) < windowSize {
 		windowSize = len(actions)
 	}
@@ -135,7 +136,7 @@ func (d *detector) Detect(ctx context.Context, sessionID string, action Action) 
 	counts := make(map[string]int)
 
 	for _, a := range recentActions {
-		key := generateKey(a.Type, a.Content)
+		key := loopDetectKey(a.Type, a.Content)
 		counts[key]++
 	}
 
@@ -149,8 +150,8 @@ func (d *detector) Detect(ctx context.Context, sessionID string, action Action) 
 	}
 
 	if maxCount >= d.config.MaxRepeats {
-		suggestion := getSuggestion(maxKey)
-		return &Result{
+		suggestion := loopDetectSuggestion(maxKey)
+		return &LoopDetectResult{
 			IsLoop:     true,
 			Count:      maxCount,
 			Similarity: float64(maxCount) / float64(windowSize),
@@ -158,10 +159,10 @@ func (d *detector) Detect(ctx context.Context, sessionID string, action Action) 
 		}
 	}
 
-	return &Result{IsLoop: false}
+	return &LoopDetectResult{IsLoop: false}
 }
 
-func (d *detector) Record(sessionID string, action Action) {
+func (d *loopDetector) Record(sessionID string, action LoopDetectAction) {
 	if !d.config.Enabled {
 		return
 	}
@@ -172,45 +173,45 @@ func (d *detector) Record(sessionID string, action Action) {
 	sa, exists := d.actions[sessionID]
 	if !exists {
 		sa = &sessionActions{
-			buffer: newRingBuffer(WindowSize),
+			buffer: newRingBuffer(LoopDetectWindowSize),
 		}
 		d.actions[sessionID] = sa
 	}
 
-	sa.buffer.Add(action)
+	sa.buffer.add(action)
 }
 
-func (d *detector) Reset(sessionID string) {
+func (d *loopDetector) Reset(sessionID string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	delete(d.actions, sessionID)
 }
 
-func (d *detector) GetStats(sessionID string) Stats {
+func (d *loopDetector) GetStats(sessionID string) LoopDetectStats {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
 	sa, exists := d.actions[sessionID]
 	if !exists {
-		return Stats{
+		return LoopDetectStats{
 			ActionCounts: make(map[string]int),
 		}
 	}
 
-	actions := sa.buffer.GetAll()
+	actions := sa.buffer.getAll()
 	counts := make(map[string]int)
 	for _, a := range actions {
-		key := generateKey(a.Type, a.Content)
+		key := loopDetectKey(a.Type, a.Content)
 		counts[key]++
 	}
 
-	return Stats{
-		TotalActions: sa.buffer.Len(),
+	return LoopDetectStats{
+		TotalActions: sa.buffer.len(),
 		ActionCounts: counts,
 	}
 }
 
-func generateKey(toolName, input string) string {
+func loopDetectKey(toolName, input string) string {
 	if toolName == "execute_command" || toolName == "bash" {
 		var args struct {
 			Command string `json:"command"`
@@ -230,7 +231,7 @@ func generateKey(toolName, input string) string {
 	return toolName + ":" + hex.EncodeToString(h.Sum(nil))
 }
 
-func getSuggestion(key string) string {
+func loopDetectSuggestion(key string) string {
 	if strings.Contains(key, "bash") || strings.Contains(key, "execute_command") {
 		return "Detected repeated command execution. Consider trying a different approach."
 	}

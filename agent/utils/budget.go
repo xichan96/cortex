@@ -1,4 +1,5 @@
-package dino
+// budget.go: session-level quota for tokens, tool calls, and time.
+package utils
 
 import (
 	"context"
@@ -30,6 +31,13 @@ type BudgetState struct {
 	MaxTokens  int   `json:"max_tokens"`
 	MaxCalls   int   `json:"max_calls"`
 	MaxTimeMs  int64 `json:"max_time_ms"`
+}
+
+type BudgetConfig struct {
+	Enabled      bool
+	MaxTokens    int
+	MaxToolCalls int
+	MaxTimeMs    int64
 }
 
 type Budget interface {

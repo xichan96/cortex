@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
+	agentutils "github.com/xichan96/cortex/agent/utils"
 	"github.com/xichan96/cortex/agent/types"
-	dinoLoop "github.com/xichan96/cortex/dino/loop"
 )
 
 // nonFatalTool prevents tool execution errors from terminating the agent loop.
@@ -166,15 +166,14 @@ func (e *LoopDetectedError) Error() string {
 	return fmt.Sprintf("Loop detected with tool %s. %s", e.ToolName, e.Suggestion)
 }
 
-// loopDetectingTool prevents tools from being called in a loop.
 type loopDetectingTool struct {
 	inner     types.Tool
 	sessionID string
-	detector  dinoLoop.Detector
+	detector  agentutils.LoopDetector
 	sender    ToolEventSender
 }
 
-func WrapLoopDetection(inner types.Tool, sessionID string, detector dinoLoop.Detector, sender ToolEventSender) types.Tool {
+func WrapLoopDetection(inner types.Tool, sessionID string, detector agentutils.LoopDetector, sender ToolEventSender) types.Tool {
 	if inner == nil || sessionID == "" || detector == nil {
 		return inner
 	}
@@ -195,7 +194,7 @@ func (t *loopDetectingTool) Execute(ctx context.Context, input map[string]interf
 		content = string(inputBytes)
 	}
 
-	action := dinoLoop.Action{
+	action := agentutils.LoopDetectAction{
 		Type:    t.inner.Name(),
 		Content: content,
 	}

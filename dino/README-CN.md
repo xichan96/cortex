@@ -174,14 +174,10 @@ factory, _ := dino.NewDinoFactory(cfg, dino.WithStreamEventSender(handler))
 ### 任务队列
 
 ```go
-session, _ := client.CreateSession(ctx, "queue-session")
+import "github.com/xichan96/cortex/dino/queue"
 
-// 启用队列
-session, _ = client.CreateSession(ctx, "queue-session", 
-    dino.WithQueueEnabled(100, 10))
-
-// 入队任务
-resultChan, _ := session.Enqueue("任务 1", dinoQueue.Normal)
+session, _ := client.CreateSession(ctx, "queue-session", dino.WithQueueEnabled(100, 10))
+resultChan, _ := session.Enqueue("任务 1", queue.PriorityNormal)
 result := <-resultChan
 ```
 
@@ -222,19 +218,21 @@ session.SubscribeFunc(func(event *dino.Event) {
 ```
 dino/
 ├── client.go        # 客户端和会话管理
-├── factory.go       # 会话工厂和工具注册表
+├── factory.go       # 会话工厂、工具注册表、预算
 ├── config.go        # 配置类型
-├── budget.go        # 预算控制
-├── tool.go          # 工具包装器
+├── defined_tool.go  # DefinedTool、ToolContext、ApprovalStore
 ├── types.go         # 核心类型定义
-├── session/        # 会话实现
-│   ├── session.go  # 核心会话逻辑
-│   ├── event.go    # 事件定义
-│   └── planner.go  # 计划助手
-├── loop/           # 循环检测
-├── queue/          # 任务队列
-├── memory/         # 内存管理
-└── skills/         # 技能加载
+├── bus.go           # 事件总线
+├── session/         # 会话实现
+│   ├── session.go   # 核心会话逻辑
+│   ├── event.go     # 事件定义
+│   ├── info.go      # 会话信息
+│   └── planner.go   # 计划助手
+├── queue/           # 任务队列
+├── memory/          # 内存管理
+├── permission/      # 工具权限
+├── agent/           # 子代理与提示词
+└── tools/           # 注册表、内置工具、技能、MCP
 ```
 
 ---

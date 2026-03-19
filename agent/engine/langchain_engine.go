@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/xichan96/cortex/agent/hooks"
-	"github.com/xichan96/cortex/agent/ratelimit"
+	"github.com/xichan96/cortex/agent/utils"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
 	"github.com/xichan96/cortex/pkg/logger"
@@ -357,7 +357,7 @@ func (e *LangChainAgentEngine) SetConfig(ctx context.Context, config *types.Agen
 }
 
 // SetRateLimiter sets the rate limiter (not implemented for LangChain engine)
-func (e *LangChainAgentEngine) SetRateLimiter(ctx context.Context, limiter ratelimit.RateLimiter) {
+func (e *LangChainAgentEngine) SetRateLimiter(ctx context.Context, limiter utils.RateLimiter) {
 	// LangChain engine does not implement rate limiting
 }
 

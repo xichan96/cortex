@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	agentutils "github.com/xichan96/cortex/agent/utils"
 	"github.com/xichan96/cortex/agent/types"
-	"github.com/xichan96/cortex/dino/loop"
 	"github.com/xichan96/cortex/dino/queue"
 	"github.com/xichan96/cortex/dino/session"
 	"github.com/xichan96/cortex/dino/tools"
@@ -2310,51 +2310,51 @@ func TestBudget_RecordTokens(t *testing.T) {
 }
 
 func TestLoopDetector_NewDetector(t *testing.T) {
-	cfg := &loop.Config{
+	cfg := &agentutils.LoopDetectConfig{
 		Enabled:             true,
 		MaxRepeats:          5,
 		SimilarityThreshold: 0.8,
 	}
 
-	detector := loop.NewDetector(cfg)
+	detector := agentutils.NewLoopDetector(cfg)
 	if detector == nil {
 		t.Fatal("Detector should not be nil")
 	}
 }
 
 func TestLoopDetector_NewDetectorNilConfig(t *testing.T) {
-	detector := loop.NewDetector(nil)
+	detector := agentutils.NewLoopDetector(nil)
 	if detector == nil {
 		t.Fatal("Detector should not be nil")
 	}
 }
 
 func TestLoopDetector_RecordAndDetect(t *testing.T) {
-	cfg := &loop.Config{
+	cfg := &agentutils.LoopDetectConfig{
 		Enabled:             true,
 		MaxRepeats:          3,
 		SimilarityThreshold: 0.8,
 	}
 
-	detector := loop.NewDetector(cfg)
+	detector := agentutils.NewLoopDetector(cfg)
 
-	detector.Record("session-1", loop.Action{
+	detector.Record("session-1", agentutils.LoopDetectAction{
 		Type:      "tool_call",
 		Content:   `{"command": "ls"}`,
 		Timestamp: time.Now(),
 	})
-	detector.Record("session-1", loop.Action{
+	detector.Record("session-1", agentutils.LoopDetectAction{
 		Type:      "tool_call",
 		Content:   `{"command": "ls"}`,
 		Timestamp: time.Now(),
 	})
-	detector.Record("session-1", loop.Action{
+	detector.Record("session-1", agentutils.LoopDetectAction{
 		Type:      "tool_call",
 		Content:   `{"command": "ls"}`,
 		Timestamp: time.Now(),
 	})
 
-	result := detector.Detect(context.Background(), "session-1", loop.Action{})
+	result := detector.Detect(context.Background(), "session-1", agentutils.LoopDetectAction{})
 	if !result.IsLoop {
 		t.Error("Should detect a loop")
 	}
@@ -2365,44 +2365,44 @@ func TestLoopDetector_RecordAndDetect(t *testing.T) {
 }
 
 func TestLoopDetector_Disabled(t *testing.T) {
-	cfg := &loop.Config{
+	cfg := &agentutils.LoopDetectConfig{
 		Enabled: false,
 	}
 
-	detector := loop.NewDetector(cfg)
+	detector := agentutils.NewLoopDetector(cfg)
 
-	detector.Record("session-1", loop.Action{
+	detector.Record("session-1", agentutils.LoopDetectAction{
 		Type:      "tool_call",
 		Content:   `{"command": "ls"}`,
 		Timestamp: time.Now(),
 	})
 
-	result := detector.Detect(context.Background(), "session-1", loop.Action{})
+	result := detector.Detect(context.Background(), "session-1", agentutils.LoopDetectAction{})
 	if result.IsLoop {
 		t.Error("Should not detect loop when disabled")
 	}
 }
 
 func TestLoopDetector_NoActions(t *testing.T) {
-	cfg := loop.DefaultConfig()
-	detector := loop.NewDetector(cfg)
+	cfg := agentutils.DefaultLoopDetectConfig()
+	detector := agentutils.NewLoopDetector(cfg)
 
-	result := detector.Detect(context.Background(), "session-new", loop.Action{})
+	result := detector.Detect(context.Background(), "session-new", agentutils.LoopDetectAction{})
 	if result.IsLoop {
 		t.Error("Should not detect loop for new session")
 	}
 }
 
 func TestLoopDetector_Reset(t *testing.T) {
-	cfg := &loop.Config{
+	cfg := &agentutils.LoopDetectConfig{
 		Enabled:             true,
 		MaxRepeats:          3,
 		SimilarityThreshold: 0.8,
 	}
 
-	detector := loop.NewDetector(cfg)
+	detector := agentutils.NewLoopDetector(cfg)
 
-	detector.Record("session-1", loop.Action{
+	detector.Record("session-1", agentutils.LoopDetectAction{
 		Type:      "tool_call",
 		Content:   `{"command": "ls"}`,
 		Timestamp: time.Now(),
@@ -2410,22 +2410,22 @@ func TestLoopDetector_Reset(t *testing.T) {
 
 	detector.Reset("session-1")
 
-	result := detector.Detect(context.Background(), "session-1", loop.Action{})
+	result := detector.Detect(context.Background(), "session-1", agentutils.LoopDetectAction{})
 	if result.IsLoop {
 		t.Error("Should not detect loop after reset")
 	}
 }
 
 func TestLoopDetector_GetStats(t *testing.T) {
-	cfg := loop.DefaultConfig()
-	detector := loop.NewDetector(cfg)
+	cfg := agentutils.DefaultLoopDetectConfig()
+	detector := agentutils.NewLoopDetector(cfg)
 
-	detector.Record("session-1", loop.Action{
+	detector.Record("session-1", agentutils.LoopDetectAction{
 		Type:      "tool_call",
 		Content:   `{"command": "ls"}`,
 		Timestamp: time.Now(),
 	})
-	detector.Record("session-1", loop.Action{
+	detector.Record("session-1", agentutils.LoopDetectAction{
 		Type:      "tool_call",
 		Content:   `{"command": "ls"}`,
 		Timestamp: time.Now(),
@@ -2438,8 +2438,8 @@ func TestLoopDetector_GetStats(t *testing.T) {
 }
 
 func TestLoopDetector_GetStatsEmpty(t *testing.T) {
-	cfg := loop.DefaultConfig()
-	detector := loop.NewDetector(cfg)
+	cfg := agentutils.DefaultLoopDetectConfig()
+	detector := agentutils.NewLoopDetector(cfg)
 
 	stats := detector.GetStats("session-nonexistent")
 	if stats.TotalActions != 0 {
@@ -3250,14 +3250,14 @@ func TestConfig_DefaultValues(t *testing.T) {
 }
 
 func TestLoopConfig_DefaultConfig(t *testing.T) {
-	cfg := loop.DefaultConfig()
+	cfg := agentutils.DefaultLoopDetectConfig()
 
 	if !cfg.Enabled {
 		t.Error("Should be enabled by default")
 	}
 
-	if cfg.MaxRepeats != loop.MaxRepeats {
-		t.Errorf("Expected MaxRepeats %d, got %d", loop.MaxRepeats, cfg.MaxRepeats)
+	if cfg.MaxRepeats != agentutils.LoopDetectMaxRepeats {
+		t.Errorf("Expected MaxRepeats %d, got %d", agentutils.LoopDetectMaxRepeats, cfg.MaxRepeats)
 	}
 
 	if cfg.SimilarityThreshold != 0.8 {
@@ -3266,7 +3266,7 @@ func TestLoopConfig_DefaultConfig(t *testing.T) {
 }
 
 func TestLoopStats(t *testing.T) {
-	stats := loop.Stats{
+	stats := agentutils.LoopDetectStats{
 		TotalActions: 10,
 		ActionCounts: map[string]int{
 			"action1": 5,
@@ -3284,7 +3284,7 @@ func TestLoopStats(t *testing.T) {
 }
 
 func TestLoopAction(t *testing.T) {
-	action := loop.Action{
+	action := agentutils.LoopDetectAction{
 		Type:      "tool_call",
 		Content:   `{"command": "ls"}`,
 		Timestamp: time.Now(),
@@ -3296,7 +3296,7 @@ func TestLoopAction(t *testing.T) {
 }
 
 func TestLoopResult(t *testing.T) {
-	result := loop.Result{
+	result := agentutils.LoopDetectResult{
 		IsLoop:     true,
 		Count:      5,
 		Similarity: 0.9,

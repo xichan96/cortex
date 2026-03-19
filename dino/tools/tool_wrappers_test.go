@@ -6,8 +6,8 @@ import (
 	"math"
 	"testing"
 
+	agentutils "github.com/xichan96/cortex/agent/utils"
 	"github.com/xichan96/cortex/agent/types"
-	dinoLoop "github.com/xichan96/cortex/dino/loop"
 )
 
 // MockTool implements types.Tool for testing
@@ -88,19 +88,20 @@ func TestToolResultLimiter(t *testing.T) {
 	}
 }
 
-// MockDetector implements dinoLoop.Detector
 type MockDetector struct {
-	actions []dinoLoop.Action
+	actions []agentutils.LoopDetectAction
 }
 
-func (d *MockDetector) Detect(ctx context.Context, sessionID string, action dinoLoop.Action) *dinoLoop.Result {
-	return &dinoLoop.Result{IsLoop: false}
+func (d *MockDetector) Detect(ctx context.Context, sessionID string, action agentutils.LoopDetectAction) *agentutils.LoopDetectResult {
+	return &agentutils.LoopDetectResult{IsLoop: false}
 }
-func (d *MockDetector) Record(sessionID string, action dinoLoop.Action) {
+func (d *MockDetector) Record(sessionID string, action agentutils.LoopDetectAction) {
 	d.actions = append(d.actions, action)
 }
-func (d *MockDetector) Reset(sessionID string)                   {}
-func (d *MockDetector) GetStats(sessionID string) dinoLoop.Stats { return dinoLoop.Stats{} }
+func (d *MockDetector) Reset(sessionID string) {}
+func (d *MockDetector) GetStats(sessionID string) agentutils.LoopDetectStats {
+	return agentutils.LoopDetectStats{}
+}
 
 func TestLoopDetectionSerialization(t *testing.T) {
 	mockTool := &MockTool{name: "test_tool"}

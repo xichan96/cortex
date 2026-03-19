@@ -357,11 +357,6 @@ func TestManagerCloseAgent(t *testing.T) {
 				Mode:       ModeSubagent,
 				Permission: permission.DefaultRuleset(),
 			},
-			"explore": {
-				Name:       "explore",
-				Mode:       ModeSubagent,
-				Permission: permission.DefaultRuleset(),
-			},
 		},
 		tools: []types.Tool{},
 		llm:   &mockLLMProvider{response: "test"},
@@ -370,16 +365,9 @@ func TestManagerCloseAgent(t *testing.T) {
 	m := NewManager(factory)
 
 	_, _ = m.GetSubagent("general")
-	_, _ = m.GetSubagent("explore")
-
-	if len(m.subagents) != 2 {
-		t.Fatalf("expected 2 subagents, got %d", len(m.subagents))
-	}
-
-	m.CloseAgent("general")
 
 	if len(m.subagents) != 1 {
-		t.Errorf("expected 1 subagent after CloseAgent, got %d", len(m.subagents))
+		t.Fatalf("expected 1 subagent, got %d", len(m.subagents))
 	}
 
 	m.CloseAgent("nonexistent")

@@ -22,17 +22,17 @@ type Config struct {
 	ToolExecutionTimeout  time.Duration            `yaml:"tool_execution_timeout"`
 	ToolTimeouts          map[string]time.Duration `yaml:"tool_timeouts"`
 	ToolTimeoutCalculator func(toolName string, input map[string]interface{}) time.Duration
-	LoopDetection         LoopDetectionConfig `yaml:"loop_detection"`
-	Budget                BudgetConfig        `yaml:"budget"`
-	Tools                 ToolConfig          `yaml:"tools"`
+	LoopDetection         LoopDetectionConfig    `yaml:"loop_detection"`
+	Budget                BudgetConfig           `yaml:"budget"`
+	Tools                 ToolConfig             `yaml:"tools"`
 	Permission            map[string]interface{} `yaml:"permission"`
-	WorkspaceRoot         string              `yaml:"workspace_root"`
-	Skills                SkillsConfig        `yaml:"skills"`
-	Provider              ProviderConfig      `yaml:"provider"`
-	PlannerMode           PlannerModeConfig   `yaml:"planner_mode"`
-	Memory                MemoryConfig        `yaml:"memory"`
-	Subagent              agent.SubagentConfig `yaml:"subagent"`
-	MCP                   MCPConfig           `yaml:"mcp"`
+	WorkspaceRoot         string                 `yaml:"workspace_root"`
+	Skills                SkillsConfig           `yaml:"skills"`
+	Provider              ProviderConfig         `yaml:"provider"`
+	PlannerMode           PlannerModeConfig      `yaml:"planner_mode"`
+	Memory                MemoryConfig           `yaml:"memory"`
+	Subagent              agent.SubagentConfig   `yaml:"subagent"`
+	MCP                   MCPConfig              `yaml:"mcp"`
 }
 
 type MemoryConfig struct {
@@ -188,14 +188,8 @@ func DefaultConfig() *Config {
 			TriggerOnKeyword: true,
 			Triggers: []agent.SubagentTrigger{
 				{
-					AgentName: "explore",
-					Keywords:  []string{"search", "find", "explore", "lookup", "locate", "查找", "搜索", "探索"},
-					Patterns:  []string{`(?i)(search|find|explore|lookup|locate)\s+(for|.*\s+in\s+)`, `(?i)where\s+is\s+`},
-					Priority:  10,
-				},
-				{
 					AgentName: "general",
-					Keywords:  []string{"research", "analyze", "investigate", "research", "study", "research", "研究", "分析", "调查"},
+					Keywords:  []string{"research", "analyze", "investigate", "study", "研究", "分析", "调查"},
 					Patterns:  []string{`(?i)(research|analyze|investigate|study)\s+(about|on|the)`, `(?i)what\s+is\s+.*about`},
 					Priority:  5,
 				},

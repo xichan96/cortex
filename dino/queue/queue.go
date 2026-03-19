@@ -122,6 +122,9 @@ func (q *queue) run() {
 			select {
 			case q.outputChan <- item:
 			case <-q.done:
+				q.mu.Lock()
+				delete(q.processing, item.ID)
+				q.mu.Unlock()
 				return
 			}
 		}

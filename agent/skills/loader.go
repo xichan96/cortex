@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xichan96/cortex/agent/skills/prompt"
 	"github.com/xichan96/cortex/pkg/logger"
 	"gopkg.in/yaml.v3"
 )
@@ -230,4 +231,24 @@ func parseMeta(meta map[string]interface{}, spec *Skill) {
 			}
 		}
 	}
+}
+
+func BuildSystemPromptInjection(skills []Skill) string {
+	entries := make([]prompt.Entry, 0, len(skills))
+	for _, s := range skills {
+		entries = append(entries, prompt.Entry{Name: s.Name, Description: s.Description, Path: s.Path})
+	}
+	return prompt.BuildSystemPromptInjection(entries)
+}
+
+func BuildSystemPromptInjectionWithTriggers(skills []*Skill) string {
+	entries := make([]*prompt.EntryWithTriggers, 0, len(skills))
+	for _, s := range skills {
+		e := &prompt.EntryWithTriggers{Name: s.Name, Description: s.Description}
+		for _, t := range s.Triggers {
+			e.Triggers = append(e.Triggers, struct{ Type, Pattern string }{Type: t.Type, Pattern: t.Pattern})
+		}
+		entries = append(entries, e)
+	}
+	return prompt.BuildSystemPromptInjectionWithTriggers(entries)
 }

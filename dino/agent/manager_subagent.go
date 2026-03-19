@@ -165,28 +165,24 @@ func (t *SubagentTool) Name() string {
 }
 
 func (t *SubagentTool) Description() string {
-	return "Delegate complex tasks to specialized subagents (explore, general) for better results"
+	return "Delegate complex tasks to specialized subagents (general) for better results"
 }
 
 func (t *SubagentTool) Schema() map[string]interface{} {
 	return map[string]interface{}{
-		"name":        t.Name(),
-		"description": t.Description(),
-		"parameters": map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"agent": map[string]interface{}{
-					"type":        "string",
-					"description": "The agent to delegate to: 'explore' for code search, 'general' for complex research",
-					"enum":        []string{"explore", "general"},
-				},
-				"task": map[string]interface{}{
-					"type":        "string",
-					"description": "The task description for the subagent",
-				},
+		"type": "object",
+		"properties": map[string]interface{}{
+			"agent": map[string]interface{}{
+				"type":        "string",
+				"description": "The agent to delegate to: 'general' for complex research",
+				"enum":        []string{"general"},
 			},
-			"required": []string{"agent", "task"},
+			"task": map[string]interface{}{
+				"type":        "string",
+				"description": "The task description for the subagent",
+			},
 		},
+		"required": []string{"agent", "task"},
 	}
 }
 

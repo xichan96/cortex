@@ -14,14 +14,63 @@ import (
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/logger"
 
+	agentskills "github.com/xichan96/cortex/agent/skills"
+	agentutils "github.com/xichan96/cortex/agent/utils"
 	dinoAgent "github.com/xichan96/cortex/dino/agent"
-	dinoLoop "github.com/xichan96/cortex/dino/loop"
 	"github.com/xichan96/cortex/dino/memory"
 	"github.com/xichan96/cortex/dino/permission"
 	"github.com/xichan96/cortex/dino/session"
-	dinoSkills "github.com/xichan96/cortex/dino/skills"
 	dinoTools "github.com/xichan96/cortex/dino/tools"
 )
+
+func parseShellCommand(cmd string) []string {
+	var args []string
+	var current strings.Builder
+	inQuote := false
+	var quoteChar rune
+
+	for i := 0; i < len(cmd); i++ {
+		c := rune(cmd[i])
+
+		if !inQuote && (c == '"' || c == '\'') {
+			inQuote = true
+			quoteChar = c
+		} else if inQuote && c == quoteChar {
+			inQuote = false
+		} else if !inQuote && c == ' ' {
+			if current.Len() > 0 {
+				args = append(args, current.String())
+				current.Reset()
+			}
+		} else {
+			current.WriteRune(c)
+		}
+	}
+
+	if current.Len() > 0 {
+		args = append(args, current.String())
+	}
+
+	return args
+}
+
+type Budget = agentutils.Budget
+type Cost = agentutils.Cost
+type BudgetRequest = agentutils.BudgetRequest
+type BudgetResult = agentutils.BudgetResult
+type BudgetState = agentutils.BudgetState
+
+func NewBudget(cfg *BudgetConfig) Budget {
+	if cfg == nil {
+		return agentutils.NewBudget(nil)
+	}
+	return agentutils.NewBudget(&agentutils.BudgetConfig{
+		Enabled:      cfg.Enabled,
+		MaxTokens:    cfg.MaxTokens,
+		MaxToolCalls: cfg.MaxToolCalls,
+		MaxTimeMs:    cfg.MaxTimeMs,
+	})
+}
 
 type memoryAdapter struct {
 	provider memory.Provider
@@ -45,9 +94,8 @@ func (m *memoryAdapter) SaveContext(ctx context.Context, input, output map[strin
 			inputJSON = []byte(fmt.Sprintf("%v", input))
 		}
 		if err := m.provider.AddMessage(ctx, memory.Message{
-			Role:      role,
-			Content:   fmt.Sprintf("Input: %s", string(inputJSON)),
-			Timestamp: time.Now(),
+			Role:    role,
+			Content: fmt.Sprintf("Input: %s", string(inputJSON)),
 		}); err != nil {
 			return err
 		}
@@ -60,9 +108,8 @@ func (m *memoryAdapter) SaveContext(ctx context.Context, input, output map[strin
 			outputJSON = []byte(fmt.Sprintf("%v", output))
 		}
 		if err := m.provider.AddMessage(ctx, memory.Message{
-			Role:      "assistant",
-			Content:   fmt.Sprintf("Output: %s", string(outputJSON)),
-			Timestamp: time.Now(),
+			Role:    "assistant",
+			Content: fmt.Sprintf("Output: %s", string(outputJSON)),
 		}); err != nil {
 			return err
 		}
@@ -150,7 +197,7 @@ type dinoFactory struct {
 	config          *Config
 	llmProvider     types.LLMProvider
 	tools           *dinoTools.Registry
-	loopDetector    dinoLoop.Detector
+	loopDetector    agentutils.LoopDetector
 	budget          Budget
 	skills          []*Skill
 	approvalStore   *ApprovalStore
@@ -161,7 +208,7 @@ type dinoFactory struct {
 	mcpManager      *dinoTools.MCPManager
 }
 
-func (f *dinoFactory) LoopDetector() dinoLoop.Detector {
+func (f *dinoFactory) LoopDetector() agentutils.LoopDetector {
 	return f.loopDetector
 }
 
@@ -191,7 +238,7 @@ func (f *dinoFactory) GetAgent(name string) (*dinoAgent.Info, bool) {
 	return info, exists
 }
 
-func (f *dinoFactory) RecordLoop(sessionID string, action dinoLoop.Action) {
+func (f *dinoFactory) RecordLoop(sessionID string, action agentutils.LoopDetectAction) {
 	f.loopDetector.Record(sessionID, action)
 }
 
@@ -199,7 +246,7 @@ func (f *dinoFactory) RecordTokens(ctx context.Context, sessionID string, tokens
 	f.budget.RecordTokens(ctx, sessionID, tokens)
 }
 
-func (f *dinoFactory) Detect(ctx context.Context, sessionID string, action dinoLoop.Action) *dinoLoop.Result {
+func (f *dinoFactory) Detect(ctx context.Context, sessionID string, action agentutils.LoopDetectAction) *agentutils.LoopDetectResult {
 	return f.loopDetector.Detect(ctx, sessionID, action)
 }
 
@@ -227,13 +274,12 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 	}
 
 	var loadedSkills []*Skill
-	var cortexSkills []*dinoSkills.Skill
+	skillRegistry := agentskills.NewRegistry()
 	if cfg.Skills.Path != "" {
-		loader := dinoSkills.NewLoader()
-		if err := loader.LoadFromDirs(context.Background(), []string{cfg.Skills.Path}); err != nil {
+		if err := skillRegistry.LoadFromDirs(context.Background(), logger.GetLogger(), []string{cfg.Skills.Path}); err != nil {
 			logger.Warn("failed to load skills", slog.String("path", cfg.Skills.Path), slog.String("error", err.Error()))
 		} else {
-			cortexSkills = loader.All()
+			cortexSkills := skillRegistry.All()
 			logger.Info("loaded skills", slog.Int("count", len(cortexSkills)), slog.String("path", cfg.Skills.Path))
 			for _, s := range cortexSkills {
 				logger.Info("skill loaded", slog.String("name", s.Name))
@@ -243,12 +289,11 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 					Prompt:      s.Content,
 				})
 			}
-		}
-	}
-
-	if len(cortexSkills) > 0 {
-		if err := toolRegistry.Register(dinoTools.NewSkillTool(cortexSkills)); err != nil {
-			logger.Warn("failed to register skill tool", slog.String("error", err.Error()))
+			if len(cortexSkills) > 0 {
+				if err := toolRegistry.Register(dinoTools.NewSkillTool(cortexSkills)); err != nil {
+					logger.Warn("failed to register skill tool", slog.String("error", err.Error()))
+				}
+			}
 		}
 	}
 
@@ -258,7 +303,7 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 		config:      cfg,
 		llmProvider: llmProvider,
 		tools:       toolRegistry,
-		loopDetector: dinoLoop.NewDetector(&dinoLoop.Config{
+		loopDetector: agentutils.NewLoopDetector(&agentutils.LoopDetectConfig{
 			Enabled:             cfg.LoopDetection.Enabled,
 			MaxRepeats:          cfg.LoopDetection.MaxRepeats,
 			SimilarityThreshold: cfg.LoopDetection.SimilarityThreshold,
@@ -282,7 +327,7 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 					Transport: serverCfg.Type,
 					Headers:   serverCfg.Headers,
 					Type:      serverCfg.Type,
-					Command:   strings.Split(serverCfg.Command, " "),
+					Command:   parseShellCommand(serverCfg.Command),
 					Env:       serverCfg.Env,
 				}
 				if err := f.mcpManager.AddServer(context.Background(), name, serverConfig); err != nil {
@@ -468,28 +513,45 @@ func (f *dinoFactory) GetSkills() []*Skill {
 	return f.skills
 }
 
+const shutdownTimeout = 30 * time.Second
+
 func (f *dinoFactory) Shutdown(ctx context.Context) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
 
-	for _, sess := range f.sessions {
-		sess.Close()
+	done := make(chan error, 1)
+	go func() {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+
+		for _, sess := range f.sessions {
+			sess.Close()
+		}
+		f.sessions = make(map[string]*session.Session)
+
+		if resettable, ok := f.budget.(interface{ ResetAll() }); ok {
+			resettable.ResetAll()
+		}
+
+		if f.subagentManager != nil {
+			f.subagentManager.Close()
+		}
+
+		if f.mcpManager != nil {
+			f.mcpManager.Close()
+		}
+
+		done <- nil
+	}()
+
+	select {
+	case <-shutdownCtx.Done():
+		return fmt.Errorf("shutdown timed out after %v", shutdownTimeout)
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-
-	f.sessions = make(map[string]*session.Session)
-	if resettable, ok := f.budget.(interface{ ResetAll() }); ok {
-		resettable.ResetAll()
-	}
-
-	if f.subagentManager != nil {
-		f.subagentManager.Close()
-	}
-
-	if f.mcpManager != nil {
-		f.mcpManager.Close()
-	}
-
-	return nil
 }
 
 func loadBuiltinTools(reg *dinoTools.Registry, workspace string) error {

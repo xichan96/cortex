@@ -13,7 +13,7 @@ import (
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/logger"
 
-	dinoLoop "github.com/xichan96/cortex/dino/loop"
+	agentutils "github.com/xichan96/cortex/agent/utils"
 	dinoQueue "github.com/xichan96/cortex/dino/queue"
 )
 
@@ -76,9 +76,9 @@ func WithPlannerEnabled(enabled bool, prompt string, autoApprove bool) Option {
 }
 
 type SessionFactory interface {
-	RecordLoop(sessionID string, action dinoLoop.Action)
+	RecordLoop(sessionID string, action agentutils.LoopDetectAction)
 	RecordTokens(ctx context.Context, sessionID string, tokens int)
-	Detect(ctx context.Context, sessionID string, action dinoLoop.Action) *dinoLoop.Result
+	Detect(ctx context.Context, sessionID string, action agentutils.LoopDetectAction) *agentutils.LoopDetectResult
 }
 
 type budgetChecker interface {
@@ -268,7 +268,7 @@ func (s *Session) processQueueItem(item *dinoQueue.Item) {
 	duration := time.Since(startTime)
 
 	if s.factory != nil {
-		s.factory.RecordLoop(s.id, dinoLoop.Action{Type: "output", Content: result.Content})
+		s.factory.RecordLoop(s.id, agentutils.LoopDetectAction{Type: "output", Content: result.Content})
 	}
 	if result.ToolCalls != nil && s.factory != nil {
 		s.factory.RecordTokens(s.ctx, s.id, result.Usage.TotalTokens)
@@ -307,7 +307,7 @@ func (s *Session) processInputWithResult(input string) *ExecuteResponse {
 	})
 
 	if s.factory != nil {
-		if result := s.factory.Detect(s.ctx, s.id, dinoLoop.Action{Type: "input", Content: input}); result != nil {
+		if result := s.factory.Detect(s.ctx, s.id, agentutils.LoopDetectAction{Type: "input", Content: input}); result != nil {
 			if result.IsLoop {
 				logger.Warn("[session] loop detected",
 					slog.String("session_id", s.id),
@@ -411,12 +411,8 @@ func (s *Session) processInputWithResult(input string) *ExecuteResponse {
 
 	if execResult.Usage.TotalTokens > 0 {
 		s.emit(&Event{
-			Type: EventTypeTokenUsage,
-			Usage: &Usage{
-				PromptTokens:     execResult.Usage.PromptTokens,
-				CompletionTokens: execResult.Usage.CompletionTokens,
-				TotalTokens:      execResult.Usage.TotalTokens,
-			},
+			Type:  EventTypeTokenUsage,
+			Usage: &execResult.Usage,
 		})
 	}
 
@@ -425,11 +421,7 @@ func (s *Session) processInputWithResult(input string) *ExecuteResponse {
 	return &ExecuteResponse{
 		SessionID: s.id,
 		Content:   execResult.Output,
-		Usage: Usage{
-			PromptTokens:     execResult.Usage.PromptTokens,
-			CompletionTokens: execResult.Usage.CompletionTokens,
-			TotalTokens:      execResult.Usage.TotalTokens,
-		},
+		Usage:     execResult.Usage,
 	}
 }
 

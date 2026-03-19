@@ -12,10 +12,12 @@
   · <a href="#特性">特性</a>
   · <a href="#快速开始">快速开始</a>
   · <a href="#核心组件">核心组件</a>
+  · <a href="#dino-高级编排">Dino 高级编排</a>
   · <a href="#工具生态">工具生态</a>
   · <a href="#技能系统-agent-skills">技能系统</a>
   · <a href="#记忆系统">记忆系统</a>
   · <a href="#示例">示例</a>
+  · <a href="#触发器-triggers">触发器</a>
   · <a href="#许可证">许可证</a>
 </p>
 
@@ -31,18 +33,21 @@ CORTEX 旨在融合轻量级框架的易用性与 Go 语言的稳健性能。它
 
 设计理念上，CORTEX 侧重于轻量化和易集成性。针对无需复杂流程编排的场景，CORTEX 摒弃了繁重的依赖和配置负担，在保留核心 Agent 能力的同时，大幅降低了集成门槛和资源占用，是构建高效、嵌入式 AI 应用的理想选择。
 
+**`agent` 与 Dino**：**`agent`**（`github.com/xichan96/cortex/agent`）是基础用法——不需要复杂多轮对话与「模型自动决策并连续调用工具」时，直接集成进业务项目即可：例如单次调用生成报告、摘要、抽取、分类、结构化输出等，用 `engine` + `llm` + 可选工具，不必引入 Dino。**Dino**（`github.com/xichan96/cortex/dino`）是高级用法——面向多轮对话、自动决策并多步工具调用的**智能体**（助手、IDE Agent、客服机器人等），并叠加上下文隔离、预算、审批、事件观测等治理能力。
+
 ## 特性
 
 - **智能代理引擎**：核心引擎支持复杂的工具调用与逻辑推理，轻松构建智能 Agent。
 - **广泛的 LLM 支持**：深度集成 OpenAI、DeepSeek、火山引擎 (Volce) 等主流模型，并支持自定义 Provider。
 - **多模态交互**：原生支持文本、图像等多模态数据的处理与交互。
 - **动态技能 (Skills)**：支持基于文件系统的技能动态加载与管理，通过 Lazy Load 模式优化资源占用。
-- **开放工具生态**：内置 MCP 和 HTTP 客户端，轻松扩展外部工具与服务。
+- **开放工具生态**：`agent/tools/builtin` 覆盖文件、搜索、Shell/后台任务、网络与 Web、Docker、邮件、数学及 `mcp_client`；可自注册工具扩展。
 - **实时流式响应**：全链路支持流式 (Streaming) 传输，为交互式应用提供丝滑的用户体验。
 - **混合记忆架构**：采用“全量记录+滚动摘要”的混合存储策略，在大幅降低 Token 消耗的同时完整保留对话上下文。内置异步压缩机制，确保高并发场景下的极低延迟体验。全面支持 LangChain、MongoDB、Redis、MySQL 及 SQLite。
 - **灵活配置**：提供细粒度的配置选项，满足对 Agent 行为的精准控制需求。
 - **高并发工具调用**：支持并行执行多个工具调用，显著提升任务处理效率。
 - **企业级错误处理**：内置完善的错误重试与降级机制，确保系统稳健运行。
+- **Dino 生产编排**：多会话隔离、实时事件订阅、Token/工具/时间预算、循环检测、危险工具审批、优先任务队列、计划模式与子代理；内置文件/搜索/Shell 等工具集与 MCP、Skills 集成路径。
 
 ## 架构概述
 
@@ -53,18 +58,25 @@ Cortex 采用模块化架构设计，核心组件如下：
 ```
 cortex/
 ├── agent/             # 核心代理功能
-│   ├── engine/        # 代理引擎实现
-│   ├── llm/           # LLM 提供商集成
-│   ├── skills/        # 技能加载与管理
-│   ├── tools/         # 工具生态系统（MCP、HTTP）
-│   ├── types/         # 核心类型定义
-│   ├── providers/     # 外部服务提供商
-│   ├── errors/        # 错误处理
-│   └── logger/        # 结构化日志记录
-├── trigger/           # 触发器模块
-│   ├── http/          # HTTP 触发器（REST API）
-│   └── mcp/           # MCP 触发器（MCP 服务器）
-└── examples/          # 示例应用程序
+│   ├── engine/       # 代理引擎实现
+│   ├── llm/          # LLM 提供商集成
+│   ├── skills/       # 技能加载与管理（含 prompt/ 模板）
+│   ├── tools/        # 工具生态系统（MCP、HTTP、内置工具）
+│   ├── types/        # 核心类型定义
+│   ├── providers/    # 外部服务提供商（记忆、LLM 适配等）
+│   ├── hooks/        # 生命周期钩子
+│   └── utils/        # 限流、循环检测、权限、预算等工具
+├── dino/             # 高级编排（Client/Factory、预算、审批、队列、事件总线）
+│   ├── agent/        # 子代理与提示模板
+│   ├── session/      # 会话实现与计划辅助
+│   ├── memory/       # 记忆管理（如 SQLite）
+│   ├── queue/        # 优先任务队列
+│   ├── tools/        # 工具注册、内置工具、MCP、技能工具
+│   └── permission/   # 工具权限与审批
+├── trigger/          # 触发器模块
+│   ├── http/         # HTTP 触发器（REST API）
+│   └── mcp/          # MCP 触发器（MCP 服务器）
+└── examples/         # 示例应用程序
 ```
 
 ## 快速开始
@@ -137,6 +149,10 @@ go run cortex.go -config /path/to/cortex.yaml
 
 ## 核心组件
 
+### `agent` 包（基础）
+
+不依赖 Dino 时，`agent` 即完整基础层：LLM、引擎、工具与记忆等积木，适合单次或浅层调用、自行编排请求生命周期。典型场景是管道里「调一次模型（+ 可选工具）出结果」，而非长会话里由模型反复选工具。下面 LLM 示例属于该路径。
+
 ### LLM 集成
 
 Cortex 提供了统一的接口适配多种 LLM Provider，支持灵活的参数配置：
@@ -152,26 +168,91 @@ llmProvider, _ := llm.QuickDeepSeekProvider("sk-...", "deepseek-chat")
 llmProvider, _ := llm.VolceClient("ak-...", "doubao-pro-32k")
 ```
 
-### 触发器 (Triggers)
+## Dino 高级编排
 
-触发器模块允许将 Agent 暴露为不同协议的服务，便于外部系统集成。
+[Dino](dino/README-CN.md) 用于构建**智能体产品**：多轮对话、模型根据上下文**自动决定是否调用工具、调用哪几个、如何衔接多步**，并在长会话中持续迭代；同时满足多用户、多会话、预算与审批等上线要求。底层仍依赖 `agent` 的执行能力，由 **`dino` 管会话生命周期、观测面与风控面**。
 
-#### HTTP 触发器
-提供标准的 RESTful API，支持普通对话和流式对话。
+### 定位
 
-#### MCP 触发器
-完全遵循 [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) 规范，允许将 Cortex Agent 作为工具被其他支持 MCP 的客户端（如 Claude Desktop）调用。
+- **`agent`**：基础集成；单请求/批处理、单次生成报告类任务、简单 API；组件含 LLM Provider、Engine、Skills、记忆 Provider、hooks、内置工具。
+- **`dino`**：智能体形态；多轮 + 自动工具决策与执行闭环；含 `NewDinoFactory` / `NewClient` / `Session`、事件总线（`bus`）、`DefinedTool` 与工具回调、按工具超时与全局预算、循环检测、白名单/黑名单与审批、SQLite 记忆、子代理与 Manager、可选 `queue` 批处理与 Planner。
+
+### 会话与可观测性
+
+- 每会话独立上下文；`Send` / `SendAndWait` 等 API 驱动一轮或多轮工具循环。
+- `Subscribe` / `SubscribeFunc` 订阅执行过程：`Message`、`Thinking`、`ToolCall`、`Done` 等事件，便于终端 UI、日志与埋点。
+- 支持注入流式事件发送方（工厂 Option），对接自有 SSE/WebSocket 管道。
+
+### 工具与安全
+
+- `Config.Tools`：`Allowed` / `Denied` / `ApprovalRequired` 控制面；`ToolTimeouts` 与 `ToolTimeoutCalculator` 按工具与入参细化超时。
+- `defined_tool`：`DefinedTool`、`ToolContext`、审批存储（危险操作可阻塞至人工确认）。
+- 内置工具覆盖读写编辑文件、`glob`/`grep`、`bash`、`list_directory` 等；可接 MCP 与基于目录的 Skills（`cfg.Skills`）。
+
+### 资源与稳定性
+
+- **预算**：`Budget` 限制 Token、工具调用次数、 wall-clock，防止失控消耗。
+- **循环检测**：`LoopDetection` 基于语义相似度与重复次数中断死循环。
+- **计划模式**：`PlannerMode` 可先产出步骤计划再执行，可选自动批准。
+
+### 最小用法
+
+```bash
+go get github.com/xichan96/cortex/dino
+```
+
+```go
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/xichan96/cortex/dino"
+)
+
+func main() {
+	cfg := dino.DefaultConfig()
+	cfg.Provider.APIKey = "your-api-key"
+	cfg.WorkspaceRoot = "/path/to/workspace"
+
+	factory, err := dino.NewDinoFactory(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer factory.Shutdown(context.Background())
+
+	client := dino.NewClient(factory)
+	session, err := client.CreateSession(context.Background(), "sid-1")
+	if err != nil {
+		log.Fatal(err)
+	}
+	ev, err := session.SendAndWait(context.Background(), "列出当前目录")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(ev.Content)
+}
+```
+
+完整配置项、队列、子代理与事件类型见 [dino/README-CN.md](dino/README-CN.md)；可运行示例：[examples/dino](examples/dino)。
 
 ## 工具生态
 
-Cortex 内置了丰富的工具库，开箱即用：
+内置工具源码在 `agent/tools/builtin/`，按子包划分；实现 `types.Tool` 注册进引擎即可启用（具体默认集取决于你的 Agent 配置）。
 
-- **MCP 工具**：无缝连接 MCP Server，扩展无限可能。
-- **文件操作**：安全的文件读写与管理。
-- **SSH**：远程服务器管理与命令执行。
-- **邮件**：发送 HTML/Text 邮件。
-- **数学计算**：支持复杂数学表达式。
-- **系统命令**：安全的本地 Shell 命令执行。
+| 目录 | 工具名 |
+|------|--------|
+| `fs/` | `read_file`、`write_file`、`edit_file`、`file` |
+| `search/` | `glob`、`grep`、`codesearch`（当前为占位实现） |
+| `runtime/` | `command`（本地 Shell）、`question`（向用户澄清）、`job_kill`、`job_output`（后台命令任务） |
+| `task/` | `todo` |
+| `net/` | `ssh`、`net_check`（连通性检测） |
+| `web/` | `web_search`、`web_fetch` |
+| `system/` | `get_time`、`http_request` |
+| `email/` | `send_email` |
+| `math/` | `math_calculate` |
+| `docker/` | `docker_list_containers`、`docker_inspect_container`、`docker_container_logs`、`docker_exec`、`docker_create_container`、`docker_start_container`、`docker_stop_container`、`docker_restart_container`、`docker_remove_container`、`docker_pull_image` |
+| `mcp/` | `mcp_client`（连接外部 MCP Server） |
 
 ### 自定义工具
 
@@ -276,10 +357,21 @@ agentEngine.SetMemory(context.Background(), memory)
 ## 示例
 
 - [Basic Example](examples/basic): 基础用法演示。
+- [Dino Example](examples/dino): Dino 高级编排（会话、预算、工具审批）。
 - [Chat Web](examples/chat-web): 基于 Gin + React 的完整聊天应用。
 - [MCP Server](examples/mcp-server): 将 Agent 暴露为 MCP 服务。
 - [Agent Skills](examples/skills): 动态加载和使用 Agent 技能。
 - [Task Scheduling](examples/xcron): 使用 xcron 进行任务调度。
+
+## 触发器 (Triggers)
+
+`trigger/` 将 Agent 暴露为不同协议入口，便于外部系统集成。
+
+#### HTTP 触发器
+标准 RESTful API，支持普通对话与流式对话。
+
+#### MCP 触发器
+遵循 [Model Context Protocol (MCP)](https://modelcontextprotocol.io/)，可将 Cortex Agent 作为工具供 Claude Desktop 等客户端调用。
 
 ## 贡献
 
