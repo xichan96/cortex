@@ -191,6 +191,7 @@ type DinoFactory interface {
 	Shutdown(ctx context.Context) error
 	GetLLMProvider() types.LLMProvider
 	GetPlannerConfig() *PlannerModeConfig
+	Budget() Budget
 }
 
 type dinoFactory struct {

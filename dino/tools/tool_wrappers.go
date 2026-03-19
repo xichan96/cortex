@@ -2,13 +2,14 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
-	agentutils "github.com/xichan96/cortex/agent/utils"
 	"github.com/xichan96/cortex/agent/types"
+	agentutils "github.com/xichan96/cortex/agent/utils"
 )
 
 // nonFatalTool prevents tool execution errors from terminating the agent loop.
@@ -199,11 +200,27 @@ func (t *loopDetectingTool) Execute(ctx context.Context, input map[string]interf
 		Content: content,
 	}
 
-	result := t.detector.Detect(ctx, t.sessionID, action)
-	if result.IsLoop {
+	detectResult := t.detector.Detect(ctx, t.sessionID, action)
+
+	execResult, err := t.inner.Execute(ctx, input)
+
+	var resultHash string
+	if execResult != nil && err == nil {
+		h := sha256.New()
+		if bytes, ok := execResult.(string); ok {
+			h.Write([]byte(bytes))
+		} else {
+			h.Write([]byte(fmt.Sprintf("%v", execResult)))
+		}
+		resultHash = fmt.Sprintf("%x", h.Sum(nil))[:16]
+	}
+
+	t.detector.RecordWithResult(t.sessionID, action, resultHash)
+
+	if detectResult.IsLoop && detectResult.Level == "critical" {
 		err := &LoopDetectedError{
 			ToolName:   t.inner.Name(),
-			Suggestion: result.Suggestion,
+			Suggestion: detectResult.Suggestion,
 		}
 		if t.sender != nil {
 			t.sender.SendToolError(t.sessionID, "", t.inner.Name(), err.Error())
@@ -211,9 +228,22 @@ func (t *loopDetectingTool) Execute(ctx context.Context, input map[string]interf
 		return nil, err
 	}
 
-	execResult, err := t.inner.Execute(ctx, input)
+	var warningMsg string
+	if detectResult.IsWarning {
+		warningMsg = detectResult.Suggestion
+	}
 
-	t.detector.Record(t.sessionID, action)
+	if err != nil {
+		return execResult, err
+	}
+
+	if warningMsg != "" {
+		return map[string]interface{}{
+			"ok":      true,
+			"warning": warningMsg,
+			"result":  execResult,
+		}, nil
+	}
 
 	return execResult, err
 }

@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/xichan96/cortex/agent/hooks"
-	"github.com/xichan96/cortex/agent/utils"
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/agent/utils"
 	"github.com/xichan96/cortex/pkg/logger"
 )
 
@@ -23,6 +23,13 @@ func (ae *AgentEngine) SetMemory(ctx context.Context, memory types.MemoryProvide
 			provider.SetMaxHistoryMessages(ae.config.MaxHistoryMessages)
 		}
 	}
+}
+
+// GetMemory returns the memory provider
+func (ae *AgentEngine) GetMemory() types.MemoryProvider {
+	ae.mu.RLock()
+	defer ae.mu.RUnlock()
+	return ae.memory
 }
 
 // SetOutputParser sets the output parser

@@ -6,8 +6,8 @@ import (
 	"math"
 	"testing"
 
-	agentutils "github.com/xichan96/cortex/agent/utils"
 	"github.com/xichan96/cortex/agent/types"
+	agentutils "github.com/xichan96/cortex/agent/utils"
 )
 
 // MockTool implements types.Tool for testing
@@ -96,6 +96,9 @@ func (d *MockDetector) Detect(ctx context.Context, sessionID string, action agen
 	return &agentutils.LoopDetectResult{IsLoop: false}
 }
 func (d *MockDetector) Record(sessionID string, action agentutils.LoopDetectAction) {
+	d.actions = append(d.actions, action)
+}
+func (d *MockDetector) RecordWithResult(sessionID string, action agentutils.LoopDetectAction, resultHash string) {
 	d.actions = append(d.actions, action)
 }
 func (d *MockDetector) Reset(sessionID string) {}

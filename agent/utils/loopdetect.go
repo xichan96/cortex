@@ -3,7 +3,7 @@ package utils
 
 import (
 	"context"
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"strings"
@@ -12,8 +12,10 @@ import (
 )
 
 const (
-	LoopDetectWindowSize = 10
-	LoopDetectMaxRepeats = 5
+	LoopDetectWindowSize     = 10
+	LoopDetectMaxRepeats     = 5
+	LoopDetectWarningRepeats = 3
+	LoopDetectExactMatchSize = 5
 )
 
 type LoopDetectAction struct {
@@ -24,9 +26,11 @@ type LoopDetectAction struct {
 
 type LoopDetectResult struct {
 	IsLoop     bool    `json:"is_loop"`
+	IsWarning  bool    `json:"is_warning"`
 	Count      int     `json:"count"`
 	Similarity float64 `json:"similarity"`
 	Suggestion string  `json:"suggestion"`
+	Level      string  `json:"level"` // "warning" or "critical"
 }
 
 type LoopDetectStats struct {
@@ -37,22 +41,34 @@ type LoopDetectStats struct {
 type LoopDetectConfig struct {
 	Enabled             bool
 	MaxRepeats          int
+	WarningRepeats      int
 	SimilarityThreshold float64
+	TrackResults        bool
+	InputMaxRepeats     int
 }
 
 func DefaultLoopDetectConfig() *LoopDetectConfig {
 	return &LoopDetectConfig{
 		Enabled:             true,
 		MaxRepeats:          LoopDetectMaxRepeats,
+		WarningRepeats:      LoopDetectWarningRepeats,
 		SimilarityThreshold: 0.8,
+		TrackResults:        true,
+		InputMaxRepeats:     10,
 	}
 }
 
 type LoopDetector interface {
 	Detect(ctx context.Context, sessionID string, action LoopDetectAction) *LoopDetectResult
 	Record(sessionID string, action LoopDetectAction)
+	RecordWithResult(sessionID string, action LoopDetectAction, resultHash string)
 	Reset(sessionID string)
 	GetStats(sessionID string) LoopDetectStats
+}
+
+type toolCallRecord struct {
+	Action     LoopDetectAction
+	ResultHash string
 }
 
 type loopDetector struct {
@@ -62,7 +78,7 @@ type loopDetector struct {
 }
 
 type ringBuffer struct {
-	data  []LoopDetectAction
+	data  []toolCallRecord
 	size  int
 	head  int
 	count int
@@ -70,24 +86,24 @@ type ringBuffer struct {
 
 func newRingBuffer(size int) *ringBuffer {
 	return &ringBuffer{
-		data: make([]LoopDetectAction, size),
+		data: make([]toolCallRecord, size),
 		size: size,
 	}
 }
 
-func (r *ringBuffer) add(action LoopDetectAction) {
-	r.data[r.head] = action
+func (r *ringBuffer) add(record toolCallRecord) {
+	r.data[r.head] = record
 	r.head = (r.head + 1) % r.size
 	if r.count < r.size {
 		r.count++
 	}
 }
 
-func (r *ringBuffer) getAll() []LoopDetectAction {
+func (r *ringBuffer) getAll() []toolCallRecord {
 	if r.count == 0 {
 		return nil
 	}
-	result := make([]LoopDetectAction, r.count)
+	result := make([]toolCallRecord, r.count)
 	for i := 0; i < r.count; i++ {
 		idx := (r.head - r.count + i + r.size) % r.size
 		result[i] = r.data[idx]
@@ -126,18 +142,22 @@ func (d *loopDetector) Detect(ctx context.Context, sessionID string, action Loop
 		return &LoopDetectResult{IsLoop: false}
 	}
 
-	actions := sa.buffer.getAll()
+	records := sa.buffer.getAll()
 	windowSize := LoopDetectWindowSize
-	if len(actions) < windowSize {
-		windowSize = len(actions)
+	if len(records) < windowSize {
+		windowSize = len(records)
 	}
 
-	recentActions := actions[len(actions)-windowSize:]
+	recentRecords := records[len(records)-windowSize:]
 	counts := make(map[string]int)
+	inputCounts := make(map[string]int)
 
-	for _, a := range recentActions {
-		key := loopDetectKey(a.Type, a.Content)
+	for _, a := range recentRecords {
+		key := loopDetectKey(a.Action.Type, a.Action.Content)
 		counts[key]++
+		if a.Action.Type == "input" {
+			inputCounts[key]++
+		}
 	}
 
 	maxCount := 0
@@ -149,13 +169,47 @@ func (d *loopDetector) Detect(ctx context.Context, sessionID string, action Loop
 		}
 	}
 
-	if maxCount >= d.config.MaxRepeats {
+	isInputType := action.Type == "input"
+	maxRepeats := d.config.MaxRepeats
+	warningRepeats := d.config.WarningRepeats
+
+	if isInputType {
+		inputMaxRepeats := d.config.InputMaxRepeats
+		if inputMaxRepeats <= 0 {
+			inputMaxRepeats = 10
+		}
+		maxRepeats = inputMaxRepeats
+		warningRepeats = inputMaxRepeats / 2
+		if warningRepeats < 3 {
+			warningRepeats = 3
+		}
+	}
+
+	if warningRepeats <= 0 {
+		warningRepeats = LoopDetectWarningRepeats
+	}
+
+	if maxCount >= maxRepeats {
 		suggestion := loopDetectSuggestion(maxKey)
 		return &LoopDetectResult{
 			IsLoop:     true,
+			IsWarning:  false,
 			Count:      maxCount,
 			Similarity: float64(maxCount) / float64(windowSize),
 			Suggestion: suggestion,
+			Level:      "critical",
+		}
+	}
+
+	if maxCount >= warningRepeats {
+		suggestion := loopDetectWarning(maxKey)
+		return &LoopDetectResult{
+			IsLoop:     false,
+			IsWarning:  true,
+			Count:      maxCount,
+			Similarity: float64(maxCount) / float64(windowSize),
+			Suggestion: suggestion,
+			Level:      "warning",
 		}
 	}
 
@@ -163,6 +217,10 @@ func (d *loopDetector) Detect(ctx context.Context, sessionID string, action Loop
 }
 
 func (d *loopDetector) Record(sessionID string, action LoopDetectAction) {
+	d.RecordWithResult(sessionID, action, "")
+}
+
+func (d *loopDetector) RecordWithResult(sessionID string, action LoopDetectAction, resultHash string) {
 	if !d.config.Enabled {
 		return
 	}
@@ -178,7 +236,10 @@ func (d *loopDetector) Record(sessionID string, action LoopDetectAction) {
 		d.actions[sessionID] = sa
 	}
 
-	sa.buffer.add(action)
+	sa.buffer.add(toolCallRecord{
+		Action:     action,
+		ResultHash: resultHash,
+	})
 }
 
 func (d *loopDetector) Reset(sessionID string) {
@@ -198,10 +259,10 @@ func (d *loopDetector) GetStats(sessionID string) LoopDetectStats {
 		}
 	}
 
-	actions := sa.buffer.getAll()
+	records := sa.buffer.getAll()
 	counts := make(map[string]int)
-	for _, a := range actions {
-		key := loopDetectKey(a.Type, a.Content)
+	for _, a := range records {
+		key := loopDetectKey(a.Action.Type, a.Action.Content)
 		counts[key]++
 	}
 
@@ -225,10 +286,20 @@ func loopDetectKey(toolName, input string) string {
 			return toolName + ":" + cmd
 		}
 	}
-	h := md5.New()
+	h := sha256.New()
 	h.Write([]byte("tool:" + toolName + ":"))
 	h.Write([]byte(input))
-	return toolName + ":" + hex.EncodeToString(h.Sum(nil))
+	return toolName + ":" + hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+func loopDetectWarning(key string) string {
+	if strings.Contains(key, "bash") || strings.Contains(key, "execute_command") {
+		return "Warning: repeated command execution detected. Consider using a different approach or combining commands."
+	}
+	if strings.Contains(key, "read_file") || strings.Contains(key, "glob") || strings.Contains(key, "grep") {
+		return "Warning: repeated file operations detected. Try to be more specific with paths or use different search strategies."
+	}
+	return "Warning: repeated actions detected. Consider verifying the current state before continuing."
 }
 
 func loopDetectSuggestion(key string) string {
