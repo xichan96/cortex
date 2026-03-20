@@ -87,7 +87,7 @@ type budgetChecker interface {
 
 type Session struct {
 	id      string
-	input   chan string
+	input   chan interface{}
 	output  chan *Event
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -126,7 +126,7 @@ func NewSession(id string, agent *engine.AgentEngine, factory SessionFactory, ct
 
 	return &Session{
 		id:        id,
-		input:     make(chan string, cfg.InputBufferSize),
+		input:     make(chan interface{}, cfg.InputBufferSize),
 		output:    make(chan *Event, cfg.OutputBufferSize),
 		agent:     agent,
 		factory:   factory,
@@ -150,7 +150,7 @@ func (s *Session) ID() string {
 	return s.id
 }
 
-func (s *Session) Input() chan<- string {
+func (s *Session) Input() chan<- interface{} {
 	return s.input
 }
 
@@ -265,7 +265,14 @@ func (s *Session) run() {
 			if !ok {
 				return
 			}
-			s.processInput(input)
+			switch in := input.(type) {
+			case types.AgentInput:
+				s.processInputWithAgentInput(in)
+			case string:
+				s.processInput(in)
+			default:
+				s.processInput(fmt.Sprintf("%v", input))
+			}
 		case item, ok := <-queueChan:
 			if !ok {
 				return
@@ -299,6 +306,14 @@ func (s *Session) processInput(input string) *ExecuteResponse {
 }
 
 func (s *Session) processInputWithResult(input string) *ExecuteResponse {
+	return s.executeWithInput(s.ctx, types.NewAgentInput(input), input)
+}
+
+func (s *Session) processInputWithAgentInput(agentInput types.AgentInput) *ExecuteResponse {
+	return s.executeWithInput(s.ctx, agentInput, agentInput.String())
+}
+
+func (s *Session) executeWithInput(ctx context.Context, agentInput types.AgentInput, displayContent string) *ExecuteResponse {
 	if err := s.ctx.Err(); err != nil {
 		return &ExecuteResponse{
 			SessionID: s.id,
@@ -316,11 +331,11 @@ func (s *Session) processInputWithResult(input string) *ExecuteResponse {
 
 	s.emit(&Event{
 		Type:    EventTypeMessage,
-		Content: input,
+		Content: displayContent,
 	})
 
 	if s.factory != nil {
-		if result := s.factory.Detect(s.ctx, s.id, agentutils.LoopDetectAction{Type: "input", Content: input}); result != nil {
+		if result := s.factory.Detect(s.ctx, s.id, agentutils.LoopDetectAction{Type: "input", Content: displayContent}); result != nil {
 			if result.IsLoop {
 				logger.Warn("[session] loop detected",
 					slog.String("session_id", s.id),
@@ -337,7 +352,7 @@ func (s *Session) processInputWithResult(input string) *ExecuteResponse {
 	}
 
 	if s.planner != nil && s.planner.IsEnabled() {
-		plan, err := s.planner.CreatePlan(s.ctx, input)
+		plan, err := s.planner.CreatePlan(s.ctx, displayContent)
 		if err != nil {
 			s.emit(&Event{Type: EventTypeError, Error: fmt.Sprintf("Failed to create plan: %v", err)})
 		} else if plan != nil {
@@ -354,7 +369,6 @@ func (s *Session) processInputWithResult(input string) *ExecuteResponse {
 		}
 	}
 
-	agentInput := types.NewAgentInput(input)
 	stream, err := s.agent.ExecuteStream(s.ctx, agentInput, nil)
 	if err != nil {
 		s.emit(&Event{Type: EventTypeError, Error: err.Error()})

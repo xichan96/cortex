@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/dino"
 )
 
@@ -222,7 +223,8 @@ Always provide clear and concise responses.`
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		event, err := session.SendAndWait(ctx, userInput)
+		agentInput := types.NewAgentInput(userInput)
+		event, err := session.SendAndWait(ctx, agentInput)
 		cancel()
 
 		if err != nil {
