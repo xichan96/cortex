@@ -81,7 +81,7 @@ func (c *Client) CreateSession(ctx context.Context, sessionID string) (*ClientSe
 	bufSize := c.getConfig().sessionBufferSize
 	clientSession := &ClientSession{
 		Session:    session,
-		inputChan:  make(chan string, bufSize),
+		inputChan:  make(chan interface{}, bufSize),
 		outputChan: make(chan *Event, bufSize),
 		doneChan:   make(chan struct{}),
 		errChan:    make(chan error, 1),
@@ -150,7 +150,7 @@ func NewAgentInput(text string) types.AgentInput {
 type ClientSession struct {
 	*Session
 
-	inputChan  chan string
+	inputChan  chan interface{}
 	outputChan chan *Event
 	doneChan   chan struct{}
 	errChan    chan error
@@ -158,7 +158,7 @@ type ClientSession struct {
 	closeOnce  sync.Once
 }
 
-func (cs *ClientSession) Input() chan<- string {
+func (cs *ClientSession) Input() chan<- interface{} {
 	return cs.inputChan
 }
 
@@ -174,9 +174,9 @@ func (cs *ClientSession) Err() <-chan error {
 	return cs.errChan
 }
 
-func (cs *ClientSession) Send(ctx context.Context, message string) error {
+func (cs *ClientSession) Send(ctx context.Context, input types.AgentInput) error {
 	select {
-	case cs.inputChan <- message:
+	case cs.inputChan <- input:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -185,8 +185,8 @@ func (cs *ClientSession) Send(ctx context.Context, message string) error {
 	}
 }
 
-func (cs *ClientSession) SendAndWait(ctx context.Context, message string) (*Event, error) {
-	if err := cs.Send(ctx, message); err != nil {
+func (cs *ClientSession) SendAndWait(ctx context.Context, input types.AgentInput) (*Event, error) {
+	if err := cs.Send(ctx, input); err != nil {
 		return nil, err
 	}
 

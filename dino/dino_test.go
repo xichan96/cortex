@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	agentutils "github.com/xichan96/cortex/agent/utils"
 	"github.com/xichan96/cortex/agent/types"
+	agentutils "github.com/xichan96/cortex/agent/utils"
 	"github.com/xichan96/cortex/dino/queue"
 	"github.com/xichan96/cortex/dino/session"
 	"github.com/xichan96/cortex/dino/tools"
@@ -580,7 +580,7 @@ func TestClientSession_Send(t *testing.T) {
 		t.Fatalf("Failed to create session: %v", err)
 	}
 
-	err = session.Send(ctx, "test message")
+	err = session.Send(ctx, types.NewAgentInput("test message"))
 	if err != nil {
 		t.Errorf("Failed to send: %v", err)
 	}
@@ -605,7 +605,7 @@ func TestClientSession_SendAndWait(t *testing.T) {
 		t.Fatalf("Failed to create session: %v", err)
 	}
 
-	_, err = session.SendAndWait(ctx, "test message")
+	_, err = session.SendAndWait(ctx, types.NewAgentInput("test message"))
 	if err != nil {
 		t.Logf("SendAndWait returned error (expected in test): %v", err)
 	}
