@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -376,6 +377,7 @@ func (s *Session) executeWithInput(ctx context.Context, agentInput types.AgentIn
 	}
 
 	var execResult *types.AgentResult
+	var streamed strings.Builder
 	for result := range stream {
 		if result.Error != nil {
 			s.emit(&Event{Type: EventTypeError, Error: result.Error.Error()})
@@ -385,6 +387,7 @@ func (s *Session) executeWithInput(ctx context.Context, agentInput types.AgentIn
 		case "reasoning":
 			s.emit(&Event{Type: EventTypeThinking, Content: result.Content})
 		case "chunk":
+			streamed.WriteString(result.Content)
 			s.emit(&Event{Type: EventTypeMessage, Content: result.Content})
 		case "tool_call":
 			if result.ToolEvent != nil {
@@ -434,7 +437,21 @@ func (s *Session) executeWithInput(ctx context.Context, agentInput types.AgentIn
 		s.factory.RecordTokens(s.ctx, s.id, execResult.Usage.TotalTokens)
 	}
 
-	s.emit(&Event{Type: EventTypeMessage, Content: execResult.Output})
+	out := execResult.Output
+	if out != "" {
+		acc := streamed.String()
+		switch {
+		case acc == "":
+			s.emit(&Event{Type: EventTypeMessage, Content: out})
+		case out == acc:
+		case strings.HasPrefix(out, acc):
+			if tail := out[len(acc):]; tail != "" {
+				s.emit(&Event{Type: EventTypeMessage, Content: tail})
+			}
+		default:
+			s.emit(&Event{Type: EventTypeMessage, Content: out})
+		}
+	}
 
 	if execResult.Usage.TotalTokens > 0 {
 		s.emit(&Event{
