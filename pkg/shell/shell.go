@@ -66,6 +66,46 @@ type Options struct {
 	BlockFuncs []BlockFunc
 }
 
+// nonInteractiveEnvOverrides lists KEY=value pairs merged on top of [os.Environ].
+// Values follow conventions used across CI systems, pagers, VCS, and scripted CLIs
+// when no interactive terminal is attached (agents, tests, job runners).
+var nonInteractiveEnvOverrides = []struct{ key, value string }{
+	{"CI", "true"},
+	{"PAGER", "cat"},
+	{"GIT_PAGER", "cat"},
+	{"GIT_TERMINAL_PROMPT", "0"},
+	{"DEBIAN_FRONTEND", "noninteractive"},
+	{"NO_COLOR", "1"},
+	{"PYTHONUNBUFFERED", "1"},
+}
+
+// EnvironNonInteractive returns a copy of the process environment with
+// [nonInteractiveEnvOverrides] applied (each key replaces an existing entry or is appended).
+func EnvironNonInteractive() []string {
+	env := make([]string, 0, len(os.Environ())+len(nonInteractiveEnvOverrides))
+	env = append(env, os.Environ()...)
+	for _, kv := range nonInteractiveEnvOverrides {
+		prefix := kv.key + "="
+		replaced := false
+		for i, e := range env {
+			if strings.HasPrefix(e, prefix) {
+				env[i] = prefix + kv.value
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			env = append(env, prefix+kv.value)
+		}
+	}
+	return env
+}
+
+// EnvironWithNoPager is an alias for [EnvironNonInteractive].
+//
+// Deprecated: use [EnvironNonInteractive].
+func EnvironWithNoPager() []string { return EnvironNonInteractive() }
+
 // NewShell creates a new shell instance with the given options
 func NewShell(opts *Options) *Shell {
 	if opts == nil {
