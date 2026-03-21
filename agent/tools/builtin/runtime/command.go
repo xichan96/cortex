@@ -96,6 +96,7 @@ func (t *CommandTool) Execute(ctx context.Context, input map[string]interface{})
 
 	sh := shell.NewShell(&shell.Options{
 		WorkingDir: t.workspace,
+		Env:        shell.EnvironNonInteractive(),
 	})
 	stdout, stderr, err := sh.Exec(execCtx, command)
 

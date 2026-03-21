@@ -69,6 +69,7 @@ func (m *BackgroundShellManager) Start(ctx context.Context, workingDir string, b
 		shell := NewShell(&Options{
 			WorkingDir: workingDir,
 			BlockFuncs: blockFuncs,
+			Env:        EnvironNonInteractive(),
 		})
 
 		// Construct full command if args are provided (simple concatenation for now,
