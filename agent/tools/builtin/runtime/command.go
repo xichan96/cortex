@@ -42,7 +42,7 @@ func (t *CommandTool) Schema() map[string]interface{} {
 			},
 			"timeout": map[string]interface{}{
 				"type":        "integer",
-				"description": "Command execution timeout in seconds (default: 30)",
+				"description": "Optional cap on command timeout in seconds; if omitted, uses the engine tool deadline when set, otherwise 30s",
 			},
 			"background": map[string]interface{}{
 				"type":        "boolean",
@@ -74,10 +74,21 @@ func (t *CommandTool) Execute(ctx context.Context, input map[string]interface{})
 	}
 
 	timeout := 30 * time.Second
-	if timeoutVal, ok := input["timeout"].(float64); ok {
-		timeout = time.Duration(timeoutVal) * time.Second
-	} else if timeoutVal, ok := input["timeout"].(int); ok {
-		timeout = time.Duration(timeoutVal) * time.Second
+	if deadline, ok := ctx.Deadline(); ok {
+		if rem := time.Until(deadline); rem > 0 {
+			timeout = rem
+		}
+	}
+	if timeoutVal, ok := input["timeout"].(float64); ok && timeoutVal > 0 {
+		ut := time.Duration(timeoutVal) * time.Second
+		if ut < timeout {
+			timeout = ut
+		}
+	} else if timeoutVal, ok := input["timeout"].(int); ok && timeoutVal > 0 {
+		ut := time.Duration(timeoutVal) * time.Second
+		if ut < timeout {
+			timeout = ut
+		}
 	}
 
 	execCtx, cancel := context.WithTimeout(ctx, timeout)

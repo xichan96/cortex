@@ -300,23 +300,44 @@ func (cs *ClientSession) forwardOutput() {
 	output := cs.Session.Output()
 	ctx := cs.Session.Context()
 
+	var pending []*Event
 	for {
-		select {
-		case <-cs.doneChan:
-			return
-		case event, ok := <-output:
-			if !ok {
-				return
-			}
+		if len(pending) == 0 {
 			select {
-			case cs.outputChan <- event:
 			case <-cs.doneChan:
 				return
 			case <-ctx.Done():
 				return
+			case ev, ok := <-output:
+				if !ok {
+					return
+				}
+				pending = append(pending, ev)
 			}
+			continue
+		}
+
+		select {
+		case cs.outputChan <- pending[0]:
+			pending = pending[1:]
+		case <-cs.doneChan:
+			return
 		case <-ctx.Done():
 			return
+		case ev, ok := <-output:
+			if !ok {
+				for _, e := range pending {
+					select {
+					case cs.outputChan <- e:
+					case <-cs.doneChan:
+						return
+					case <-ctx.Done():
+						return
+					}
+				}
+				return
+			}
+			pending = append(pending, ev)
 		}
 	}
 }

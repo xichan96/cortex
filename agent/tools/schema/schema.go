@@ -18,6 +18,26 @@ func toSnakeCase(s string) string {
 	return strings.ToLower(b.String())
 }
 
+func snakeToLowerCamel(key string) string {
+	parts := strings.Split(key, "_")
+	if len(parts) < 2 {
+		return key
+	}
+	var b strings.Builder
+	b.WriteString(strings.ToLower(parts[0]))
+	for _, p := range parts[1:] {
+		if p == "" {
+			continue
+		}
+		low := strings.ToLower(p)
+		b.WriteByte(low[0] - 32)
+		if len(low) > 1 {
+			b.WriteString(low[1:])
+		}
+	}
+	return b.String()
+}
+
 func getInputVal(input map[string]interface{}, key string) (interface{}, bool) {
 	if v, ok := input[key]; ok {
 		return v, true
@@ -25,6 +45,11 @@ func getInputVal(input map[string]interface{}, key string) (interface{}, bool) {
 	snake := toSnakeCase(key)
 	if v, ok := input[snake]; ok {
 		return v, true
+	}
+	if camel := snakeToLowerCamel(key); camel != key {
+		if v, ok := input[camel]; ok {
+			return v, true
+		}
 	}
 	return nil, false
 }

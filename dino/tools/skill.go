@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/xichan96/cortex/agent/skills"
 	"github.com/xichan96/cortex/agent/types"
@@ -46,17 +47,25 @@ func (t *SkillTool) Schema() map[string]interface{} {
 }
 
 func (t *SkillTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
-	skillName, ok := input["skill_name"].(string)
-	if !ok || skillName == "" {
+	skillName := firstString(input, "skill_name", "skillName", "name")
+	if skillName == "" {
 		return nil, fmt.Errorf("skill_name is required")
 	}
 
 	skill, exists := t.skills[skillName]
 	if !exists {
+		for k, s := range t.skills {
+			if strings.EqualFold(k, skillName) {
+				skill, exists = s, true
+				break
+			}
+		}
+	}
+	if !exists {
 		return nil, fmt.Errorf("skill not found: %s", skillName)
 	}
 
-	inputText, _ := input["input"].(string)
+	inputText := firstString(input, "input", "task", "query")
 	if inputText == "" {
 		return skill.Content, nil
 	}
@@ -68,4 +77,15 @@ func (t *SkillTool) Metadata() types.ToolMetadata {
 		ToolType: "builtin",
 		Priority: 5,
 	}
+}
+
+func firstString(input map[string]interface{}, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := input[k].(string); ok {
+			if s := strings.TrimSpace(v); s != "" {
+				return s
+			}
+		}
+	}
+	return ""
 }
