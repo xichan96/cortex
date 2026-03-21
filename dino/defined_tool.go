@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/pkg/logger"
 )
 
 type ToolDefinition struct {
@@ -217,6 +219,9 @@ func DefinedToolFromJSON(jsonStr string) (*DefinedTool, error) {
 	}, nil
 }
 
+// ApprovalStore gates tool execution on user approval via ApprovalSender.
+// Call SetSender before any tool that uses ActionAsk runs; if sender is nil,
+// RequestApproval returns ErrApprovalNotAvailable immediately.
 type ApprovalStore struct {
 	mu      sync.Mutex
 	pending map[string]chan bool
@@ -251,18 +256,22 @@ func (s *ApprovalStore) RequestApproval(
 	toolName,
 	arguments string,
 ) (approved bool, err error) {
+	s.mu.Lock()
+	sender := s.sender
+	s.mu.Unlock()
+	if sender == nil {
+		return false, ErrApprovalNotAvailable
+	}
+
 	requestID := generateRequestID()
 	ch := make(chan bool, 1)
 
 	s.mu.Lock()
 	s.pending[requestID] = ch
-	sender := s.sender
 	s.mu.Unlock()
 
 	sendRequest := func() {
-		if sender != nil {
-			sender.SendToolApprovalRequest(sessionID, requestID, toolName, arguments)
-		}
+		sender.SendToolApprovalRequest(sessionID, requestID, toolName, arguments)
 	}
 
 	cleanup := func() {
@@ -279,9 +288,7 @@ func (s *ApprovalStore) RequestApproval(
 	select {
 	case approved = <-ch:
 		cleanup()
-		if sender != nil {
-			sender.SendToolApprovalResponse(sessionID, requestID, toolName, approved)
-		}
+		sender.SendToolApprovalResponse(sessionID, requestID, toolName, approved)
 		return approved, nil
 	case <-ctx.Done():
 		cleanup()
@@ -297,11 +304,15 @@ func (s *ApprovalStore) Respond(requestID string, approved bool) {
 	ch := s.pending[requestID]
 	s.mu.Unlock()
 
-	if ch != nil {
-		select {
-		case ch <- approved:
-		default:
-		}
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- approved:
+	default:
+		logger.Warn("[ApprovalStore] approval response dropped",
+			slog.String("request_id", requestID),
+			slog.Bool("approved", approved))
 	}
 }
 

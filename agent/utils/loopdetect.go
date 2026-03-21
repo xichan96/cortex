@@ -272,18 +272,33 @@ func (d *loopDetector) GetStats(sessionID string) LoopDetectStats {
 	}
 }
 
+func loopDetectCommandKey(toolName, cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return ""
+	}
+	parts := strings.Fields(cmd)
+	if len(parts) >= 2 {
+		return toolName + ":" + parts[0] + " " + parts[1]
+	}
+	return toolName + ":" + cmd
+}
+
 func loopDetectKey(toolName, input string) string {
-	if toolName == "execute_command" || toolName == "bash" {
+	if toolName == "execute_command" || toolName == "bash" || toolName == "command" {
 		var args struct {
 			Command string `json:"command"`
 		}
-		if json.Unmarshal([]byte(input), &args) == nil && args.Command != "" {
-			cmd := strings.TrimSpace(args.Command)
-			parts := strings.Fields(cmd)
-			if len(parts) >= 2 {
-				return toolName + ":" + parts[0] + " " + parts[1]
+		err := json.Unmarshal([]byte(input), &args)
+		if err == nil && args.Command != "" {
+			if k := loopDetectCommandKey(toolName, args.Command); k != "" {
+				return k
 			}
-			return toolName + ":" + cmd
+		}
+		if err != nil {
+			if k := loopDetectCommandKey(toolName, input); k != "" {
+				return k
+			}
 		}
 	}
 	h := sha256.New()
@@ -293,7 +308,7 @@ func loopDetectKey(toolName, input string) string {
 }
 
 func loopDetectWarning(key string) string {
-	if strings.Contains(key, "bash") || strings.Contains(key, "execute_command") {
+	if strings.Contains(key, "bash") || strings.Contains(key, "execute_command") || strings.HasPrefix(key, "command:") {
 		return "Warning: repeated command execution detected. Consider using a different approach or combining commands."
 	}
 	if strings.Contains(key, "read_file") || strings.Contains(key, "glob") || strings.Contains(key, "grep") {
@@ -303,7 +318,7 @@ func loopDetectWarning(key string) string {
 }
 
 func loopDetectSuggestion(key string) string {
-	if strings.Contains(key, "bash") || strings.Contains(key, "execute_command") {
+	if strings.Contains(key, "bash") || strings.Contains(key, "execute_command") || strings.HasPrefix(key, "command:") {
 		return "Detected repeated command execution. Consider trying a different approach."
 	}
 	if strings.Contains(key, "read_file") || strings.Contains(key, "glob") {

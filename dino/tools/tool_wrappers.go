@@ -186,14 +186,27 @@ func (t *loopDetectingTool) Description() string            { return t.inner.Des
 func (t *loopDetectingTool) Schema() map[string]interface{} { return t.inner.Schema() }
 func (t *loopDetectingTool) Metadata() types.ToolMetadata   { return t.inner.Metadata() }
 
-func (t *loopDetectingTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
-	inputBytes, err := json.Marshal(input)
-	var content string
-	if err != nil {
-		content = fmt.Sprintf("%v", input)
-	} else {
-		content = string(inputBytes)
+func loopDetectContent(toolName string, input map[string]interface{}) string {
+	switch toolName {
+	case "bash", "execute_command", "command":
+		if input != nil {
+			if cmd, ok := input["command"].(string); ok && cmd != "" {
+				return cmd
+			}
+		}
 	}
+	if input == nil {
+		return ""
+	}
+	b, err := json.Marshal(input)
+	if err != nil {
+		return fmt.Sprintf("%v", input)
+	}
+	return string(b)
+}
+
+func (t *loopDetectingTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	content := loopDetectContent(t.inner.Name(), input)
 
 	action := agentutils.LoopDetectAction{
 		Type:    t.inner.Name(),
@@ -201,6 +214,18 @@ func (t *loopDetectingTool) Execute(ctx context.Context, input map[string]interf
 	}
 
 	detectResult := t.detector.Detect(ctx, t.sessionID, action)
+
+	if detectResult.IsLoop && detectResult.Level == "critical" {
+		t.detector.RecordWithResult(t.sessionID, action, "")
+		loopErr := &LoopDetectedError{
+			ToolName:   t.inner.Name(),
+			Suggestion: detectResult.Suggestion,
+		}
+		if t.sender != nil {
+			t.sender.SendToolError(t.sessionID, "", t.inner.Name(), loopErr.Error())
+		}
+		return nil, loopErr
+	}
 
 	execResult, err := t.inner.Execute(ctx, input)
 
@@ -216,17 +241,6 @@ func (t *loopDetectingTool) Execute(ctx context.Context, input map[string]interf
 	}
 
 	t.detector.RecordWithResult(t.sessionID, action, resultHash)
-
-	if detectResult.IsLoop && detectResult.Level == "critical" {
-		err := &LoopDetectedError{
-			ToolName:   t.inner.Name(),
-			Suggestion: detectResult.Suggestion,
-		}
-		if t.sender != nil {
-			t.sender.SendToolError(t.sessionID, "", t.inner.Name(), err.Error())
-		}
-		return nil, err
-	}
 
 	var warningMsg string
 	if detectResult.IsWarning {
