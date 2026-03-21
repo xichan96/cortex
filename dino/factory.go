@@ -276,7 +276,7 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 
 	var loadedSkills []*Skill
 	skillRegistry := agentskills.NewRegistry()
-	if cfg.Skills.Path != "" {
+	if cfg.Skills.Path != "" && cfg.Skills.AutoLoad {
 		if err := skillRegistry.LoadFromDirs(context.Background(), logger.GetLogger(), []string{cfg.Skills.Path}); err != nil {
 			logger.Warn("failed to load skills", slog.String("path", cfg.Skills.Path), slog.String("error", err.Error()))
 		} else {
