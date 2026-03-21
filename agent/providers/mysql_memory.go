@@ -12,13 +12,14 @@ import (
 )
 
 type MySQLMessageDocument struct {
-	ID        uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	SessionID string    `gorm:"type:varchar(255);index;not null" json:"session_id"`
-	Role      string    `gorm:"type:varchar(50);not null" json:"role"`
-	Content   string    `gorm:"type:text" json:"content"`
-	Name      string    `gorm:"type:varchar(255)" json:"name,omitempty"`
-	Parts     string    `gorm:"type:text" json:"parts,omitempty"`
-	CreatedAt time.Time `gorm:"index;not null" json:"created_at"`
+	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	SessionID  string    `gorm:"type:varchar(255);index;not null" json:"session_id"`
+	Role       string    `gorm:"type:varchar(50);not null" json:"role"`
+	Content    string    `gorm:"type:text" json:"content"`
+	Name       string    `gorm:"type:varchar(255)" json:"name,omitempty"`
+	Parts      string    `gorm:"type:text" json:"parts,omitempty"`
+	ToolExtras string    `gorm:"type:text" json:"tool_extras,omitempty"`
+	CreatedAt  time.Time `gorm:"index;not null" json:"created_at"`
 }
 
 type MySQLSummaryDocument struct {
@@ -103,14 +104,16 @@ func (p *MySQLMemoryProvider) AddMessage(ctx context.Context, message types.Mess
 	p.mu.RUnlock()
 
 	partsJSON, _ := types.SerializeMessageParts(message.Parts)
+	extras := encodeMessageToolExtras(message)
 
 	doc := MySQLMessageDocument{
-		SessionID: sessionID,
-		Role:      message.Role,
-		Content:   message.Content,
-		Name:      message.Name,
-		Parts:     partsJSON,
-		CreatedAt: time.Now(),
+		SessionID:  sessionID,
+		Role:       message.Role,
+		Content:    message.Content,
+		Name:       message.Name,
+		Parts:      partsJSON,
+		ToolExtras: extras,
+		CreatedAt:  time.Now(),
 	}
 
 	if err := p.getDB().WithContext(ctx).Table(tableName).Create(&doc).Error; err != nil {
@@ -154,12 +157,14 @@ func (p *MySQLMemoryProvider) GetMessages(ctx context.Context, limit int) ([]typ
 	messages := make([]types.Message, 0, len(docs)+1)
 	for i := len(docs) - 1; i >= 0; i-- {
 		parts, _ := types.DeserializeMessageParts(docs[i].Parts)
-		messages = append(messages, types.Message{
+		m := types.Message{
 			Role:    docs[i].Role,
 			Content: docs[i].Content,
 			Name:    docs[i].Name,
 			Parts:   parts,
-		})
+		}
+		applyStoredToolExtras(&m, docs[i].ToolExtras)
+		messages = append(messages, m)
 	}
 
 	// Fetch summary
@@ -213,17 +218,8 @@ func (p *MySQLMemoryProvider) SaveContext(ctx context.Context, input, output map
 			return err
 		}
 	}
-	if outputMsg, ok := output["output"].(string); ok {
-		role, _ := output["role"].(string)
-		if role == "" {
-			role = "assistant"
-		}
-		if err := p.AddMessage(ctx, types.Message{
-			Role:    role,
-			Content: outputMsg,
-		}); err != nil {
-			return err
-		}
+	if err := saveOutputWithToolSteps(ctx, p, output); err != nil {
+		return err
 	}
 	return nil
 }
@@ -257,11 +253,15 @@ func (p *MySQLMemoryProvider) GetChatHistory(ctx context.Context) ([]types.Messa
 	}
 	messages := make([]types.Message, 0, len(docs))
 	for _, doc := range docs {
-		messages = append(messages, types.Message{
+		parts, _ := types.DeserializeMessageParts(doc.Parts)
+		m := types.Message{
 			Role:    doc.Role,
 			Content: doc.Content,
 			Name:    doc.Name,
-		})
+			Parts:   parts,
+		}
+		applyStoredToolExtras(&m, doc.ToolExtras)
+		messages = append(messages, m)
 	}
 	return messages, nil
 }

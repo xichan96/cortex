@@ -67,8 +67,8 @@ type AgentConfig struct {
 	RetryDelay               time.Duration                                                     `json:"retryDelay"`
 	EnableToolRetry          bool                                                              `json:"enableToolRetry"`
 	MaxHistoryMessages       int                                                               `json:"maxHistoryMessages"`
-	EnableMemoryCompress     bool                                                              `json:"enableMemoryCompress"`
-	MemoryCompressThreshold  int                                                               `json:"memoryCompressThreshold"`
+	EnableMemoryCompress    bool `json:"enableMemoryCompress"`
+	MemoryCompressThreshold int  `json:"memoryCompressThreshold"` // message count incl. each assistant + tool row from tool rounds
 	MemoryCompressRatio      float32                                                           `json:"memoryCompressRatio"`
 	LogSilent                bool                                                              `json:"logSilent"`
 	LogFile                  string                                                            `json:"logFile"`
