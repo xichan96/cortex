@@ -25,54 +25,47 @@ func (ae *AgentEngine) buildContextFromPreviousRequests(requests []types.ToolCal
 	return builder.String()
 }
 
+// buildNextMessages appends one assistant turn (with tool_calls) and following tool
+// messages to the full previous transcript so the model retains prior tool outputs on
+// the next iteration.
 func (ae *AgentEngine) buildNextMessages(previousMessages []types.Message, result *types.AgentResult) []types.Message {
-	messages := make([]types.Message, 0, 4)
-
-	for _, msg := range previousMessages {
-		if msg.Role == "system" {
-			messages = append(messages, msg)
-		}
+	if result == nil || (result.Output == "" && len(result.IntermediateSteps) == 0) {
+		return previousMessages
 	}
 
-	for i := len(previousMessages) - 1; i >= 0; i-- {
-		if previousMessages[i].Role == "user" || previousMessages[i].Role == "human" {
-			messages = append(messages, previousMessages[i])
-			break
-		}
-	}
+	n := len(previousMessages)
+	capacity := n + 1 + len(result.IntermediateSteps)
+	out := make([]types.Message, n, capacity)
+	copy(out, previousMessages)
 
-	if result != nil && (result.Output != "" || len(result.IntermediateSteps) > 0) {
-		assistantToolCalls := make([]types.ToolCall, 0, len(result.IntermediateSteps))
-		for _, step := range result.IntermediateSteps {
-			args, _ := step.Action.ToolInput.(map[string]interface{})
-			if args == nil {
-				args = make(map[string]interface{})
-			}
-			assistantToolCalls = append(assistantToolCalls, types.ToolCall{
-				ID:   toolCallIDString(step),
-				Type: fmt.Sprint(step.Action.Type),
-				Function: types.ToolFunction{
-					Name:      step.Action.Tool,
-					Arguments: args,
-				},
-			})
+	assistantToolCalls := make([]types.ToolCall, 0, len(result.IntermediateSteps))
+	for _, step := range result.IntermediateSteps {
+		args, _ := step.Action.ToolInput.(map[string]interface{})
+		if args == nil {
+			args = make(map[string]interface{})
 		}
-		messages = append(messages, types.Message{
-			Role:      "assistant",
-			Content:   result.Output,
-			ToolCalls: assistantToolCalls,
+		assistantToolCalls = append(assistantToolCalls, types.ToolCall{
+			ID:   toolCallIDString(step),
+			Type: fmt.Sprint(step.Action.Type),
+			Function: types.ToolFunction{
+				Name:      step.Action.Tool,
+				Arguments: args,
+			},
+		})
+	}
+	out = append(out, types.Message{
+		Role:      "assistant",
+		Content:   result.Output,
+		ToolCalls: assistantToolCalls,
+	})
+
+	for _, step := range result.IntermediateSteps {
+		out = append(out, types.Message{
+			Role:       "tool",
+			Content:    step.Observation,
+			ToolCallID: toolCallIDString(step),
 		})
 	}
 
-	if result != nil && len(result.IntermediateSteps) > 0 {
-		for _, step := range result.IntermediateSteps {
-			messages = append(messages, types.Message{
-				Role:       "tool",
-				Content:    step.Observation,
-				ToolCallID: toolCallIDString(step),
-			})
-		}
-	}
-
-	return messages
+	return out
 }
