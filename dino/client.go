@@ -43,7 +43,7 @@ func WithSessionQueueEnabled(maxSize, maxPending int) ClientOption {
 
 func NewClient(factory DinoFactory, opts ...ClientOption) *Client {
 	cfg := &clientConfig{
-		sessionBufferSize: 10,
+		sessionBufferSize: 100,
 		enableQueue:       false,
 	}
 	for _, opt := range opts {
