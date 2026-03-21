@@ -68,6 +68,9 @@ func (p *RedisMemoryProvider) AddMessage(ctx context.Context, message types.Mess
 	if partsJSON != "" {
 		msgData["parts"] = partsJSON
 	}
+	if x := encodeMessageToolExtras(message); x != "" {
+		msgData["tool_extras"] = x
+	}
 
 	msgJSON, err := json.Marshal(msgData)
 	if err != nil {
@@ -143,6 +146,9 @@ func (p *RedisMemoryProvider) GetMessages(ctx context.Context, limit int) ([]typ
 			parts, _ := types.DeserializeMessageParts(partsJSON)
 			msg.Parts = parts
 		}
+		if x, ok := msgData["tool_extras"].(string); ok {
+			applyStoredToolExtras(&msg, x)
+		}
 
 		messages = append(messages, msg)
 	}
@@ -180,17 +186,8 @@ func (p *RedisMemoryProvider) SaveContext(ctx context.Context, input, output map
 			return err
 		}
 	}
-	if outputMsg, ok := output["output"].(string); ok {
-		role, _ := output["role"].(string)
-		if role == "" {
-			role = "assistant"
-		}
-		if err := p.AddMessage(ctx, types.Message{
-			Role:    role,
-			Content: outputMsg,
-		}); err != nil {
-			return err
-		}
+	if err := saveOutputWithToolSteps(ctx, p, output); err != nil {
+		return err
 	}
 	return nil
 }
@@ -229,6 +226,9 @@ func (p *RedisMemoryProvider) GetChatHistory(ctx context.Context) ([]types.Messa
 		if partsJSON, ok := msgData["parts"].(string); ok && partsJSON != "" {
 			parts, _ := types.DeserializeMessageParts(partsJSON)
 			msg.Parts = parts
+		}
+		if x, ok := msgData["tool_extras"].(string); ok {
+			applyStoredToolExtras(&msg, x)
 		}
 
 		messages = append(messages, msg)

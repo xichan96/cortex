@@ -461,6 +461,21 @@ func (ae *AgentEngine) addConfigValuesToContext(ctx context.Context) context.Con
 	return ctx
 }
 
+func memoryOutputMap(result *types.AgentResult, allIntermediate []types.ToolCallData) map[string]interface{} {
+	if result == nil {
+		return map[string]interface{}{"output": ""}
+	}
+	m := map[string]interface{}{"output": result.Output}
+	steps := result.IntermediateSteps
+	if len(allIntermediate) > 0 {
+		steps = allIntermediate
+	}
+	if len(steps) > 0 {
+		m["intermediate_steps"] = steps
+	}
+	return m
+}
+
 func (ae *AgentEngine) saveToMemoryAndMaybeCompress(ctx context.Context, inputMap, outputMap map[string]interface{}) {
 	if ae.memory == nil {
 		return
@@ -554,6 +569,7 @@ func (ae *AgentEngine) Execute(ctx context.Context, input types.AgentInput, prev
 		onDoomLoop = config.OnDoomLoop
 	}
 	var doomState doomLoopState
+	var allIntermediateSteps []types.ToolCallData
 	for iteration < maxIterations {
 		select {
 		case <-ctx.Done():
@@ -574,6 +590,7 @@ func (ae *AgentEngine) Execute(ctx context.Context, input types.AgentInput, prev
 		totalUsage.TotalTokens += result.Usage.TotalTokens
 		finalResult = result
 		finalResult.Usage = totalUsage
+		allIntermediateSteps = append(allIntermediateSteps, result.IntermediateSteps...)
 
 		if !continueIterating || len(result.IntermediateSteps) == 0 {
 			logger.LogExecution("Execute", iteration, "Execution completed, no more tool calls")
@@ -619,7 +636,7 @@ func (ae *AgentEngine) Execute(ctx context.Context, input types.AgentInput, prev
 		}
 		ae.saveToMemoryAndMaybeCompress(ctx, map[string]interface{}{
 			"input": input.String(), "role": chatRole, "parts": input.Parts,
-		}, map[string]interface{}{"output": finalResult.Output})
+		}, memoryOutputMap(finalResult, allIntermediateSteps))
 	}
 
 	return finalResult, nil
@@ -763,9 +780,11 @@ func (ae *AgentEngine) prepareMessages(ctx context.Context, input types.AgentInp
 	}
 
 	config := ae.getConfig()
-	estimatedSize := 1 +
-		len(history) +
-		len(previousRequests)
+	prevMsgs := 0
+	if len(previousRequests) > 0 {
+		prevMsgs = 1 + len(previousRequests)
+	}
+	estimatedSize := 1 + len(history) + prevMsgs
 	if config != nil && config.SystemMessage != "" {
 		estimatedSize++
 	}
@@ -786,13 +805,8 @@ func (ae *AgentEngine) prepareMessages(ctx context.Context, input types.AgentInp
 		messages = append(messages, history...)
 	}
 
-	// Add tool call context if previous requests exist
 	if len(previousRequests) > 0 {
-		context := ae.buildContextFromPreviousRequests(previousRequests)
-		messages = append(messages, types.Message{
-			Role:    "system",
-			Content: context,
-		})
+		messages = append(messages, types.MessagesFromToolSteps("", previousRequests)...)
 	}
 
 	// Add user input
@@ -964,6 +978,10 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 		}
 	}
 
+	// Set final result's tool calls and intermediate steps
+	finalResult.ToolCalls = toolCalls
+	finalResult.IntermediateSteps = intermediateSteps
+
 	if ae.memory != nil && len(initialMessages) > 0 {
 		chatRole := "user"
 		if c := ae.getConfig(); c != nil && c.ChatMessageRole != "" {
@@ -972,12 +990,8 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 		lastMsg := initialMessages[len(initialMessages)-1]
 		ae.saveToMemoryAndMaybeCompress(ctx, map[string]interface{}{
 			"input": lastMsg.Content, "role": chatRole, "parts": lastMsg.Parts,
-		}, map[string]interface{}{"output": finalResult.Output})
+		}, memoryOutputMap(finalResult, intermediateSteps))
 	}
-
-	// Set final result's tool calls and intermediate steps
-	finalResult.ToolCalls = toolCalls
-	finalResult.IntermediateSteps = intermediateSteps
 
 	// Update total usage
 	ae.mu.Lock()

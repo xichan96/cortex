@@ -110,8 +110,6 @@ func (p *SimpleMemoryProvider) LoadMemoryVariables(ctx context.Context) (map[str
 
 // SaveContext saves context (implements MemoryProvider interface)
 func (p *SimpleMemoryProvider) SaveContext(ctx context.Context, input, output map[string]interface{}) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	if inputMsg, ok := input["input"].(string); ok {
 		role, _ := input["role"].(string)
 		if role == "" {
@@ -124,19 +122,11 @@ func (p *SimpleMemoryProvider) SaveContext(ctx context.Context, input, output ma
 		if parts, ok := input["parts"].([]types.MessagePart); ok {
 			msg.Parts = parts
 		}
+		p.mu.Lock()
 		p.messages = append(p.messages, msg)
+		p.mu.Unlock()
 	}
-	if outputMsg, ok := output["output"].(string); ok {
-		role, _ := output["role"].(string)
-		if role == "" {
-			role = "assistant"
-		}
-		p.messages = append(p.messages, types.Message{
-			Role:    role,
-			Content: outputMsg,
-		})
-	}
-	return nil
+	return saveOutputWithToolSteps(ctx, p, output)
 }
 
 // Clear clears memory (implements MemoryProvider interface)

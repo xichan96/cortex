@@ -13,13 +13,14 @@ import (
 )
 
 type MessageDocument struct {
-	ID        primitive.ObjectID `bson:"_id,omitempty"`
-	SessionID string             `bson:"session_id"`
-	Role      string             `bson:"role"`
-	Content   string             `bson:"content"`
-	Name      string             `bson:"name,omitempty"`
-	Parts     string             `bson:"parts,omitempty"`
-	CreatedAt time.Time          `bson:"created_at"`
+	ID         primitive.ObjectID `bson:"_id,omitempty"`
+	SessionID  string             `bson:"session_id"`
+	Role       string             `bson:"role"`
+	Content    string             `bson:"content"`
+	Name       string             `bson:"name,omitempty"`
+	Parts      string             `bson:"parts,omitempty"`
+	ToolExtras string             `bson:"tool_extras,omitempty"`
+	CreatedAt  time.Time          `bson:"created_at"`
 }
 
 type SummaryDocument struct {
@@ -82,14 +83,16 @@ func (p *MongoDBMemoryProvider) AddMessage(ctx context.Context, message types.Me
 	p.mu.RUnlock()
 
 	partsJSON, _ := types.SerializeMessageParts(message.Parts)
+	extras := encodeMessageToolExtras(message)
 
 	doc := MessageDocument{
-		SessionID: sessionID,
-		Role:      message.Role,
-		Content:   message.Content,
-		Name:      message.Name,
-		Parts:     partsJSON,
-		CreatedAt: time.Now(),
+		SessionID:  sessionID,
+		Role:       message.Role,
+		Content:    message.Content,
+		Name:       message.Name,
+		Parts:      partsJSON,
+		ToolExtras: extras,
+		CreatedAt:  time.Now(),
 	}
 	_, err := p.getCollection().InsertOne(ctx, doc)
 	if err != nil {
@@ -144,12 +147,14 @@ func (p *MongoDBMemoryProvider) GetMessages(ctx context.Context, limit int) ([]t
 	for i := len(docs) - 1; i >= 0; i-- {
 		doc := docs[i]
 		parts, _ := types.DeserializeMessageParts(doc.Parts)
-		messages = append(messages, types.Message{
+		m := types.Message{
 			Role:    doc.Role,
 			Content: doc.Content,
 			Name:    doc.Name,
 			Parts:   parts,
-		})
+		}
+		applyStoredToolExtras(&m, doc.ToolExtras)
+		messages = append(messages, m)
 	}
 
 	return messages, nil
@@ -185,17 +190,8 @@ func (p *MongoDBMemoryProvider) SaveContext(ctx context.Context, input, output m
 			return err
 		}
 	}
-	if outputMsg, ok := output["output"].(string); ok {
-		role, _ := output["role"].(string)
-		if role == "" {
-			role = "assistant"
-		}
-		if err := p.AddMessage(ctx, types.Message{
-			Role:    role,
-			Content: outputMsg,
-		}); err != nil {
-			return err
-		}
+	if err := saveOutputWithToolSteps(ctx, p, output); err != nil {
+		return err
 	}
 	return nil
 }
@@ -222,12 +218,14 @@ func (p *MongoDBMemoryProvider) GetChatHistory(ctx context.Context) ([]types.Mes
 	messages := make([]types.Message, 0, len(docs))
 	for _, doc := range docs {
 		parts, _ := types.DeserializeMessageParts(doc.Parts)
-		messages = append(messages, types.Message{
+		m := types.Message{
 			Role:    doc.Role,
 			Content: doc.Content,
 			Name:    doc.Name,
 			Parts:   parts,
-		})
+		}
+		applyStoredToolExtras(&m, doc.ToolExtras)
+		messages = append(messages, m)
 	}
 	return messages, nil
 }
