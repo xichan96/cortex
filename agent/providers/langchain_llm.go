@@ -552,8 +552,8 @@ func (p *LangChainLLMProvider) convertToLangChainMessages(messages []types.Messa
 		} else if msg.Role == "tool" && msg.ToolCallID != "" {
 			// Tool messages MUST use ToolCallResponse for OpenAI compatibility (expected part type for role "tool")
 			content := msg.Content
-			if content == "" {
-				content = "{}"
+			if strings.TrimSpace(content) == "" {
+				content = types.ToolEmptyResultMessage
 			}
 			parts = append(parts, llms.ToolCallResponse{
 				ToolCallID: msg.ToolCallID,
