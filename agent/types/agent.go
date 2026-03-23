@@ -28,6 +28,8 @@ const (
 	ToolStateRunning   = "running"
 	ToolStateCompleted = "completed"
 	ToolStateError     = "error"
+
+	ToolEmptyResultMessage = "Tool executed successfully but returned no result"
 )
 
 // StreamResult tool event types
@@ -67,8 +69,8 @@ type AgentConfig struct {
 	RetryDelay               time.Duration                                                     `json:"retryDelay"`
 	EnableToolRetry          bool                                                              `json:"enableToolRetry"`
 	MaxHistoryMessages       int                                                               `json:"maxHistoryMessages"`
-	EnableMemoryCompress    bool `json:"enableMemoryCompress"`
-	MemoryCompressThreshold int  `json:"memoryCompressThreshold"` // message count incl. each assistant + tool row from tool rounds
+	EnableMemoryCompress     bool                                                              `json:"enableMemoryCompress"`
+	MemoryCompressThreshold  int                                                               `json:"memoryCompressThreshold"` // message count incl. each assistant + tool row from tool rounds
 	MemoryCompressRatio      float32                                                           `json:"memoryCompressRatio"`
 	LogSilent                bool                                                              `json:"logSilent"`
 	LogFile                  string                                                            `json:"logFile"`
@@ -317,13 +319,18 @@ func NormalizeToolError(err error, maxLen int) string {
 // Uses JSON marshaling for better representation of complex data structures
 func FormatToolResult(result interface{}) string {
 	if result == nil {
-		return "Tool executed successfully but returned no result"
+		return ToolEmptyResultMessage
 	}
-	// Try JSON marshaling first for better formatting
+	if s, ok := result.(string); ok && strings.TrimSpace(s) == "" {
+		return ToolEmptyResultMessage
+	}
 	if jsonBytes, err := json.MarshalIndent(result, "", "  "); err == nil {
+		s := strings.TrimSpace(string(jsonBytes))
+		if s == `""` || s == "null" {
+			return ToolEmptyResultMessage
+		}
 		return string(jsonBytes)
 	}
-	// Fallback to string representation if JSON marshaling fails
 	return fmt.Sprintf("%v", result)
 }
 
