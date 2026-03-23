@@ -14,6 +14,8 @@ import (
 
 type Message = agenttypes.Message
 
+const DefaultSharedDBFile = "shared_chat.db"
+
 type ToolCall struct {
 	Name   string `json:"name"`
 	Input  string `json:"input"`
@@ -42,6 +44,7 @@ type Config struct {
 	KeepRecentCount         int
 	CompressionRatio        float32
 	PersistDirectory        string
+	SQLiteFile              string
 }
 
 func DefaultConfig() *Config {

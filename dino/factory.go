@@ -206,7 +206,8 @@ type dinoFactory struct {
 	mu              sync.RWMutex
 	streamSender    StreamEventSender
 	subagentManager *dinoAgent.SubagentManager
-	mcpManager      *dinoTools.MCPManager
+	mcpManager           *dinoTools.MCPManager
+	sessionToolsProvider func(sessionID string) []types.Tool
 }
 
 func (f *dinoFactory) LoopDetector() agentutils.LoopDetector {
@@ -256,6 +257,12 @@ type FactoryOption func(*dinoFactory)
 func WithStreamEventSender(sender StreamEventSender) FactoryOption {
 	return func(f *dinoFactory) {
 		f.streamSender = sender
+	}
+}
+
+func WithSessionTools(fn func(sessionID string) []types.Tool) FactoryOption {
+	return func(f *dinoFactory) {
+		f.sessionToolsProvider = fn
 	}
 }
 
@@ -417,6 +424,30 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 		wrappedTools = append(wrappedTools, wrapped)
 	}
 
+	if f.sessionToolsProvider != nil {
+		for _, t := range f.sessionToolsProvider(sessionID) {
+			if t == nil {
+				continue
+			}
+			name := t.Name()
+			action := evaluator.Evaluate(name, nil)
+			if action == permission.ActionDeny {
+				logger.Info("[DinoFactory] Tool denied by permission", slog.String("tool", name))
+				continue
+			}
+			if action == permission.ActionAsk {
+				needApproval[name] = true
+			}
+			logger.Info("[DinoFactory] Adding tool", slog.String("tool", name), slog.String("permission", string(action)))
+			wrapped := t
+			if needApproval[name] {
+				wrapped = NewApprovalTool(wrapped, sessionID, f.approvalStore, needApproval)
+			}
+			wrapped = dinoTools.WrapLoopDetection(wrapped, sessionID, f.loopDetector, senderAdapter)
+			wrappedTools = append(wrappedTools, wrapped)
+		}
+	}
+
 	if f.subagentManager != nil {
 		delegateTool := dinoAgent.NewSubagentTool(f.subagentManager)
 		wrapped := dinoTools.WrapLoopDetection(delegateTool, sessionID, f.loopDetector, senderAdapter)
@@ -435,6 +466,7 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 			MemoryCompressThreshold: f.config.Memory.CompressThreshold,
 			KeepRecentCount:         f.config.Memory.KeepRecentCount,
 			PersistDirectory:        f.config.Memory.PersistDirectory,
+			SQLiteFile:              f.config.Memory.PersistFileName,
 		}
 
 		var memProvider memory.Provider

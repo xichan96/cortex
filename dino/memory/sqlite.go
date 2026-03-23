@@ -16,8 +16,6 @@ import (
 	"github.com/xichan96/cortex/pkg/logger"
 )
 
-const maxSessionIDLen = 128
-
 type SQLite struct {
 	db        *sql.DB
 	sessionID string
@@ -27,12 +25,163 @@ type SQLite struct {
 	comparing atomic.Bool
 }
 
-type sqliteMessage struct {
-	ID        int64
-	Role      string
-	Content   string
-	Timestamp time.Time
-	ToolCalls string
+var (
+	sharedMu    sync.Mutex
+	sharedDBBy  = map[string]*sql.DB{}
+	migrateOnce sync.Map
+)
+
+func OpenSharedChatStore(dir, sqliteFile string) (*sql.DB, error) {
+	return openSharedSQLite(dir, sqliteFile)
+}
+
+func renameLegacySharedDBFile(absDir, sqliteFile string) {
+	newPath := filepath.Join(absDir, sqliteFile)
+	oldPath := filepath.Join(absDir, "cortex_chat.db")
+	if _, err := os.Stat(newPath); err == nil {
+		return
+	}
+	if _, err := os.Stat(oldPath); err == nil {
+		_ = os.Rename(oldPath, newPath)
+	}
+}
+
+func openSharedSQLite(dir, sqliteFile string) (*sql.DB, error) {
+	if sqliteFile == "" {
+		sqliteFile = DefaultSharedDBFile
+	}
+	if dir == "" {
+		dir = "./cortex_sessions"
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(absDir, 0755); err != nil {
+		return nil, fmt.Errorf("create persist directory: %w", err)
+	}
+	renameLegacySharedDBFile(absDir, sqliteFile)
+
+	dbPath, err := filepath.Abs(filepath.Join(absDir, sqliteFile))
+	if err != nil {
+		return nil, err
+	}
+
+	sharedMu.Lock()
+	if db := sharedDBBy[dbPath]; db != nil {
+		sharedMu.Unlock()
+		return db, nil
+	}
+	sharedMu.Unlock()
+
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite: %w", err)
+	}
+	if err := initSharedSQLiteDB(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("init db: %w", err)
+	}
+
+	v, _ := migrateOnce.LoadOrStore(dbPath, &sync.Once{})
+	once := v.(*sync.Once)
+	once.Do(func() {
+		if migErr := migrateLegacySessionDBs(context.Background(), db, absDir, sqliteFile); migErr != nil {
+			logger.Warn("[SQLite] legacy migration", slog.String("error", migErr.Error()))
+		}
+	})
+
+	sharedMu.Lock()
+	defer sharedMu.Unlock()
+	if existing := sharedDBBy[dbPath]; existing != nil {
+		db.Close()
+		return existing, nil
+	}
+	sharedDBBy[dbPath] = db
+	return db, nil
+}
+
+func initSharedSQLiteDB(db *sql.DB) error {
+	schema := `
+	CREATE TABLE IF NOT EXISTS messages (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id TEXT NOT NULL,
+		role TEXT NOT NULL,
+		content TEXT NOT NULL,
+		timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+		tool_calls TEXT
+	);
+	CREATE INDEX IF NOT EXISTS idx_messages_session_ts ON messages(session_id, timestamp);
+	CREATE TABLE IF NOT EXISTS metadata (
+		session_id TEXT NOT NULL,
+		key TEXT NOT NULL,
+		value TEXT,
+		PRIMARY KEY (session_id, key)
+	);
+	`
+	_, err := db.Exec(schema)
+	return err
+}
+
+func migrateLegacySessionDBs(ctx context.Context, shared *sql.DB, absDir, sharedSQLiteFile string) error {
+	ents, err := os.ReadDir(absDir)
+	if err != nil {
+		return err
+	}
+	for _, e := range ents {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if name == sharedSQLiteFile || !strings.HasPrefix(name, "session_") || !strings.HasSuffix(name, ".db") {
+			continue
+		}
+		sid := strings.TrimSuffix(strings.TrimPrefix(name, "session_"), ".db")
+		if sid == "" {
+			continue
+		}
+		var n int
+		if err := shared.QueryRowContext(ctx, "SELECT COUNT(*) FROM messages WHERE session_id = ?", sid).Scan(&n); err != nil {
+			continue
+		}
+		if n > 0 {
+			continue
+		}
+		legacyPath := filepath.Join(absDir, name)
+		legDB, err := sql.Open("sqlite3", legacyPath+"?mode=ro")
+		if err != nil {
+			continue
+		}
+		rows, err := legDB.QueryContext(ctx, "SELECT role, content, timestamp, tool_calls FROM messages ORDER BY timestamp ASC")
+		if err != nil {
+			legDB.Close()
+			continue
+		}
+		for rows.Next() {
+			var role, content, ts, toolCalls string
+			if err := rows.Scan(&role, &content, &ts, &toolCalls); err != nil {
+				rows.Close()
+				legDB.Close()
+				return err
+			}
+			if _, err := shared.ExecContext(ctx,
+				"INSERT INTO messages (session_id, role, content, timestamp, tool_calls) VALUES (?, ?, ?, ?, ?)",
+				sid, role, content, ts, toolCalls); err != nil {
+				rows.Close()
+				legDB.Close()
+				return err
+			}
+		}
+		rows.Close()
+
+		var summary string
+		if err := legDB.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key = 'summary'").Scan(&summary); err == nil && summary != "" {
+			_, _ = shared.ExecContext(ctx, "INSERT OR REPLACE INTO metadata (session_id, key, value) VALUES (?, 'summary', ?)", sid, summary)
+		}
+		legDB.Close()
+		_ = os.Rename(legacyPath, legacyPath+".bak")
+	}
+	return nil
 }
 
 func NewSQLite(sessionID string, config *Config) (Provider, error) {
@@ -40,26 +189,10 @@ func NewSQLite(sessionID string, config *Config) (Provider, error) {
 		config = DefaultConfig()
 	}
 
-	sanitizedID := sanitizeSessionID(sessionID)
-
 	dir := config.PersistDirectory
-	if dir == "" {
-		dir = "./dino_sessions"
-	}
-
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("create persist directory: %w", err)
-	}
-
-	dbPath := filepath.Join(dir, fmt.Sprintf("session_%s.db", sanitizedID))
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openSharedSQLite(dir, config.SQLiteFile)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite: %w", err)
-	}
-
-	if err := initSQLiteDB(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("init db: %w", err)
+		return nil, err
 	}
 
 	return &SQLite{
@@ -68,25 +201,6 @@ func NewSQLite(sessionID string, config *Config) (Provider, error) {
 		config:    config,
 		stats:     Stats{},
 	}, nil
-}
-
-func initSQLiteDB(db *sql.DB) error {
-	schema := `
-	CREATE TABLE IF NOT EXISTS messages (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		role TEXT NOT NULL,
-		content TEXT NOT NULL,
-		timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-		tool_calls TEXT
-	);
-	CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
-	CREATE TABLE IF NOT EXISTS metadata (
-		key TEXT PRIMARY KEY,
-		value TEXT
-	);
-	`
-	_, err := db.Exec(schema)
-	return err
 }
 
 func (s *SQLite) AddMessage(ctx context.Context, msg Message) error {
@@ -99,8 +213,8 @@ func (s *SQLite) AddMessage(ctx context.Context, msg Message) error {
 	}
 
 	_, err := s.db.ExecContext(ctx,
-		"INSERT INTO messages (role, content, timestamp, tool_calls) VALUES (?, ?, ?, ?)",
-		msg.Role, msg.Content, time.Now().Format(time.RFC3339), toolCallsJSON)
+		"INSERT INTO messages (session_id, role, content, timestamp, tool_calls) VALUES (?, ?, ?, ?, ?)",
+		s.sessionID, msg.Role, msg.Content, time.Now().Format(time.RFC3339), toolCallsJSON)
 	if err != nil {
 		return err
 	}
@@ -125,10 +239,11 @@ func (s *SQLite) GetMessages(ctx context.Context, limit int) ([]Message, error) 
 	var args []interface{}
 
 	if limit > 0 {
-		query = "SELECT role, content, timestamp, tool_calls FROM messages ORDER BY timestamp ASC LIMIT ?"
-		args = append(args, limit)
+		query = "SELECT role, content, timestamp, tool_calls FROM messages WHERE session_id = ? ORDER BY timestamp ASC LIMIT ?"
+		args = []interface{}{s.sessionID, limit}
 	} else {
-		query = "SELECT role, content, timestamp, tool_calls FROM messages ORDER BY timestamp ASC"
+		query = "SELECT role, content, timestamp, tool_calls FROM messages WHERE session_id = ? ORDER BY timestamp ASC"
+		args = []interface{}{s.sessionID}
 	}
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -157,7 +272,7 @@ func (s *SQLite) GetSummary(ctx context.Context) (string, error) {
 	defer s.mu.RUnlock()
 
 	var summary string
-	err := s.db.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key = 'summary'").Scan(&summary)
+	err := s.db.QueryRowContext(ctx, "SELECT value FROM metadata WHERE session_id = ? AND key = 'summary'", s.sessionID).Scan(&summary)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
@@ -182,18 +297,19 @@ func (s *SQLite) Compress(ctx context.Context) error {
 	summary := fmt.Sprintf("Previous conversation summary: %d messages about: %s",
 		len(old), summarizeMessages(old))
 
-	_, err = s.db.ExecContext(ctx, "DELETE FROM messages WHERE id NOT IN (SELECT id FROM messages ORDER BY timestamp DESC LIMIT ?)",
-		s.config.KeepRecentCount)
+	_, err = s.db.ExecContext(ctx, `DELETE FROM messages WHERE session_id = ? AND id NOT IN (
+		SELECT id FROM (SELECT id FROM messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT ?)
+	)`, s.sessionID, s.sessionID, s.config.KeepRecentCount)
 	if err != nil {
 		return err
 	}
 
-	_, err = s.db.ExecContext(ctx, "INSERT OR REPLACE INTO metadata (key, value) VALUES ('summary', ?)", summary)
+	_, err = s.db.ExecContext(ctx, "INSERT OR REPLACE INTO metadata (session_id, key, value) VALUES (?, 'summary', ?)", s.sessionID, summary)
 	return err
 }
 
 func (s *SQLite) getAllMessages() ([]Message, error) {
-	rows, err := s.db.Query("SELECT role, content, timestamp, tool_calls FROM messages ORDER BY timestamp ASC")
+	rows, err := s.db.Query("SELECT role, content, timestamp, tool_calls FROM messages WHERE session_id = ? ORDER BY timestamp ASC", s.sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +345,8 @@ func (s *SQLite) Clear(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_, err := s.db.ExecContext(ctx, "DELETE FROM messages")
+	_, _ = s.db.ExecContext(ctx, "DELETE FROM metadata WHERE session_id = ?", s.sessionID)
+	_, err := s.db.ExecContext(ctx, "DELETE FROM messages WHERE session_id = ?", s.sessionID)
 	s.stats = Stats{}
 	return err
 }
@@ -241,7 +358,7 @@ func (s *SQLite) GetStats() Stats {
 }
 
 func (s *SQLite) Close() error {
-	return s.db.Close()
+	return nil
 }
 
 func summarizeMessages(messages []Message) string {
@@ -308,20 +425,4 @@ func extractKeywords(text string) []string {
 		}
 	}
 	return keywords
-}
-
-func sanitizeSessionID(id string) string {
-	if len(id) > maxSessionIDLen {
-		id = id[:maxSessionIDLen]
-	}
-	result := make([]byte, 0, len(id))
-	for i := 0; i < len(id); i++ {
-		c := id[i]
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' {
-			result = append(result, c)
-		} else {
-			result = append(result, '_')
-		}
-	}
-	return string(result)
 }
