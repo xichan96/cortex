@@ -41,6 +41,7 @@ type MemoryConfig struct {
 	CompressThreshold  int    `yaml:"compress_threshold"`
 	KeepRecentCount    int    `yaml:"keep_recent_count"`
 	PersistDirectory   string `yaml:"persist_directory"`
+	PersistFileName    string `yaml:"persist_file_name"`
 	PersistEnabled     bool   `yaml:"persist_enabled"`
 	Type               string `yaml:"type"` // "memory" or "sqlite"
 }

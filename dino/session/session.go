@@ -448,6 +448,7 @@ func (s *Session) executeWithInput(ctx context.Context, agentInput types.AgentIn
 			if tail := out[len(acc):]; tail != "" {
 				s.emit(&Event{Type: EventTypeMessage, Content: tail})
 			}
+		case strings.HasSuffix(acc, out):
 		default:
 			s.emit(&Event{Type: EventTypeMessage, Content: out})
 		}
