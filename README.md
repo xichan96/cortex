@@ -40,14 +40,14 @@ Designed for production environments, CORTEX prioritizes reliability, configurab
 - **Intelligent Agent Engine**: A robust core for building agents with advanced reasoning and tool-calling capabilities.
 - **Broad LLM Support**: Seamless integration with OpenAI, DeepSeek, Volce, and custom providers.
 - **Multi-Modal Native**: Effortlessly process and generate text, images, and other media formats.
-- **Dynamic Skills**: File-system-based skill management with Lazy Loading for optimal performance.
+- **Dynamic Skills**: File-system-based skills with lazy loading; YAML frontmatter supports `paths`, `when_to_use`, and `allowed_tools`, with path-glob filtering (`doublestar`) and optional symlink resolve / real-path dedupe in the loader.
 - **Extensible Tooling**: `agent/tools/builtin` spans fs, search, shell/background jobs, net/web, Docker, email, math, and `mcp_client`; register custom `types.Tool` as needed.
 - **Real-Time Streaming**: Full support for response streaming, enabling interactive, low-latency user experiences.
-- **Hybrid Memory Architecture**: Implements a hybrid strategy combining full conversation history with rolling summaries. This approach optimizes token usage while retaining full context, backed by asynchronous compression to ensure low latency under high concurrency. Compatible with LangChain, MongoDB, Redis, MySQL, and SQLite.
+- **Hybrid Memory Architecture**: Full history plus rolling summaries, with asynchronous compression (mutex-serialized, turn-aware via `CompactAfterTurns`) so compress work does not overlap. Prompt assembly can trim recent chat to a rough token budget (`MaxBudgetTokens`, `RemainPromptTokens`). Providers may expose cheap `StoredMessageCount` for smarter gating. Compatible with LangChain, MongoDB, Redis, MySQL, and SQLite.
 - **Granular Configuration**: Extensive options to fine-tune agent behavior and performance.
 - **Parallel Execution**: Efficiently execute multiple tool calls concurrently to minimize wait times.
 - **Production-Grade Reliability**: Comprehensive error handling and retry mechanisms built for stability.
-- **Dino production orchestration**: Multi-session isolation, real-time event subscription, token/tool/time budgets, loop detection, approval for risky tools, priority task queue, planner mode, and subagents; curated builtins plus MCP and skills integration.
+- **Dino production orchestration**: Multi-session isolation, real-time event subscription, token/tool/time budgets, loop detection, approval for risky tools, priority task queue, planner mode, and subagents; session snapshot save/restore (messages window, usage, memory turn counter); YAML memory tuning (`max_budget_tokens`, `compact_after_turns`) and optional subagent replay into parent memory; curated builtins plus MCP and skills integration.
 
 ## Architecture Overview
 
@@ -192,6 +192,8 @@ llmProvider, _ := llm.VolceClient("ak-...", "doubao-pro-32k")
 ### Resources and stability
 
 - **Budget**: caps tokens, tool calls, and wall time.
+- **Memory tuning (YAML / factory)**: `memory.max_budget_tokens`, `memory.compact_after_turns`; subagent history cap (default 48); optional `replay_to_parent_memory` for delegating work while recording truncated task/output in the parent session.
+- **Session snapshots**: save and restore windowed messages, cumulative usage, and the engine memory-turn counter for durable sessions.
 - **Loop detection**: semantic similarity and repeat counts to break infinite loops.
 - **Planner mode**: optional plan-then-execute flow with auto-approve when trusted.
 
@@ -245,7 +247,7 @@ Builtins live under `agent/tools/builtin/` by package; register `types.Tool` ins
 | `fs/` | `read_file`, `write_file`, `edit_file`, `file` |
 | `search/` | `glob`, `grep`, `codesearch` (placeholder) |
 | `runtime/` | `command`, `question`, `job_kill`, `job_output` |
-| `task/` | `todo` |
+| `task/` | `todo` (in-process tasks: IDs, pending / in_progress / completed / cancelled, list & update) |
 | `net/` | `ssh`, `net_check` |
 | `web/` | `web_search`, `web_fetch` |
 | `system/` | `get_time`, `http_request` |
@@ -276,8 +278,8 @@ Cortex implements a unique **filesystem-based skill system** that allows you to 
 ### How it Works
 
 1.  **Define**: Create a `SKILL.md` file in a directory (e.g., `./skills/my-skill/SKILL.md`).
-2.  **Describe**: Use Markdown to describe the task and provide executable examples (e.g., `curl` commands, SQL queries).
-3.  **Discover**: Cortex automatically scans the skills directory and injects available skills into the system prompt.
+2.  **Describe**: Use Markdown to describe the task and provide executable examples (e.g., `curl` commands, SQL queries). Optional YAML frontmatter can set `name`, `description`, `paths` (globs for when the skill applies), `when_to_use`, and `allowed_tools`; active-path filtering merges only matching skills into the system prompt.
+3.  **Discover**: Cortex scans the skills directory (optional symlink resolution and dedupe by real path) and injects applicable skills.
 4.  **Execute**: When the agent needs to perform a task, it follows the instructions in your `SKILL.md`.
 
 ### Example Skill (`skills/weather/SKILL.md`)
@@ -333,10 +335,10 @@ Cortex features an advanced **Hybrid Memory Architecture** designed for long-run
 
 ### Key Features
 
-1.  **Raw History**: Preserves every interaction for complete auditability.
-2.  **Rolling Summary**: Asynchronously generates concise summaries of past conversations.
-3.  **Smart Retrieval**: Dynamically constructs prompts using "Summary + Recent Context" to maximize information density within token limits.
-4.  **Async Processing**: Summary generation happens in the background with automatic panic recovery, ensuring zero latency impact on user interactions.
+1.  **Raw History**: Preserves every interaction for complete auditability (retrieval is windowed; full store depends on the backend).
+2.  **Rolling Summary**: Asynchronously generates concise summaries of past conversations; compaction can be gated by turns (`CompactAfterTurns`) and optional stored message counts.
+3.  **Smart Retrieval**: Builds prompts from summary plus recent messages; recent chat can be trimmed to a rough token budget before the LLM call (`MaxBudgetTokens`, `RemainPromptTokens`, heuristic token estimate in `agent/types`).
+4.  **Async Processing**: Summary and compression run in the background with panic recovery and locking so user turns stay responsive.
 
 ### Storage Backends
 
@@ -356,6 +358,7 @@ agentEngine.SetMemory(context.Background(), memory)
 
 ## Examples
 
+- [Release summary](docs/RELEASE_SUMMARY.md): English notes on recent memory, skills, tools, and Dino changes.
 - [Basic Example](examples/basic): Fundamental usage patterns.
 - [Dino Example](examples/dino): Dino orchestration (sessions, budget, tool approval).
 - [Chat Web](examples/chat-web): Full-stack chat application (Gin + React).

@@ -72,6 +72,7 @@ func MessagesFromToolSteps(assistantContent string, steps []ToolCallData) []Mess
 		out = append(out, Message{
 			Role:       "tool",
 			Content:    step.Observation,
+			Name:       step.Action.Tool,
 			ToolCallID: toolCallIDAt(step, i),
 		})
 	}
@@ -81,16 +82,18 @@ func MessagesFromToolSteps(assistantContent string, steps []ToolCallData) []Mess
 type messageToolPersist struct {
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Name       string     `json:"name,omitempty"`
 }
 
 // MarshalMessageToolPersist JSON for DB/redis; empty string if no tool fields.
 func MarshalMessageToolPersist(m Message) (string, error) {
-	if len(m.ToolCalls) == 0 && m.ToolCallID == "" {
+	if len(m.ToolCalls) == 0 && m.ToolCallID == "" && m.Name == "" {
 		return "", nil
 	}
 	b, err := json.Marshal(messageToolPersist{
 		ToolCalls:  m.ToolCalls,
 		ToolCallID: m.ToolCallID,
+		Name:       m.Name,
 	})
 	if err != nil {
 		return "", err
@@ -109,5 +112,6 @@ func ApplyMessageToolPersist(m *Message, s string) error {
 	}
 	m.ToolCalls = x.ToolCalls
 	m.ToolCallID = x.ToolCallID
+	m.Name = x.Name
 	return nil
 }
