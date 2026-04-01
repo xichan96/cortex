@@ -57,17 +57,14 @@ func (t *GrepTool) Execute(ctx context.Context, input map[string]interface{}) (i
 
 	path, _ := input["path"].(string)
 	if path == "" {
-		path = t.workspace
+		if t.workspace == "*" {
+			path = "."
+		} else {
+			path = t.workspace
+		}
 	}
 
-	// Check if the search path is within workspace
-	// Dino used isPathInWorkspace which wraps fs.SafePath
-	// But fs.SafePath returns absolute path.
-	// grep command expects path.
-	// If path is relative, it's relative to CWD. But we should be careful.
-	// fs.SafePath ensures it is in workspace and returns absolute path.
-
-	absPath, err := fs.SafePath(t.workspace, path)
+	absPath, err := fs.SafePath(ctx, t.workspace, path)
 	if err != nil {
 		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(err)
 	}

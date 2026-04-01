@@ -51,13 +51,8 @@ func (t *GlobTool) Execute(ctx context.Context, input map[string]interface{}) (i
 		return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("pattern is required"))
 	}
 
-	searchPath := pattern
-	if !filepath.IsAbs(pattern) {
-		searchPath = filepath.Join(t.workspace, pattern)
-	}
-
-	// Check if the search path is within workspace
-	if _, err := fs.SafePath(t.workspace, searchPath); err != nil {
+	searchPath, err := fs.SafePath(ctx, t.workspace, pattern)
+	if err != nil {
 		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(err)
 	}
 
@@ -68,7 +63,7 @@ func (t *GlobTool) Execute(ctx context.Context, input map[string]interface{}) (i
 
 	var filtered []string
 	for _, m := range matches {
-		if _, err := fs.SafePath(t.workspace, m); err == nil {
+		if _, err := fs.SafePath(ctx, t.workspace, m); err == nil {
 			filtered = append(filtered, m)
 		}
 	}

@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	agentfs "github.com/xichan96/cortex/agent/tools/builtin/fs"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/logger"
 )
@@ -386,6 +390,138 @@ func (a *ApprovalTool) Execute(ctx context.Context, input map[string]interface{}
 
 func (a *ApprovalTool) RequiresApproval() bool {
 	return true
+}
+
+func collectOutsideAbsPaths(workspace, toolName string, input map[string]interface{}) ([]string, error) {
+	if workspace == "*" || strings.TrimSpace(workspace) == "" {
+		return nil, nil
+	}
+	var raw []string
+	add := func(p string) error {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			return nil
+		}
+		absW, absR, err := agentfs.ResolveAbsRequested(workspace, p)
+		if err != nil {
+			return err
+		}
+		if !agentfs.IsUnderWorkspaceRoot(absW, absR) {
+			raw = append(raw, absR)
+		}
+		return nil
+	}
+	switch toolName {
+	case "read_file", "write_file", "edit_file", "list_directory":
+		if p, ok := input["path"].(string); ok {
+			if err := add(p); err != nil {
+				return nil, err
+			}
+		}
+	case "glob":
+		if p, ok := input["pattern"].(string); ok {
+			if err := add(p); err != nil {
+				return nil, err
+			}
+		}
+	case "grep":
+		if p, ok := input["path"].(string); ok && p != "" {
+			if err := add(p); err != nil {
+				return nil, err
+			}
+		}
+	case "file":
+		if p, ok := input["path"].(string); ok {
+			if err := add(p); err != nil {
+				return nil, err
+			}
+		}
+		if tp, ok := input["target_path"].(string); ok && tp != "" {
+			if err := add(tp); err != nil {
+				return nil, err
+			}
+		}
+	}
+	seen := make(map[string]struct{}, len(raw))
+	var out []string
+	for _, p := range raw {
+		c := filepath.Clean(p)
+		if _, ok := seen[c]; ok {
+			continue
+		}
+		seen[c] = struct{}{}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+type ExternalPathApprovalTool struct {
+	inner     types.Tool
+	workspace string
+	sessionID string
+	store     *ApprovalStore
+}
+
+func NewExternalPathApprovalTool(inner types.Tool, workspace, sessionID string, store *ApprovalStore) *ExternalPathApprovalTool {
+	return &ExternalPathApprovalTool{inner: inner, workspace: workspace, sessionID: sessionID, store: store}
+}
+
+func (e *ExternalPathApprovalTool) Name() string {
+	return e.inner.Name()
+}
+
+func (e *ExternalPathApprovalTool) Description() string {
+	return e.inner.Description()
+}
+
+func (e *ExternalPathApprovalTool) Schema() map[string]interface{} {
+	return e.inner.Schema()
+}
+
+func (e *ExternalPathApprovalTool) Metadata() types.ToolMetadata {
+	return e.inner.Metadata()
+}
+
+func (e *ExternalPathApprovalTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	if e.workspace == "*" {
+		return e.inner.Execute(ctx, input)
+	}
+	outside, err := collectOutsideAbsPaths(e.workspace, e.inner.Name(), input)
+	if err != nil {
+		return nil, err
+	}
+	if len(outside) == 0 {
+		return e.inner.Execute(ctx, input)
+	}
+	payload := map[string]interface{}{
+		"reason":             "external_workspace_paths",
+		"absolute_paths":     outside,
+		"workspace_root":     e.workspace,
+		"original_arguments": input,
+	}
+	argsJSON, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal approval payload: %w", err)
+	}
+	approved, err := e.store.RequestApproval(ctx, e.sessionID, e.inner.Name(), string(argsJSON))
+	if err != nil {
+		return nil, fmt.Errorf("workspace path approval: %w", err)
+	}
+	if !approved {
+		return nil, fmt.Errorf("access to paths outside workspace was denied")
+	}
+	ctx2 := ctx
+	for _, abs := range outside {
+		ctx2 = agentfs.ContextWithApprovedPath(ctx2, abs)
+		if strings.ContainsAny(abs, "*?[") {
+			ctx2 = agentfs.ContextWithApprovedPrefix(ctx2, filepath.Dir(abs))
+			continue
+		}
+		if st, err := os.Stat(abs); err == nil && st.IsDir() {
+			ctx2 = agentfs.ContextWithApprovedPrefix(ctx2, abs)
+		}
+	}
+	return e.inner.Execute(ctx2, input)
 }
 
 var approvalRequestIDCounter uint64

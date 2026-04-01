@@ -49,7 +49,7 @@ func (t *WriteTool) Execute(ctx context.Context, input map[string]interface{}) (
 	if !ok {
 		return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("content is required"))
 	}
-	safePath, err := SafePath(t.workspace, path)
+	safePath, err := SafePath(ctx, t.workspace, path)
 	if err != nil {
 		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(err)
 	}

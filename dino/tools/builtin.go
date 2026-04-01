@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/xichan96/cortex/agent/tools/builtin/fs"
 	"github.com/xichan96/cortex/agent/tools/builtin/mcp"
@@ -137,13 +136,9 @@ func (t *ListDirectoryTool) Execute(ctx context.Context, input map[string]interf
 		return nil, fmt.Errorf("invalid path parameter")
 	}
 
-	if err := isPathInWorkspace(path, t.workspace); err != nil {
+	absPath, err := fs.SafePath(ctx, t.workspace, path)
+	if err != nil {
 		return nil, err
-	}
-
-	absPath := path
-	if !filepath.IsAbs(path) {
-		absPath = filepath.Join(t.workspace, path)
 	}
 
 	entries, err := os.ReadDir(absPath)
@@ -178,7 +173,3 @@ func (t *ListDirectoryTool) Metadata() types.ToolMetadata {
 	}
 }
 
-func isPathInWorkspace(path, workspace string) error {
-	_, err := fs.SafePath(workspace, path)
-	return err
-}

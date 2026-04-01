@@ -59,7 +59,7 @@ func (t *FileTool) Execute(ctx context.Context, input map[string]interface{}) (i
 	if !ok || path == "" {
 		return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("'path' parameter is required"))
 	}
-	safePath, err := SafePath(t.workspace, path)
+	safePath, err := SafePath(ctx, t.workspace, path)
 	if err != nil {
 		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(err)
 	}
@@ -142,7 +142,7 @@ func (t *FileTool) Execute(ctx context.Context, input map[string]interface{}) (i
 		if !ok || targetPath == "" {
 			return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("'target_path' parameter is required for copy operation"))
 		}
-		safeTarget, err := SafePath(t.workspace, targetPath)
+		safeTarget, err := SafePath(ctx, t.workspace, targetPath)
 		if err != nil {
 			return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(err)
 		}
@@ -157,7 +157,7 @@ func (t *FileTool) Execute(ctx context.Context, input map[string]interface{}) (i
 		if !ok || targetPath == "" {
 			return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("'target_path' parameter is required for move operation"))
 		}
-		safeTarget, err := SafePath(t.workspace, targetPath)
+		safeTarget, err := SafePath(ctx, t.workspace, targetPath)
 		if err != nil {
 			return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(err)
 		}

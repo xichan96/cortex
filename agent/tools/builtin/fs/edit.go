@@ -54,7 +54,7 @@ func (t *EditTool) Execute(ctx context.Context, input map[string]interface{}) (i
 	if !ok {
 		return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("new_str is required"))
 	}
-	safePath, err := SafePath(t.workspace, path)
+	safePath, err := SafePath(ctx, t.workspace, path)
 	if err != nil {
 		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(err)
 	}
