@@ -192,6 +192,7 @@ type DinoFactory interface {
 	GetLLMProvider() types.LLMProvider
 	GetPlannerConfig() *PlannerModeConfig
 	Budget() Budget
+	RespondToolApproval(requestID string, approved bool)
 }
 
 type dinoFactory struct {
@@ -257,6 +258,14 @@ type FactoryOption func(*dinoFactory)
 func WithStreamEventSender(sender StreamEventSender) FactoryOption {
 	return func(f *dinoFactory) {
 		f.streamSender = sender
+	}
+}
+
+func WithApprovalSender(sender ApprovalSender) FactoryOption {
+	return func(f *dinoFactory) {
+		if sender != nil && f.approvalStore != nil {
+			f.approvalStore.SetSender(sender)
+		}
 	}
 }
 
@@ -416,7 +425,7 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 			needApproval[name] = true
 		}
 		logger.Info("[DinoFactory] Adding tool", slog.String("tool", name), slog.String("permission", string(action)))
-		wrapped := t
+		wrapped := wrapWorkspacePathTools(t, f.config.WorkspaceRoot, sessionID, f.approvalStore)
 		if needApproval[name] {
 			wrapped = NewApprovalTool(wrapped, sessionID, f.approvalStore, needApproval)
 		}
@@ -439,7 +448,7 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 				needApproval[name] = true
 			}
 			logger.Info("[DinoFactory] Adding tool", slog.String("tool", name), slog.String("permission", string(action)))
-			wrapped := t
+			wrapped := wrapWorkspacePathTools(t, f.config.WorkspaceRoot, sessionID, f.approvalStore)
 			if needApproval[name] {
 				wrapped = NewApprovalTool(wrapped, sessionID, f.approvalStore, needApproval)
 			}
@@ -544,6 +553,21 @@ func (f *dinoFactory) GetTools() []types.Tool {
 
 func (f *dinoFactory) GetSkills() []*Skill {
 	return f.skills
+}
+
+func (f *dinoFactory) RespondToolApproval(requestID string, approved bool) {
+	if f.approvalStore != nil {
+		f.approvalStore.Respond(requestID, approved)
+	}
+}
+
+func wrapWorkspacePathTools(t types.Tool, workspaceRoot, sessionID string, store *ApprovalStore) types.Tool {
+	switch t.Name() {
+	case "read_file", "write_file", "edit_file", "list_directory", "glob", "grep":
+		return NewExternalPathApprovalTool(t, workspaceRoot, sessionID, store)
+	default:
+		return t
+	}
 }
 
 const shutdownTimeout = 30 * time.Second

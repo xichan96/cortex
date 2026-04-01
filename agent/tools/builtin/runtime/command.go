@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/xichan96/cortex/agent/tools/builtin/fs"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
 	"github.com/xichan96/cortex/pkg/shell"
@@ -62,8 +63,9 @@ func (t *CommandTool) Execute(ctx context.Context, input map[string]interface{})
 		return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("'command' parameter cannot be empty"))
 	}
 
+	wd := fs.EffectiveWorkingDir(t.workspace)
 	if background, _ := input["background"].(bool); background {
-		bs, err := defaultBgManager.Start(ctx, t.workspace, nil, command)
+		bs, err := defaultBgManager.Start(ctx, wd, nil, command)
 		if err != nil {
 			return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(err)
 		}
@@ -95,7 +97,7 @@ func (t *CommandTool) Execute(ctx context.Context, input map[string]interface{})
 	defer cancel()
 
 	sh := shell.NewShell(&shell.Options{
-		WorkingDir: t.workspace,
+		WorkingDir: wd,
 		Env:        shell.EnvironNonInteractive(),
 	})
 	stdout, stderr, err := sh.Exec(execCtx, command)
