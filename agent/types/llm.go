@@ -114,11 +114,15 @@ type MemoryProvider interface {
 	// Clear memory
 	Clear(ctx context.Context) error
 
-	// Get chat history
+	// GetChatHistory returns history sized for LLM context: implementations MUST window (e.g. match GetMessages(limit<=0): maxHistoryMessages cap + optional summary). Returning the full unbounded store will blow prompts; the engine does not apply a second message-count cut. Optional: implement StoredMessageCount(ctx) for compress gating (see agent/engine).
 	GetChatHistory(ctx context.Context) ([]Message, error)
 
 	// Compress memory (optional, for memory compression)
 	CompressMemory(ctx context.Context, llm LLMProvider, maxMessages int) error
+}
+
+type MemoryReplay interface {
+	ReplayMessages(ctx context.Context, messages []Message) error
 }
 
 // OutputParser output parser interface

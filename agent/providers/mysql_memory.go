@@ -41,6 +41,7 @@ func (MySQLSummaryDocument) TableName() string {
 
 type MySQLMemoryProvider struct {
 	mu                 sync.RWMutex
+	compressMu         sync.RWMutex
 	client             *mysql.Client
 	sessionID          string
 	maxHistoryMessages int
@@ -97,6 +98,9 @@ func (p *MySQLMemoryProvider) AddMessage(ctx context.Context, message types.Mess
 	if err := p.initTable(ctx); err != nil {
 		return err
 	}
+
+	p.compressMu.RLock()
+	defer p.compressMu.RUnlock()
 
 	p.mu.RLock()
 	sessionID := p.sessionID
@@ -218,7 +222,7 @@ func (p *MySQLMemoryProvider) SaveContext(ctx context.Context, input, output map
 			return err
 		}
 	}
-	if err := saveOutputWithToolSteps(ctx, p, output); err != nil {
+	if err := SaveOutputWithToolSteps(ctx, p, output); err != nil {
 		return err
 	}
 	return nil
@@ -228,6 +232,8 @@ func (p *MySQLMemoryProvider) Clear(ctx context.Context) error {
 	if err := p.initTable(ctx); err != nil {
 		return err
 	}
+	p.compressMu.Lock()
+	defer p.compressMu.Unlock()
 	p.mu.RLock()
 	sessionID := p.sessionID
 	tableName := p.tableName
@@ -236,40 +242,31 @@ func (p *MySQLMemoryProvider) Clear(ctx context.Context) error {
 }
 
 func (p *MySQLMemoryProvider) GetChatHistory(ctx context.Context) ([]types.Message, error) {
+	return p.GetMessages(ctx, 0)
+}
+
+func (p *MySQLMemoryProvider) StoredMessageCount(ctx context.Context) (int, error) {
 	if err := p.initTable(ctx); err != nil {
-		return nil, err
+		return 0, err
 	}
 	p.mu.RLock()
 	sessionID := p.sessionID
 	tableName := p.tableName
 	p.mu.RUnlock()
-	var docs []MySQLMessageDocument
+	var count int64
 	err := p.getDB().WithContext(ctx).Table(tableName).
 		Where("session_id = ?", sessionID).
-		Order("created_at ASC").
-		Find(&docs).Error
-	if err != nil {
-		return nil, err
-	}
-	messages := make([]types.Message, 0, len(docs))
-	for _, doc := range docs {
-		parts, _ := types.DeserializeMessageParts(doc.Parts)
-		m := types.Message{
-			Role:    doc.Role,
-			Content: doc.Content,
-			Name:    doc.Name,
-			Parts:   parts,
-		}
-		applyStoredToolExtras(&m, doc.ToolExtras)
-		messages = append(messages, m)
-	}
-	return messages, nil
+		Count(&count).Error
+	return int(count), err
 }
 
 func (p *MySQLMemoryProvider) CompressMemory(ctx context.Context, llm types.LLMProvider, maxMessages int) error {
 	if llm == nil {
 		return fmt.Errorf("LLM provider is required for memory compression")
 	}
+
+	p.compressMu.Lock()
+	defer p.compressMu.Unlock()
 
 	p.mu.Lock()
 	sessionID := p.sessionID

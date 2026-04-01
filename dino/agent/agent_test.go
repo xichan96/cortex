@@ -76,7 +76,7 @@ func TestNewSubagent(t *testing.T) {
 	}
 	tools := []types.Tool{&mockTool{name: "test_tool"}}
 
-	sa, err := NewSubagent(info, &mockLLMProvider{response: "hello"}, tools)
+	sa, err := NewSubagent(info, &mockLLMProvider{response: "hello"}, tools, 0)
 	if err != nil {
 		t.Fatalf("NewSubagent failed: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestNewSubagentInvalidMode(t *testing.T) {
 		Mode: ModePrimary,
 	}
 
-	_, err := NewSubagent(info, &mockLLMProvider{response: "hello"}, nil)
+	_, err := NewSubagent(info, &mockLLMProvider{response: "hello"}, nil, 0)
 	if err == nil {
 		t.Fatal("expected error for non-subagent mode")
 	}
@@ -108,7 +108,7 @@ func TestSubagentInterface(t *testing.T) {
 	var sa Subagent
 	var err error
 
-	sa, err = NewSubagent(info, &mockLLMProvider{response: "hello"}, nil)
+	sa, err = NewSubagent(info, &mockLLMProvider{response: "hello"}, nil, 0)
 	if err != nil {
 		t.Fatalf("NewSubagent failed: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestNewManager(t *testing.T) {
 		llm:    &mockLLMProvider{response: "test"},
 	}
 
-	m := NewManager(factory)
+	m := NewManager(factory, 0)
 	if m == nil {
 		t.Fatal("NewManager returned nil")
 	}
@@ -186,7 +186,7 @@ func TestManagerGetSubagentNotFound(t *testing.T) {
 		llm:    &mockLLMProvider{response: "test"},
 	}
 
-	m := NewManager(factory)
+	m := NewManager(factory, 0)
 
 	_, err := m.GetSubagent("nonexistent")
 	if err == nil {
@@ -206,7 +206,7 @@ func TestManagerGetSubagentNotSubagentMode(t *testing.T) {
 		llm:   &mockLLMProvider{response: "test"},
 	}
 
-	m := NewManager(factory)
+	m := NewManager(factory, 0)
 
 	_, err := m.GetSubagent("primary")
 	if err == nil {
@@ -227,7 +227,7 @@ func TestManagerGetSubagent(t *testing.T) {
 		llm:   &mockLLMProvider{response: "test"},
 	}
 
-	m := NewManager(factory)
+	m := NewManager(factory, 0)
 
 	sa, err := m.GetSubagent("general")
 	if err != nil {
@@ -251,7 +251,7 @@ func TestManagerGetSubagentCached(t *testing.T) {
 		llm:   &mockLLMProvider{response: "test"},
 	}
 
-	m := NewManager(factory)
+	m := NewManager(factory, 0)
 
 	sa1, err := m.GetSubagent("general")
 	if err != nil {
@@ -285,7 +285,7 @@ func TestManagerExecute(t *testing.T) {
 		llm:   &mockLLMProvider{response: "test response"},
 	}
 
-	m := NewManager(factory)
+	m := NewManager(factory, 0)
 
 	req := &Request{
 		AgentName: "general",
@@ -309,7 +309,7 @@ func TestManagerExecuteNotFound(t *testing.T) {
 		llm:    &mockLLMProvider{response: "test"},
 	}
 
-	m := NewManager(factory)
+	m := NewManager(factory, 0)
 
 	req := &Request{
 		AgentName: "nonexistent",
@@ -334,7 +334,7 @@ func TestManagerClose(t *testing.T) {
 		llm:   &mockLLMProvider{response: "test"},
 	}
 
-	m := NewManager(factory)
+	m := NewManager(factory, 0)
 
 	_, _ = m.GetSubagent("general")
 
@@ -362,7 +362,7 @@ func TestManagerCloseAgent(t *testing.T) {
 		llm:   &mockLLMProvider{response: "test"},
 	}
 
-	m := NewManager(factory)
+	m := NewManager(factory, 0)
 
 	_, _ = m.GetSubagent("general")
 
@@ -386,7 +386,7 @@ func TestManagerConcurrency(t *testing.T) {
 		llm:   &mockLLMProvider{response: "test"},
 	}
 
-	m := NewManager(factory)
+	m := NewManager(factory, 0)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {

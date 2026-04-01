@@ -52,7 +52,7 @@ func NewSubagentManager(config *SubagentConfig, factory SubagentManagerFactory) 
 
 	return &SubagentManager{
 		config:   config,
-		manager:  NewManager(factory),
+		manager:  NewManager(factory, config.MaxHistoryMessages),
 		llmProv:  factory.GetLLMProvider(),
 		tools:    factory.GetTools(),
 		compiled: compiled,
@@ -208,9 +208,41 @@ func (t *SubagentTool) Execute(ctx context.Context, input map[string]interface{}
 	}
 
 	if result != nil {
+		t.maybeReplayToParentMemory(ctx, agentName, task, result)
 		return result.Output, nil
 	}
 	return "", nil
+}
+
+const replayTaskMax = 2048
+const replayOutputMax = 12000
+
+func (t *SubagentTool) maybeReplayToParentMemory(ctx context.Context, agentName, task string, result *Result) {
+	if t.manager == nil || t.manager.config == nil || !t.manager.config.ReplayToParentMemory {
+		return
+	}
+	pm := ParentMemoryFromContext(ctx)
+	if pm == nil || pm.Memory == nil {
+		return
+	}
+	taskPreview := task
+	if len(taskPreview) > replayTaskMax {
+		taskPreview = taskPreview[:replayTaskMax] + "…"
+	}
+	out := result.Output
+	if len(out) > replayOutputMax {
+		out = out[:replayOutputMax] + "…"
+	}
+	label := "[subagent " + agentName + "] " + taskPreview
+	if err := pm.Memory.SaveContext(ctx, map[string]interface{}{
+		"input": label,
+		"role":  "user",
+	}, map[string]interface{}{"output": out}); err != nil {
+		logger.Warn("[SubagentTool] replay to parent memory failed",
+			slog.String("session_id", pm.SessionID),
+			slog.String("agent", agentName),
+			slog.String("error", err.Error()))
+	}
 }
 
 type subagentExecutor struct {

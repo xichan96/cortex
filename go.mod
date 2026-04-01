@@ -6,6 +6,7 @@ toolchain go1.24.10
 
 require (
 	github.com/PuerkitoBio/goquery v1.11.0
+	github.com/bmatcuk/doublestar/v4 v4.8.1
 	github.com/charmbracelet/x/exp/slice v0.0.0-20260301212224-50d5c240f29a
 	github.com/containerd/errdefs v1.0.0
 	github.com/docker/docker v28.5.2+incompatible

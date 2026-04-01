@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/xichan96/cortex/agent/tools/prompts"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
 )
@@ -27,7 +28,7 @@ func (t *EditTool) Name() string {
 var editFileDescription string
 
 func (t *EditTool) Description() string {
-	return editFileDescription
+	return strings.TrimSpace(editFileDescription + "\n\n" + prompts.EditToolGuidance)
 }
 
 func (t *EditTool) Schema() map[string]interface{} {

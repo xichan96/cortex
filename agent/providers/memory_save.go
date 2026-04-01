@@ -10,7 +10,7 @@ import (
 	"github.com/xichan96/cortex/pkg/logger"
 )
 
-type chatMessageSaver interface {
+type ChatMessageSaver interface {
 	AddMessage(ctx context.Context, msg types.Message) error
 }
 
@@ -32,7 +32,7 @@ func coerceIntermediateSteps(raw interface{}) ([]types.ToolCallData, bool) {
 	return out, true
 }
 
-func saveOutputWithToolSteps(ctx context.Context, save chatMessageSaver, output map[string]interface{}) error {
+func SaveOutputWithToolSteps(ctx context.Context, save ChatMessageSaver, output map[string]interface{}) error {
 	outputMsg, ok := output["output"].(string)
 	if !ok {
 		return nil
@@ -44,7 +44,7 @@ func saveOutputWithToolSteps(ctx context.Context, save chatMessageSaver, output 
 	raw := output["intermediate_steps"]
 	steps, decodeOK := coerceIntermediateSteps(raw)
 	if !decodeOK && raw != nil {
-		logger.LogError("saveOutputWithToolSteps", fmt.Errorf("intermediate_steps: cannot decode to []ToolCallData"), slog.String("phase", "coerce_steps"))
+		logger.LogError("SaveOutputWithToolSteps", fmt.Errorf("intermediate_steps: cannot decode to []ToolCallData"), slog.String("phase", "coerce_steps"))
 	}
 	if len(steps) > 0 {
 		for _, m := range types.MessagesFromToolSteps(outputMsg, steps) {

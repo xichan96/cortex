@@ -14,6 +14,7 @@ import (
 
 type RedisMemoryProvider struct {
 	mu                 sync.RWMutex
+	compressMu         sync.RWMutex
 	client             *credis.Client
 	sessionID          string
 	maxHistoryMessages int
@@ -57,6 +58,9 @@ func (p *RedisMemoryProvider) getKey() string {
 }
 
 func (p *RedisMemoryProvider) AddMessage(ctx context.Context, message types.Message) error {
+	p.compressMu.RLock()
+	defer p.compressMu.RUnlock()
+
 	msgData := map[string]interface{}{
 		"role":       message.Role,
 		"content":    message.Content,
@@ -186,55 +190,30 @@ func (p *RedisMemoryProvider) SaveContext(ctx context.Context, input, output map
 			return err
 		}
 	}
-	if err := saveOutputWithToolSteps(ctx, p, output); err != nil {
+	if err := SaveOutputWithToolSteps(ctx, p, output); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (p *RedisMemoryProvider) Clear(ctx context.Context) error {
+	p.compressMu.Lock()
+	defer p.compressMu.Unlock()
 	key := p.getKey()
 	return p.client.Del(ctx, key).Err()
 }
 
 func (p *RedisMemoryProvider) GetChatHistory(ctx context.Context) ([]types.Message, error) {
+	return p.GetMessages(ctx, 0)
+}
+
+func (p *RedisMemoryProvider) StoredMessageCount(ctx context.Context) (int, error) {
 	key := p.getKey()
-	// Fetch all messages (0 to -1)
-	results, err := p.client.LRange(ctx, key, 0, -1).Result()
+	n, err := p.client.LLen(ctx, key).Result()
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-
-	messages := make([]types.Message, 0, len(results))
-	// Reverse order to be chronological
-	for i := len(results) - 1; i >= 0; i-- {
-		var msgData map[string]interface{}
-		if err := json.Unmarshal([]byte(results[i]), &msgData); err != nil {
-			continue
-		}
-
-		role, _ := msgData["role"].(string)
-		content, _ := msgData["content"].(string)
-		name, _ := msgData["name"].(string)
-
-		msg := types.Message{
-			Role:    role,
-			Content: content,
-			Name:    name,
-		}
-
-		if partsJSON, ok := msgData["parts"].(string); ok && partsJSON != "" {
-			parts, _ := types.DeserializeMessageParts(partsJSON)
-			msg.Parts = parts
-		}
-		if x, ok := msgData["tool_extras"].(string); ok {
-			applyStoredToolExtras(&msg, x)
-		}
-
-		messages = append(messages, msg)
-	}
-
-	return messages, nil
+	return int(n), nil
 }
 
 // CompressMemory compresses old messages into a summary (implements MemoryProvider interface)
@@ -242,6 +221,9 @@ func (p *RedisMemoryProvider) CompressMemory(ctx context.Context, llm types.LLMP
 	if llm == nil {
 		return fmt.Errorf("LLM provider is required for memory compression")
 	}
+
+	p.compressMu.Lock()
+	defer p.compressMu.Unlock()
 
 	p.mu.Lock()
 
