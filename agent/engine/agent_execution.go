@@ -874,6 +874,7 @@ func (ae *AgentEngine) prepareMessages(ctx context.Context, input types.AgentInp
 	if budgetTrim {
 		history = trimHistoryToTokenBudget(history, budgetCap, config, previousRequests, input)
 	}
+	history = repairLLMMessageToolOrdering(history)
 
 	if len(history) > 0 {
 		messages = append(messages, history...)
@@ -886,6 +887,37 @@ func (ae *AgentEngine) prepareMessages(ctx context.Context, input types.AgentInp
 	messages = append(messages, input.ToMessage("user"))
 
 	return messages, nil
+}
+
+// repairLLMMessageToolOrdering drops tool messages that are not immediately preceded by an assistant
+// message with non-empty tool_calls. Token-budget trimming and DB compress can leave such orphans
+// and cause providers to reject the request (e.g. OpenAI 400 on role tool).
+func repairLLMMessageToolOrdering(history []types.Message) []types.Message {
+	if len(history) == 0 {
+		return history
+	}
+	i := 0
+	for i < len(history) && history[i].Role == "tool" {
+		i++
+	}
+	history = history[i:]
+	if len(history) == 0 {
+		return history
+	}
+	out := make([]types.Message, 0, len(history))
+	for _, m := range history {
+		if m.Role == "tool" {
+			if len(out) == 0 {
+				continue
+			}
+			prev := out[len(out)-1]
+			if prev.Role != "assistant" || len(prev.ToolCalls) == 0 {
+				continue
+			}
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 func trimHistoryToTokenBudget(history []types.Message, maxBudgetTokens int, config *types.AgentConfig, previousRequests []types.ToolCallData, input types.AgentInput) []types.Message {
