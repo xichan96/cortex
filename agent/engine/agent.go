@@ -81,6 +81,9 @@ type AgentEngine struct {
 	// Usage tracking
 	totalUsage types.Usage // Total token usage
 
+	memoryCompletedTurns atomic.Uint32
+	memoryCompressMu   sync.Mutex
+
 	// Tool callback for real-time events
 	toolCallback types.ToolCallback
 
@@ -138,6 +141,20 @@ func (ae *AgentEngine) GetTotalUsage() types.Usage {
 	ae.mu.RLock()
 	defer ae.mu.RUnlock()
 	return ae.totalUsage
+}
+
+func (ae *AgentEngine) RestoreTotalUsage(u types.Usage) {
+	ae.mu.Lock()
+	defer ae.mu.Unlock()
+	ae.totalUsage = u
+}
+
+func (ae *AgentEngine) MemoryTurnCounter() uint32 {
+	return ae.memoryCompletedTurns.Load()
+}
+
+func (ae *AgentEngine) RestoreMemoryTurnCounter(v uint32) {
+	ae.memoryCompletedTurns.Store(v)
 }
 
 // Stop stops the agent engine

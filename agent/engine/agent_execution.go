@@ -485,24 +485,68 @@ func (ae *AgentEngine) saveToMemoryAndMaybeCompress(ctx context.Context, inputMa
 		return
 	}
 	config := ae.getConfig()
-	enableCompress := false
-	compressThreshold := 0
-	if config != nil {
-		enableCompress = config.EnableMemoryCompress
-		compressThreshold = config.MemoryCompressThreshold
-	}
-	if !enableCompress || compressThreshold <= 0 {
+	if config == nil || !config.EnableMemoryCompress {
 		return
 	}
-	history, err := ae.memory.GetChatHistory(ctx)
-	if err != nil || len(history) <= compressThreshold {
+	compressThreshold := config.MemoryCompressThreshold
+	compactTurns := config.CompactAfterTurns
+	if compressThreshold <= 0 && compactTurns <= 0 {
 		return
 	}
+
+	byTurn := false
+	if compactTurns > 0 {
+		n := ae.memoryCompletedTurns.Add(1)
+		if int(n) >= compactTurns {
+			byTurn = true
+			ae.memoryCompletedTurns.Store(0)
+		}
+	}
+
+	stored := 0
+	if ctr, ok := ae.memory.(interface {
+		StoredMessageCount(context.Context) (int, error)
+	}); ok {
+		n, err := ctr.StoredMessageCount(ctx)
+		if err != nil {
+			logger.LogError("saveToMemoryAndMaybeCompress", err, slog.String("phase", "stored_message_count"))
+			return
+		}
+		stored = n
+	} else {
+		history, err := ae.memory.GetChatHistory(ctx)
+		if err != nil {
+			logger.LogError("saveToMemoryAndMaybeCompress", err, slog.String("phase", "chat_history_gate"))
+			return
+		}
+		stored = len(history)
+	}
+
+	byCount := compressThreshold > 0 && stored > compressThreshold
+	if !byTurn && !byCount {
+		return
+	}
+
+	keepWindow := compressThreshold
+	if keepWindow <= 0 {
+		keepWindow = config.MaxHistoryMessages
+	}
+	if keepWindow <= 0 {
+		keepWindow = 50
+	}
+
 	ae.mu.RLock()
 	llm := ae.model
 	ae.mu.RUnlock()
 	if llm == nil {
 		return
+	}
+	reason := "threshold"
+	if byTurn && !byCount {
+		reason = "compact_after_turns"
+	}
+	if byTurn && byCount {
+		reason = "threshold_and_turns"
 	}
 	go func() {
 		defer func() {
@@ -510,12 +554,23 @@ func (ae *AgentEngine) saveToMemoryAndMaybeCompress(ctx context.Context, inputMa
 				logger.LogError("saveToMemoryAndMaybeCompress", fmt.Errorf("panic in compress memory async: %v", r))
 			}
 		}()
-		if err := ae.memory.CompressMemory(context.Background(), llm, compressThreshold); err != nil {
+		ae.memoryCompressMu.Lock()
+		defer ae.memoryCompressMu.Unlock()
+		dt := config.Timeout
+		if dt <= 0 {
+			dt = 10 * time.Minute
+		} else if dt < 2*time.Minute {
+			dt = 2 * time.Minute
+		}
+		compressCtx, cancel := context.WithTimeout(context.Background(), dt)
+		defer cancel()
+		if err := ae.memory.CompressMemory(compressCtx, llm, keepWindow); err != nil {
 			logger.LogError("saveToMemoryAndMaybeCompress", err, slog.String("phase", "compress_memory_async"))
 		} else {
 			logger.Info("Memory compressed successfully",
-				slog.Int("original_count", len(history)),
-				slog.Int("threshold", compressThreshold))
+				slog.String("reason", reason),
+				slog.Int("stored_message_count", stored),
+				slog.Int("keep_window", keepWindow))
 		}
 	}()
 }
@@ -798,10 +853,29 @@ func (ae *AgentEngine) prepareMessages(ctx context.Context, input types.AgentInp
 		})
 	}
 
-	if len(history) > 0 {
-		if config != nil && config.MaxHistoryMessages > 0 && len(history) > config.MaxHistoryMessages {
-			history = history[len(history)-config.MaxHistoryMessages:]
+	budgetCap := 0
+	budgetTrim := false
+	if config != nil {
+		if config.MaxBudgetTokens > 0 {
+			budgetCap = config.MaxBudgetTokens
+			budgetTrim = true
 		}
+		if config.RemainPromptTokens != nil {
+			if r := config.RemainPromptTokens(); r >= 0 {
+				budgetTrim = true
+				if budgetCap > 0 {
+					budgetCap = min(budgetCap, r)
+				} else {
+					budgetCap = r
+				}
+			}
+		}
+	}
+	if budgetTrim {
+		history = trimHistoryToTokenBudget(history, budgetCap, config, previousRequests, input)
+	}
+
+	if len(history) > 0 {
 		messages = append(messages, history...)
 	}
 
@@ -809,10 +883,41 @@ func (ae *AgentEngine) prepareMessages(ctx context.Context, input types.AgentInp
 		messages = append(messages, types.MessagesFromToolSteps("", previousRequests)...)
 	}
 
-	// Add user input
 	messages = append(messages, input.ToMessage("user"))
 
 	return messages, nil
+}
+
+func trimHistoryToTokenBudget(history []types.Message, maxBudgetTokens int, config *types.AgentConfig, previousRequests []types.ToolCallData, input types.AgentInput) []types.Message {
+	if len(history) == 0 {
+		return history
+	}
+	fixed := 0
+	if config != nil && config.SystemMessage != "" {
+		fixed += types.RoughTokensForMessage(types.Message{Role: "system", Content: config.SystemMessage})
+	}
+	for _, m := range types.MessagesFromToolSteps("", previousRequests) {
+		fixed += types.RoughTokensForMessage(m)
+	}
+	fixed += types.RoughTokensForMessage(input.ToMessage("user"))
+	rem := maxBudgetTokens - fixed
+	if rem <= 0 {
+		return history[len(history)-1:]
+	}
+	used := 0
+	start := len(history)
+	for i := len(history) - 1; i >= 0; i-- {
+		c := types.RoughTokensForMessage(history[i])
+		if used+c > rem {
+			break
+		}
+		used += c
+		start = i
+	}
+	if start >= len(history) {
+		return history[len(history)-1:]
+	}
+	return history[start:]
 }
 
 // executeIteration executes a single iteration
