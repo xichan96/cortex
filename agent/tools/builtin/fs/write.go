@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/xichan96/cortex/agent/tools/prompts"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
 )
@@ -27,7 +29,7 @@ func (t *WriteTool) Name() string {
 var writeFileDescription string
 
 func (t *WriteTool) Description() string {
-	return writeFileDescription
+	return strings.TrimSpace(writeFileDescription + "\n\n" + prompts.WriteToolGuidance + "\n\n" + prompts.DirExistsGuidance)
 }
 
 func (t *WriteTool) Schema() map[string]interface{} {

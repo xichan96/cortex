@@ -1,7 +1,29 @@
-- Adds, removes, or updates tasks in a todo list.
-- This helps in planning and tracking the steps required to complete a request.
+Manage a structured todo list for multi-step work.
 
-Usage notes:
-  - The `operation` can be 'add', 'remove', or 'update'.
-  - `task` content is required for 'add' and 'update'.
-  - `task_id` is required for 'remove' and 'update'.
+When to use:
+- Complex tasks with 3+ distinct steps
+- Non-trivial work that benefits from explicit tracking
+- User asks for a todo list or gives multiple tasks
+- After new instructions: reconcile the list
+- When starting a task: set exactly one item to in_progress before beginning
+- When finishing: mark completed and add follow-ups if needed
+
+Skip when:
+- Single trivial step
+- Purely conversational or informational
+
+States:
+- pending — not started
+- in_progress — currently being worked on (at most one at a time)
+- completed — done successfully
+- cancelled — no longer needed
+
+Each task has:
+- content — imperative form (e.g. "Run tests")
+- active_form — present continuous (e.g. "Running tests")
+
+Operations:
+- add — requires content; optional active_form (defaults to content)
+- remove — requires task_id
+- update — requires task_id; optional content, active_form, state
+- list — returns all tasks

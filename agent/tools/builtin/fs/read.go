@@ -5,7 +5,9 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
+	"strings"
 
+	"github.com/xichan96/cortex/agent/tools/prompts"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
 )
@@ -26,7 +28,7 @@ func (t *ReadTool) Name() string {
 var readFileDescription string
 
 func (t *ReadTool) Description() string {
-	return readFileDescription
+	return strings.TrimSpace(readFileDescription + "\n\n" + prompts.ReadToolGuidance)
 }
 
 func (t *ReadTool) Schema() map[string]interface{} {
