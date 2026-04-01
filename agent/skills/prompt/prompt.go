@@ -20,6 +20,9 @@ var triggersFooter string
 
 type Entry struct {
 	Name, Description, Path string
+	WhenToUse               string
+	Paths                   []string
+	AllowedTools            []string
 }
 
 type Trigger struct {
@@ -30,6 +33,9 @@ type Trigger struct {
 type EntryWithTriggers struct {
 	Name, Description string
 	Triggers          []Trigger
+	WhenToUse         string
+	Paths             []string
+	AllowedTools      []string
 }
 
 func BuildSystemPromptInjection(skills []Entry) string {
@@ -45,6 +51,15 @@ func BuildSystemPromptInjection(skills []Entry) string {
 			sb.WriteString(fmt.Sprintf("  Description: %s\n", skill.Description))
 		}
 		sb.WriteString(fmt.Sprintf("  Definition File: %s\n", skill.Path))
+		if skill.WhenToUse != "" {
+			sb.WriteString(fmt.Sprintf("  When to use: %s\n", skill.WhenToUse))
+		}
+		if len(skill.Paths) > 0 {
+			sb.WriteString(fmt.Sprintf("  Active when path matches: %s\n", strings.Join(skill.Paths, ", ")))
+		}
+		if len(skill.AllowedTools) > 0 {
+			sb.WriteString(fmt.Sprintf("  Allowed tools: %s\n", strings.Join(skill.AllowedTools, ", ")))
+		}
 		sb.WriteString("\n")
 	}
 	sb.WriteString(usageProtocol)
@@ -69,6 +84,15 @@ func BuildSystemPromptInjectionWithTriggers(skills []*EntryWithTriggers) string 
 			}
 			sb.WriteString(strings.Join(parts, ", "))
 			sb.WriteString("\n")
+		}
+		if skill.WhenToUse != "" {
+			sb.WriteString(fmt.Sprintf("When to use: %s\n", skill.WhenToUse))
+		}
+		if len(skill.Paths) > 0 {
+			sb.WriteString(fmt.Sprintf("Active when path matches: %s\n", strings.Join(skill.Paths, ", ")))
+		}
+		if len(skill.AllowedTools) > 0 {
+			sb.WriteString(fmt.Sprintf("Allowed tools: %s\n", strings.Join(skill.AllowedTools, ", ")))
 		}
 		sb.WriteString("\n")
 	}

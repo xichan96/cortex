@@ -16,9 +16,58 @@ import (
 
 const SkillFileName = "SKILL.md"
 
+type loadConfig struct {
+	resolveSymlinks bool
+	dedupeRealpath  bool
+}
+
+func defaultLoadConfig() loadConfig {
+	return loadConfig{resolveSymlinks: true, dedupeRealpath: true}
+}
+
+type LoadOption func(*loadConfig)
+
+func WithResolveSymlinks(v bool) LoadOption {
+	return func(c *loadConfig) { c.resolveSymlinks = v }
+}
+
+func WithDedupeByRealpath(v bool) LoadOption {
+	return func(c *loadConfig) { c.dedupeRealpath = v }
+}
+
+func realpathKey(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	r, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return abs
+	}
+	return r
+}
+
 // LoadSkillsFromDirs scans the provided directories for **/SKILL.md files and loads them (opencode-compatible).
-func LoadSkillsFromDirs(ctx context.Context, l *logger.Logger, dirs []string) ([]Skill, error) {
+func LoadSkillsFromDirs(ctx context.Context, l *logger.Logger, dirs []string, opts ...LoadOption) ([]Skill, error) {
+	cfg := defaultLoadConfig()
+	for _, o := range opts {
+		o(&cfg)
+	}
+
 	var skills []Skill
+	seen := make(map[string]struct{})
+
+	tryAppend := func(skill Skill) {
+		key := skill.Path
+		if cfg.dedupeRealpath {
+			key = realpathKey(skill.Path)
+		}
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		skills = append(skills, skill)
+	}
 
 	for _, dir := range dirs {
 		if err := ctx.Err(); err != nil {
@@ -33,12 +82,18 @@ func LoadSkillsFromDirs(ctx context.Context, l *logger.Logger, dirs []string) ([
 			absDir = dir
 		}
 
-		err = filepath.Walk(absDir, func(path string, info os.FileInfo, err error) error {
+		walkRoot := absDir
+		if cfg.resolveSymlinks {
+			if r, err := filepath.EvalSymlinks(absDir); err == nil {
+				walkRoot = r
+			}
+		}
+
+		err = filepath.Walk(walkRoot, func(path string, info os.FileInfo, err error) error {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
 			if err != nil {
-				// Log error but continue walking
 				if l != nil {
 					l.Warn(fmt.Sprintf("error accessing path %q: %v", path, err))
 				}
@@ -48,13 +103,12 @@ func LoadSkillsFromDirs(ctx context.Context, l *logger.Logger, dirs []string) ([
 			if !info.IsDir() && strings.EqualFold(info.Name(), SkillFileName) {
 				skill, err := loadSkillFromFile(path)
 				if err != nil {
-					// Log error but continue
 					if l != nil {
 						l.Warn(fmt.Sprintf("skipping invalid skill file %s: %v", path, err))
 					}
 					return nil
 				}
-				skills = append(skills, skill)
+				tryAppend(skill)
 			}
 			return nil
 		})
@@ -231,12 +285,37 @@ func parseMeta(meta map[string]interface{}, spec *Skill) {
 			}
 		}
 	}
+	if v, ok := meta["paths"].([]interface{}); ok {
+		for _, p := range v {
+			if s, ok := p.(string); ok {
+				spec.Paths = append(spec.Paths, s)
+			}
+		}
+	}
+	if v, ok := meta["when_to_use"].(string); ok {
+		spec.WhenToUse = v
+	}
+	if v, ok := meta["allowed_tools"].([]interface{}); ok {
+		for _, t := range v {
+			if s, ok := t.(string); ok {
+				spec.AllowedTools = append(spec.AllowedTools, s)
+			}
+		}
+	}
+}
+
+func BuildSystemPromptInjectionForActivePaths(skills []Skill, activePaths []string) string {
+	return BuildSystemPromptInjection(FilterSkillsForActivePaths(skills, activePaths))
 }
 
 func BuildSystemPromptInjection(skills []Skill) string {
 	entries := make([]prompt.Entry, 0, len(skills))
 	for _, s := range skills {
-		entries = append(entries, prompt.Entry{Name: s.Name, Description: s.Description, Path: s.Path})
+		entries = append(entries, prompt.Entry{
+			Name: s.Name, Description: s.Description, Path: s.Path,
+			WhenToUse: s.WhenToUse, Paths: append([]string(nil), s.Paths...),
+			AllowedTools: append([]string(nil), s.AllowedTools...),
+		})
 	}
 	return prompt.BuildSystemPromptInjection(entries)
 }
@@ -244,9 +323,13 @@ func BuildSystemPromptInjection(skills []Skill) string {
 func BuildSystemPromptInjectionWithTriggers(skills []*Skill) string {
 	entries := make([]*prompt.EntryWithTriggers, 0, len(skills))
 	for _, s := range skills {
-		e := &prompt.EntryWithTriggers{Name: s.Name, Description: s.Description}
+		e := &prompt.EntryWithTriggers{
+			Name: s.Name, Description: s.Description,
+			WhenToUse: s.WhenToUse, Paths: append([]string(nil), s.Paths...),
+			AllowedTools: append([]string(nil), s.AllowedTools...),
+		}
 		for _, t := range s.Triggers {
-			e.Triggers = append(e.Triggers, struct{ Type, Pattern string }{Type: t.Type, Pattern: t.Pattern})
+			e.Triggers = append(e.Triggers, prompt.Trigger{Type: t.Type, Pattern: t.Pattern})
 		}
 		entries = append(entries, e)
 	}

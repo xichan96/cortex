@@ -154,8 +154,8 @@ func (r *Registry) LoadSkills(skills []Skill) {
 }
 
 // LoadFromDirs scans dirs for SKILL.md, loads them and registers into the registry.
-func (r *Registry) LoadFromDirs(ctx context.Context, l *logger.Logger, dirs []string) error {
-	list, err := LoadSkillsFromDirs(ctx, l, dirs)
+func (r *Registry) LoadFromDirs(ctx context.Context, l *logger.Logger, dirs []string, opts ...LoadOption) error {
+	list, err := LoadSkillsFromDirs(ctx, l, dirs, opts...)
 	if err != nil {
 		return err
 	}
