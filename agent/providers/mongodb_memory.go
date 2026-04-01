@@ -34,6 +34,7 @@ type SummaryDocument struct {
 
 type MongoDBMemoryProvider struct {
 	mu                 sync.RWMutex
+	compressMu         sync.RWMutex
 	client             *mongodb.Client
 	sessionID          string
 	maxHistoryMessages int
@@ -78,6 +79,9 @@ func (p *MongoDBMemoryProvider) getCollection() *mongodb.Client {
 }
 
 func (p *MongoDBMemoryProvider) AddMessage(ctx context.Context, message types.Message) error {
+	p.compressMu.RLock()
+	defer p.compressMu.RUnlock()
+
 	p.mu.RLock()
 	sessionID := p.sessionID
 	p.mu.RUnlock()
@@ -190,44 +194,34 @@ func (p *MongoDBMemoryProvider) SaveContext(ctx context.Context, input, output m
 			return err
 		}
 	}
-	if err := saveOutputWithToolSteps(ctx, p, output); err != nil {
+	if err := SaveOutputWithToolSteps(ctx, p, output); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (p *MongoDBMemoryProvider) Clear(ctx context.Context) error {
+	p.compressMu.Lock()
+	defer p.compressMu.Unlock()
 	filter := bson.M{"session_id": p.sessionID}
 	return p.getCollection().DeleteAll(ctx, filter)
 }
 
 func (p *MongoDBMemoryProvider) GetChatHistory(ctx context.Context) ([]types.Message, error) {
+	return p.GetMessages(ctx, 0)
+}
+
+func (p *MongoDBMemoryProvider) StoredMessageCount(ctx context.Context) (int, error) {
 	p.mu.RLock()
 	sessionID := p.sessionID
 	p.mu.RUnlock()
-
 	filter := bson.M{"session_id": sessionID}
 	var docs []MessageDocument
-	// Get all messages, sorted by created_at ASC
-	sort := []string{"created_at"}
-	_, err := p.getCollection().QueryByPaging(ctx, filter, sort, 1, 100000, &docs) // High limit to get all
+	n, err := p.getCollection().QueryByPaging(ctx, filter, nil, 1, 1, &docs)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-
-	messages := make([]types.Message, 0, len(docs))
-	for _, doc := range docs {
-		parts, _ := types.DeserializeMessageParts(doc.Parts)
-		m := types.Message{
-			Role:    doc.Role,
-			Content: doc.Content,
-			Name:    doc.Name,
-			Parts:   parts,
-		}
-		applyStoredToolExtras(&m, doc.ToolExtras)
-		messages = append(messages, m)
-	}
-	return messages, nil
+	return int(n), nil
 }
 
 // CompressMemory compresses old messages into a summary (implements MemoryProvider interface)
@@ -235,6 +229,9 @@ func (p *MongoDBMemoryProvider) CompressMemory(ctx context.Context, llm types.LL
 	if llm == nil {
 		return fmt.Errorf("LLM provider is required for memory compression")
 	}
+
+	p.compressMu.Lock()
+	defer p.compressMu.Unlock()
 
 	p.mu.Lock()
 

@@ -11,6 +11,7 @@ import (
 // SimpleMemoryProvider simple memory provider implementation
 type SimpleMemoryProvider struct {
 	mu                 sync.RWMutex
+	compressMu         sync.RWMutex
 	messages           []types.Message
 	maxHistoryMessages int
 	summary            string
@@ -44,6 +45,8 @@ func (p *SimpleMemoryProvider) SetMaxHistoryMessages(limit int) {
 
 // AddMessage adds a message
 func (p *SimpleMemoryProvider) AddMessage(ctx context.Context, message types.Message) error {
+	p.compressMu.RLock()
+	defer p.compressMu.RUnlock()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.messages = append(p.messages, message)
@@ -122,15 +125,19 @@ func (p *SimpleMemoryProvider) SaveContext(ctx context.Context, input, output ma
 		if parts, ok := input["parts"].([]types.MessagePart); ok {
 			msg.Parts = parts
 		}
+		p.compressMu.RLock()
 		p.mu.Lock()
 		p.messages = append(p.messages, msg)
 		p.mu.Unlock()
+		p.compressMu.RUnlock()
 	}
-	return saveOutputWithToolSteps(ctx, p, output)
+	return SaveOutputWithToolSteps(ctx, p, output)
 }
 
 // Clear clears memory (implements MemoryProvider interface)
 func (p *SimpleMemoryProvider) Clear(ctx context.Context) error {
+	p.compressMu.Lock()
+	defer p.compressMu.Unlock()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.messages = make([]types.Message, 0)
@@ -144,16 +151,16 @@ func (p *SimpleMemoryProvider) ClearWithContext(ctx context.Context) error {
 	return p.Clear(ctx)
 }
 
-// GetChatHistory gets chat history (implements MemoryProvider interface)
+// GetChatHistory implements MemoryProvider: windowed view consistent with GetMessages(limit<=0).
 func (p *SimpleMemoryProvider) GetChatHistory(ctx context.Context) ([]types.Message, error) {
+	return p.GetMessages(ctx, 0)
+}
+
+// StoredMessageCount returns the number of raw messages retained (ignores windowing).
+func (p *SimpleMemoryProvider) StoredMessageCount(ctx context.Context) (int, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	// Return full history as requested "all conversations will be recorded"
-	// For in-memory provider, this is just returning the slice.
-	// If the caller needs context-window sized history, they should use GetMessages with limit.
-	messages := make([]types.Message, len(p.messages))
-	copy(messages, p.messages)
-	return messages, nil
+	return len(p.messages), nil
 }
 
 // CompressMemory compresses old messages into a summary (implements MemoryProvider interface)
@@ -161,6 +168,9 @@ func (p *SimpleMemoryProvider) CompressMemory(ctx context.Context, llm types.LLM
 	if llm == nil {
 		return fmt.Errorf("LLM provider is required for memory compression")
 	}
+
+	p.compressMu.Lock()
+	defer p.compressMu.Unlock()
 
 	p.mu.Lock()
 
