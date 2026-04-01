@@ -124,6 +124,8 @@ Always provide clear and concise responses.`
 	cfg.Memory.EnableCompress = true
 	cfg.Memory.MaxHistoryMessages = 100
 	cfg.Memory.CompressThreshold = 50
+	cfg.Memory.CompactAfterTurns = 5
+	cfg.Memory.MaxBudgetTokens = 32000
 	cfg.Memory.KeepRecentCount = 10
 	cfg.Memory.PersistDirectory = "./dino_sessions"
 	cfg.Memory.PersistEnabled = true
@@ -181,7 +183,7 @@ Always provide clear and concise responses.`
 		case dino.EventTypeError:
 			fmt.Printf("\n❌ Error: %s\n", event.Error)
 		case dino.EventTypeDone:
-			fmt.Printf("\n" + strings.Repeat("─", 50) + "\n")
+			fmt.Print("\n" + strings.Repeat("─", 50) + "\n")
 		}
 	})
 
@@ -241,7 +243,7 @@ Always provide clear and concise responses.`
 }
 
 func printHelp() {
-	fmt.Println(`
+	fmt.Print(`
 ╔═══════════════════════════════════════════════════════════╗
 ║                     Available Commands                      ║
 ╠═══════════════════════════════════════════════════════════╣
