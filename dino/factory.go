@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/xichan96/cortex/agent/engine"
+	agentproviders "github.com/xichan96/cortex/agent/providers"
 	agentTools "github.com/xichan96/cortex/agent/tools/builtin/fs"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/logger"
@@ -76,46 +79,56 @@ type memoryAdapter struct {
 	provider memory.Provider
 }
 
+type memProvSaver struct {
+	p memory.Provider
+}
+
+func (s *memProvSaver) AddMessage(ctx context.Context, msg types.Message) error {
+	return s.p.AddMessage(ctx, msg)
+}
+
 func (m *memoryAdapter) LoadMemoryVariables(ctx context.Context) (map[string]interface{}, error) {
 	return nil, nil
 }
 
 func (m *memoryAdapter) SaveContext(ctx context.Context, input, output map[string]interface{}) error {
 	if input != nil {
-		var role string
-		if r, ok := input["role"].(string); ok {
-			role = r
+		if inputMsg, ok := input["input"].(string); ok {
+			role, _ := input["role"].(string)
+			if role == "" {
+				role = "user"
+			}
+			msg := types.Message{Role: role, Content: inputMsg}
+			if parts, ok := input["parts"].([]types.MessagePart); ok {
+				msg.Parts = parts
+			}
+			if err := m.provider.AddMessage(ctx, msg); err != nil {
+				return err
+			}
 		} else {
-			role = "user"
-		}
-		inputJSON, err := json.Marshal(input)
-		if err != nil {
-			logger.Warn("[memoryAdapter] failed to marshal input", slog.String("error", err.Error()))
-			inputJSON = []byte(fmt.Sprintf("%v", input))
-		}
-		if err := m.provider.AddMessage(ctx, memory.Message{
-			Role:    role,
-			Content: fmt.Sprintf("Input: %s", string(inputJSON)),
-		}); err != nil {
-			return err
-		}
-	}
-
-	if output != nil {
-		outputJSON, err := json.Marshal(output)
-		if err != nil {
-			logger.Warn("[memoryAdapter] failed to marshal output", slog.String("error", err.Error()))
-			outputJSON = []byte(fmt.Sprintf("%v", output))
-		}
-		if err := m.provider.AddMessage(ctx, memory.Message{
-			Role:    "assistant",
-			Content: fmt.Sprintf("Output: %s", string(outputJSON)),
-		}); err != nil {
-			return err
+			var role string
+			if r, ok := input["role"].(string); ok {
+				role = r
+			} else {
+				role = "user"
+			}
+			inputJSON, err := json.Marshal(input)
+			if err != nil {
+				logger.Warn("[memoryAdapter] failed to marshal input", slog.String("error", err.Error()))
+				inputJSON = []byte(fmt.Sprintf("%v", input))
+			}
+			if err := m.provider.AddMessage(ctx, memory.Message{
+				Role:    role,
+				Content: fmt.Sprintf("Input: %s", string(inputJSON)),
+			}); err != nil {
+				return err
+			}
 		}
 	}
-
-	return nil
+	if output == nil {
+		return nil
+	}
+	return agentproviders.SaveOutputWithToolSteps(ctx, &memProvSaver{m.provider}, output)
 }
 
 func (m *memoryAdapter) Clear(ctx context.Context) error {
@@ -132,13 +145,64 @@ func (m *memoryAdapter) GetChatHistory(ctx context.Context) ([]types.Message, er
 		result[i] = types.Message{
 			Role:    msg.Role,
 			Content: msg.Content,
+			Parts:   msg.Parts,
 		}
 	}
 	return result, nil
 }
 
+func (m *memoryAdapter) StoredMessageCount(ctx context.Context) (int, error) {
+	return m.provider.StoredMessageCount(ctx)
+}
+
 func (m *memoryAdapter) CompressMemory(ctx context.Context, llm types.LLMProvider, maxMessages int) error {
 	return m.provider.Compress(ctx)
+}
+
+func (m *memoryAdapter) ReplayMessages(ctx context.Context, messages []types.Message) error {
+	if err := m.provider.Clear(ctx); err != nil {
+		return err
+	}
+	for _, msg := range messages {
+		mm := memory.Message{
+			Role:       msg.Role,
+			Content:    msg.Content,
+			Name:       msg.Name,
+			Parts:      msg.Parts,
+			ToolCalls:  msg.ToolCalls,
+			ToolCallID: msg.ToolCallID,
+		}
+		if err := m.provider.AddMessage(ctx, mm); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type delegateParentMemoryTool struct {
+	inner  types.Tool
+	sid    string
+	getMem func() types.MemoryProvider
+}
+
+func newDelegateParentMemoryTool(inner types.Tool, sessionID string, getMem func() types.MemoryProvider) types.Tool {
+	return &delegateParentMemoryTool{inner: inner, sid: sessionID, getMem: getMem}
+}
+
+func (t *delegateParentMemoryTool) Name() string                       { return t.inner.Name() }
+func (t *delegateParentMemoryTool) Description() string                { return t.inner.Description() }
+func (t *delegateParentMemoryTool) Schema() map[string]interface{}     { return t.inner.Schema() }
+func (t *delegateParentMemoryTool) Metadata() types.ToolMetadata       { return t.inner.Metadata() }
+func (t *delegateParentMemoryTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	if t.getMem != nil {
+		if m := t.getMem(); m != nil {
+			ctx = dinoAgent.WithParentMemory(ctx, &dinoAgent.ParentMemoryContext{
+				SessionID: t.sid,
+				Memory:    m,
+			})
+		}
+	}
+	return t.inner.Execute(ctx, input)
 }
 
 type toolEventSenderAdapter struct {
@@ -193,6 +257,8 @@ type DinoFactory interface {
 	GetPlannerConfig() *PlannerModeConfig
 	Budget() Budget
 	RespondToolApproval(requestID string, approved bool)
+	SaveSessionSnapshot(ctx context.Context, sessionID string, dir string) (string, error)
+	RestoreSessionSnapshot(ctx context.Context, sessionID string, snapPath string) error
 }
 
 type dinoFactory struct {
@@ -394,8 +460,29 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	agentConfig.Temperature = f.config.Temperature
 	agentConfig.MaxTokens = f.config.MaxTokens
 	agentConfig.TopP = f.config.TopP
-	agentConfig.EnableMemoryCompress = true
-	agentConfig.MemoryCompressThreshold = f.config.Budget.MaxToolCalls / 2
+	agentConfig.MaxBudgetTokens = f.config.Memory.MaxBudgetTokens
+	agentConfig.CompactAfterTurns = f.config.Memory.CompactAfterTurns
+	sid := sessionID
+	agentConfig.RemainPromptTokens = func() int {
+		if !f.config.Budget.Enabled || f.config.Budget.MaxTokens <= 0 {
+			return -1
+		}
+		st := f.budget.GetState(sid)
+		r := st.MaxTokens - st.UsedTokens
+		if r < 0 {
+			return 0
+		}
+		return r
+	}
+	compressTh := f.config.Memory.CompressThreshold
+	if compressTh <= 0 && f.config.Budget.MaxToolCalls > 0 {
+		compressTh = f.config.Budget.MaxToolCalls / 2
+	}
+	if compressTh <= 0 {
+		compressTh = types.NewAgentConfig().MemoryCompressThreshold
+	}
+	agentConfig.EnableMemoryCompress = f.config.Memory.EnableCompress
+	agentConfig.MemoryCompressThreshold = compressTh
 
 	agent := engine.NewAgentEngine(f.llmProvider, agentConfig)
 
@@ -459,9 +546,15 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 
 	if f.subagentManager != nil {
 		delegateTool := dinoAgent.NewSubagentTool(f.subagentManager)
-		wrapped := dinoTools.WrapLoopDetection(delegateTool, sessionID, f.loopDetector, senderAdapter)
+		registerDelegate := types.Tool(delegateTool)
+		if f.config.Subagent.ReplayToParentMemory {
+			registerDelegate = newDelegateParentMemoryTool(delegateTool, sessionID, func() types.MemoryProvider {
+				return agent.GetMemory()
+			})
+		}
+		wrapped := dinoTools.WrapLoopDetection(registerDelegate, sessionID, f.loopDetector, senderAdapter)
 		wrappedTools = append(wrappedTools, wrapped)
-		logger.Info("[DinoFactory] Adding tool", slog.String("tool", delegateTool.Name()))
+		logger.Info("[DinoFactory] Adding tool", slog.String("tool", registerDelegate.Name()))
 	}
 
 	logger.Info("[DinoFactory] Total tools added to agent", slog.Int("count", len(wrappedTools)))
@@ -472,7 +565,7 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 		memConfig := &memory.Config{
 			MaxHistoryMessages:      f.config.Memory.MaxHistoryMessages,
 			EnableMemoryCompress:    f.config.Memory.EnableCompress,
-			MemoryCompressThreshold: f.config.Memory.CompressThreshold,
+			MemoryCompressThreshold: compressTh,
 			KeepRecentCount:         f.config.Memory.KeepRecentCount,
 			PersistDirectory:        f.config.Memory.PersistDirectory,
 			SQLiteFile:              f.config.Memory.PersistFileName,
@@ -559,6 +652,52 @@ func (f *dinoFactory) RespondToolApproval(requestID string, approved bool) {
 	if f.approvalStore != nil {
 		f.approvalStore.Respond(requestID, approved)
 	}
+}
+
+// SaveSessionSnapshot writes JSON with GetChatHistory-shaped messages (windowed), not a full DB export.
+func (f *dinoFactory) SaveSessionSnapshot(ctx context.Context, sessionID string, dir string) (string, error) {
+	f.mu.RLock()
+	s := f.sessions[sessionID]
+	f.mu.RUnlock()
+	if s == nil {
+		return "", fmt.Errorf("session not found: %s", sessionID)
+	}
+	snap, err := session.BuildSnapshotFromSession(ctx, s)
+	if err != nil {
+		return "", err
+	}
+	if dir == "" {
+		dir = filepath.Join(f.config.Memory.PersistDirectory, "snapshots")
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, sessionID+".json")
+	if err := session.SaveFileSnapshot(path, snap); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func (f *dinoFactory) RestoreSessionSnapshot(ctx context.Context, sessionID string, snapPath string) error {
+	snap, err := session.LoadFileSnapshot(snapPath)
+	if err != nil {
+		return err
+	}
+	if snap.SessionID != sessionID {
+		return fmt.Errorf("snapshot session_id %q does not match %q", snap.SessionID, sessionID)
+	}
+	f.mu.RLock()
+	s := f.sessions[sessionID]
+	f.mu.RUnlock()
+	if s == nil {
+		var cerr error
+		s, cerr = f.CreateSession(ctx, sessionID)
+		if cerr != nil {
+			return cerr
+		}
+	}
+	return session.ApplySnapshotToSession(ctx, s, snap)
 }
 
 func wrapWorkspacePathTools(t types.Tool, workspaceRoot, sessionID string, store *ApprovalStore) types.Tool {

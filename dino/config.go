@@ -38,7 +38,9 @@ type Config struct {
 type MemoryConfig struct {
 	EnableCompress     bool   `yaml:"enable_compress"`
 	MaxHistoryMessages int    `yaml:"max_history_messages"`
-	CompressThreshold  int    `yaml:"compress_threshold"`
+	MaxBudgetTokens    int    `yaml:"max_budget_tokens"`
+	CompactAfterTurns  int    `yaml:"compact_after_turns"`
+	CompressThreshold  int    `yaml:"compress_threshold"` // message-count gate for async compress; if <=0, CreateSession uses budget.max_tool_calls/2 then agent default
 	KeepRecentCount    int    `yaml:"keep_recent_count"`
 	PersistDirectory   string `yaml:"persist_directory"`
 	PersistFileName    string `yaml:"persist_file_name"`
@@ -179,6 +181,8 @@ func DefaultConfig() *Config {
 		Memory: MemoryConfig{
 			EnableCompress:     true,
 			MaxHistoryMessages: 100,
+			MaxBudgetTokens:    0,
+			CompactAfterTurns:  0,
 			CompressThreshold:  50,
 			KeepRecentCount:    10,
 			PersistDirectory:   "./dino_sessions",
@@ -186,8 +190,9 @@ func DefaultConfig() *Config {
 			Type:               "memory",
 		},
 		Subagent: agent.SubagentConfig{
-			Enabled:          true,
-			TriggerOnKeyword: true,
+			Enabled:              true,
+			TriggerOnKeyword:     true,
+			MaxHistoryMessages:   48,
 			Triggers: []agent.SubagentTrigger{
 				{
 					AgentName: "general",

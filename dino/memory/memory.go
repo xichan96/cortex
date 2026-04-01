@@ -29,6 +29,7 @@ type Provider interface {
 	Compress(ctx context.Context) error
 	Clear(ctx context.Context) error
 	GetStats() Stats
+	StoredMessageCount(ctx context.Context) (int, error)
 }
 
 type Stats struct {
@@ -132,6 +133,10 @@ func (m *InMemory) GetStats() Stats {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.stats
+}
+
+func (m *InMemory) StoredMessageCount(ctx context.Context) (int, error) {
+	return m.SimpleMemoryProvider.StoredMessageCount(ctx)
 }
 
 func (m *InMemory) compress(ctx context.Context) error {
@@ -385,6 +390,10 @@ func (m *Hybrid) GetStats() Stats {
 	stats.SummaryLength = len(m.summary)
 	m.summaryMu.RUnlock()
 	return stats
+}
+
+func (m *Hybrid) StoredMessageCount(ctx context.Context) (int, error) {
+	return m.provider.StoredMessageCount(ctx)
 }
 
 func (m *Hybrid) autoCompress(ctx context.Context) {

@@ -136,9 +136,11 @@ func floatPtr(v float64) *float64 {
 }
 
 type SubagentConfig struct {
-	Enabled          bool              `yaml:"enabled"`
-	TriggerOnKeyword bool              `yaml:"trigger_on_keyword"`
-	Triggers         []SubagentTrigger `yaml:"triggers"`
+	Enabled              bool              `yaml:"enabled"`
+	TriggerOnKeyword     bool              `yaml:"trigger_on_keyword"`
+	ReplayToParentMemory bool              `yaml:"replay_to_parent_memory"`
+	MaxHistoryMessages   int               `yaml:"max_history_messages"`
+	Triggers             []SubagentTrigger `yaml:"triggers"`
 }
 
 type SubagentTrigger struct {

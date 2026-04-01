@@ -357,6 +357,12 @@ func (s *SQLite) GetStats() Stats {
 	return s.stats
 }
 
+func (s *SQLite) StoredMessageCount(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM messages WHERE session_id = ?", s.sessionID).Scan(&n)
+	return n, err
+}
+
 func (s *SQLite) Close() error {
 	return nil
 }
