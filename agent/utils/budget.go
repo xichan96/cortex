@@ -98,21 +98,28 @@ func (b *budget) Check(ctx context.Context, req BudgetRequest) (BudgetResult, er
 	}
 	b.mu.RUnlock()
 
-	remainTokens := maxTokens - usedTokens - req.Estimated.Tokens
-	remainCalls := maxCalls - usedCalls - req.Estimated.Calls
-	remainTimeMs := maxTimeMs - usedTimeMs - req.Estimated.TimeMs
+	var remTok, remCalls int
+	var remTime int64
+	if b.config.MaxTokens > 0 {
+		remTok = maxTokens - usedTokens - req.Estimated.Tokens
+		if remTok < 0 {
+			return BudgetResult{Allowed: false, Reason: "exceeded token budget", Remain: Cost{Tokens: remTok}}, nil
+		}
+	}
+	if b.config.MaxToolCalls > 0 {
+		remCalls = maxCalls - usedCalls - req.Estimated.Calls
+		if remCalls < 0 {
+			return BudgetResult{Allowed: false, Reason: "exceeded tool call budget", Remain: Cost{Calls: remCalls}}, nil
+		}
+	}
+	if b.config.MaxTimeMs > 0 {
+		remTime = maxTimeMs - usedTimeMs - req.Estimated.TimeMs
+		if remTime < 0 {
+			return BudgetResult{Allowed: false, Reason: "exceeded time budget", Remain: Cost{TimeMs: remTime}}, nil
+		}
+	}
 
-	if remainTokens < 0 {
-		return BudgetResult{Allowed: false, Reason: "exceeded token budget", Remain: Cost{Tokens: remainTokens}}, nil
-	}
-	if remainCalls < 0 {
-		return BudgetResult{Allowed: false, Reason: "exceeded tool call budget", Remain: Cost{Calls: remainCalls}}, nil
-	}
-	if remainTimeMs < 0 {
-		return BudgetResult{Allowed: false, Reason: "exceeded time budget", Remain: Cost{TimeMs: remainTimeMs}}, nil
-	}
-
-	return BudgetResult{Allowed: true, Remain: Cost{Tokens: remainTokens, Calls: remainCalls, TimeMs: remainTimeMs}}, nil
+	return BudgetResult{Allowed: true, Remain: Cost{Tokens: remTok, Calls: remCalls, TimeMs: remTime}}, nil
 }
 
 func (b *budget) Consume(ctx context.Context, sessionID string, amount Cost) error {
@@ -188,7 +195,14 @@ func (b *budget) CanExecute(sessionID string) bool {
 		return true
 	}
 
-	return state.UsedCalls < b.config.MaxToolCalls &&
-		state.UsedTokens < b.config.MaxTokens &&
-		state.UsedTimeMs < b.config.MaxTimeMs
+	if b.config.MaxToolCalls > 0 && state.UsedCalls >= b.config.MaxToolCalls {
+		return false
+	}
+	if b.config.MaxTokens > 0 && state.UsedTokens >= b.config.MaxTokens {
+		return false
+	}
+	if b.config.MaxTimeMs > 0 && state.UsedTimeMs >= b.config.MaxTimeMs {
+		return false
+	}
+	return true
 }
