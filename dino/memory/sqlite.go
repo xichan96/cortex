@@ -13,6 +13,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/logger"
 )
 
@@ -207,14 +208,14 @@ func (s *SQLite) AddMessage(ctx context.Context, msg Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	toolCallsJSON := ""
-	if msg.ToolCalls != nil {
-		toolCallsJSON = fmt.Sprintf("%v", msg.ToolCalls)
+	toolPersist := ""
+	if s, err := types.MarshalMessageToolPersist(msg); err == nil {
+		toolPersist = s
 	}
 
 	_, err := s.db.ExecContext(ctx,
 		"INSERT INTO messages (session_id, role, content, timestamp, tool_calls) VALUES (?, ?, ?, ?, ?)",
-		s.sessionID, msg.Role, msg.Content, time.Now().Format(time.RFC3339), toolCallsJSON)
+		s.sessionID, msg.Role, msg.Content, time.Now().Format(time.RFC3339), toolPersist)
 	if err != nil {
 		return err
 	}
@@ -258,10 +259,12 @@ func (s *SQLite) GetMessages(ctx context.Context, limit int) ([]Message, error) 
 		if err := rows.Scan(&role, &content, &timestampStr, &toolCalls); err != nil {
 			return nil, err
 		}
-		messages = append(messages, Message{
+		m := Message{
 			Role:    role,
 			Content: content,
-		})
+		}
+		_ = types.ApplyMessageToolPersist(&m, toolCalls)
+		messages = append(messages, m)
 	}
 
 	return messages, rows.Err()
@@ -321,10 +324,12 @@ func (s *SQLite) getAllMessages() ([]Message, error) {
 		if err := rows.Scan(&role, &content, &timestampStr, &toolCalls); err != nil {
 			return nil, err
 		}
-		messages = append(messages, Message{
+		m := Message{
 			Role:    role,
 			Content: content,
-		})
+		}
+		_ = types.ApplyMessageToolPersist(&m, toolCalls)
+		messages = append(messages, m)
 	}
 	return messages, rows.Err()
 }

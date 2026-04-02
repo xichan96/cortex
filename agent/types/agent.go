@@ -87,13 +87,23 @@ type AgentConfig struct {
 	ReasoningEffort          string                                                            `json:"reasoningEffort"`
 }
 
+func (c *AgentConfig) EffectiveMaxCompletionTokens() int {
+	if c == nil {
+		return 0
+	}
+	if c.MaxCompletionTokens > 0 {
+		return c.MaxCompletionTokens
+	}
+	return c.MaxTokens
+}
+
 func NewAgentConfig() *AgentConfig {
 	return &AgentConfig{
 		MaxIterations:            10,
 		SystemMessage:            "",
 		ChatMessageRole:          "",
 		Temperature:              0.7,
-		MaxTokens:                4096,
+		MaxCompletionTokens:      4096,
 		TopP:                     1.0,
 		FrequencyPenalty:         0.0,
 		PresencePenalty:          0.0,

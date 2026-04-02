@@ -35,7 +35,7 @@ type Config struct {
 
 func DefaultConfig() *Config {
 	return &Config{
-		InputBufferSize:    10,
+		InputBufferSize:    64,
 		OutputBufferSize:   10,
 		EnableQueue:        false,
 		QueueSize:          100,
@@ -104,6 +104,9 @@ type Session struct {
 
 	observers   map[string]Observer
 	observersMu sync.RWMutex
+
+	turnMu            sync.Mutex
+	cancelCurrentTurn context.CancelFunc
 }
 
 type Observer interface {
@@ -314,6 +317,15 @@ func (s *Session) processInputWithAgentInput(agentInput types.AgentInput) *Execu
 	return s.executeWithInput(s.ctx, agentInput, agentInput.String())
 }
 
+func (s *Session) CancelCurrentTurn() {
+	s.turnMu.Lock()
+	fn := s.cancelCurrentTurn
+	s.turnMu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
 func (s *Session) executeWithInput(ctx context.Context, agentInput types.AgentInput, displayContent string) *ExecuteResponse {
 	if err := s.ctx.Err(); err != nil {
 		return &ExecuteResponse{
@@ -321,6 +333,17 @@ func (s *Session) executeWithInput(ctx context.Context, agentInput types.AgentIn
 			Error:     err,
 		}
 	}
+
+	turnCtx, cancelTurn := context.WithCancel(ctx)
+	s.turnMu.Lock()
+	s.cancelCurrentTurn = cancelTurn
+	s.turnMu.Unlock()
+	defer func() {
+		s.turnMu.Lock()
+		s.cancelCurrentTurn = nil
+		s.turnMu.Unlock()
+		cancelTurn()
+	}()
 
 	if s.budget != nil && !s.budget.CanExecute(s.id) {
 		s.emit(&Event{Type: EventTypeError, Error: "Budget exceeded"})
@@ -336,7 +359,7 @@ func (s *Session) executeWithInput(ctx context.Context, agentInput types.AgentIn
 	})
 
 	if s.factory != nil {
-		if result := s.factory.Detect(s.ctx, s.id, agentutils.LoopDetectAction{Type: "input", Content: displayContent}); result != nil {
+		if result := s.factory.Detect(turnCtx, s.id, agentutils.LoopDetectAction{Type: "input", Content: displayContent}); result != nil {
 			if result.IsLoop {
 				logger.Warn("[session] loop detected",
 					slog.String("session_id", s.id),
@@ -353,13 +376,13 @@ func (s *Session) executeWithInput(ctx context.Context, agentInput types.AgentIn
 	}
 
 	if s.planner != nil && s.planner.IsEnabled() {
-		plan, err := s.planner.CreatePlan(s.ctx, displayContent)
+		plan, err := s.planner.CreatePlan(turnCtx, displayContent)
 		if err != nil {
 			s.emit(&Event{Type: EventTypeError, Error: fmt.Sprintf("Failed to create plan: %v", err)})
 		} else if plan != nil {
 			s.emitPlan(plan)
 
-			approved := s.planner.RequestApproval(s.ctx, plan)
+			approved := s.planner.RequestApproval(turnCtx, plan)
 			if !approved {
 				s.emit(&Event{Type: EventTypeDone})
 				return &ExecuteResponse{
@@ -370,7 +393,7 @@ func (s *Session) executeWithInput(ctx context.Context, agentInput types.AgentIn
 		}
 	}
 
-	stream, err := s.agent.ExecuteStream(s.ctx, agentInput, nil)
+	stream, err := s.agent.ExecuteStream(turnCtx, agentInput, nil)
 	if err != nil {
 		s.emit(&Event{Type: EventTypeError, Error: err.Error()})
 		return &ExecuteResponse{SessionID: s.id, Error: err}
@@ -430,11 +453,15 @@ func (s *Session) executeWithInput(ctx context.Context, agentInput types.AgentIn
 	}
 
 	if execResult == nil {
-		return &ExecuteResponse{SessionID: s.id}
+		if errors.Is(turnCtx.Err(), context.Canceled) {
+			s.emit(&Event{Type: EventTypeError, Error: "cancelled"})
+		}
+		s.emit(&Event{Type: EventTypeDone})
+		return &ExecuteResponse{SessionID: s.id, Error: turnCtx.Err()}
 	}
 
 	if s.factory != nil {
-		s.factory.RecordTokens(s.ctx, s.id, execResult.Usage.TotalTokens)
+		s.factory.RecordTokens(turnCtx, s.id, execResult.Usage.TotalTokens)
 	}
 
 	out := execResult.Output

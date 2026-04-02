@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tmc/langchaingo/llms"
+	lcopenai "github.com/tmc/langchaingo/llms/openai"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
 	"github.com/xichan96/cortex/pkg/logger"
@@ -398,15 +399,13 @@ func (p *LangChainLLMProvider) getCallOptions(ctx context.Context) []llms.CallOp
 
 	if v := ctx.Value(types.ContextKeyMaxTokens); v != nil {
 		if tokens, ok := v.(int); ok && tokens > 0 {
-			opts = append(opts, llms.WithMaxTokens(tokens))
+			opts = append(opts, lcopenai.WithMaxCompletionTokens(tokens))
 		}
 	}
 
 	if v := ctx.Value(types.ContextKeyMaxCompletionTokens); v != nil {
 		if tokens, ok := v.(int); ok && tokens > 0 {
-			// Note: langchaingo doesn't have WithMaxCompletionTokens yet, so we use WithMaxTokens
-			// and rely on our CompatibilityHTTPClient to swap it for reasoning models
-			opts = append(opts, llms.WithMaxTokens(tokens))
+			opts = append(opts, lcopenai.WithMaxCompletionTokens(tokens))
 		}
 	}
 

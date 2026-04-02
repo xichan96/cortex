@@ -40,14 +40,14 @@ CORTEX 旨在融合轻量级框架的易用性与 Go 语言的稳健性能。它
 - **智能代理引擎**：核心引擎支持复杂的工具调用与逻辑推理，轻松构建智能 Agent。
 - **广泛的 LLM 支持**：深度集成 OpenAI、DeepSeek、火山引擎 (Volce) 等主流模型，并支持自定义 Provider。
 - **多模态交互**：原生支持文本、图像等多模态数据的处理与交互。
-- **动态技能 (Skills)**：支持基于文件系统的技能动态加载与管理，通过 Lazy Load 模式优化资源占用。
+- **动态技能 (Skills)**：基于文件系统的技能与懒加载；YAML 头可配置 `paths`、`when_to_use`、`allowed_tools`，支持路径 glob（`doublestar`）过滤，加载器可选解析符号链接与按真实路径去重。
 - **开放工具生态**：`agent/tools/builtin` 覆盖文件、搜索、Shell/后台任务、网络与 Web、Docker、邮件、数学及 `mcp_client`；可自注册工具扩展。
 - **实时流式响应**：全链路支持流式 (Streaming) 传输，为交互式应用提供丝滑的用户体验。
-- **混合记忆架构**：采用“全量记录+滚动摘要”的混合存储策略，在大幅降低 Token 消耗的同时完整保留对话上下文。内置异步压缩机制，确保高并发场景下的极低延迟体验。全面支持 LangChain、MongoDB、Redis、MySQL 及 SQLite。
+- **混合记忆架构**：“全量记录 + 滚动摘要”，异步压缩经互斥与按轮计数（`CompactAfterTurns`）避免重叠；组 prompt 时可按粗略 Token 预算裁剪近期对话（`MaxBudgetTokens`、`RemainPromptTokens`）；Provider 可实现廉价 `StoredMessageCount` 辅助门控。支持 LangChain、MongoDB、Redis、MySQL 及 SQLite。
 - **灵活配置**：提供细粒度的配置选项，满足对 Agent 行为的精准控制需求。
 - **高并发工具调用**：支持并行执行多个工具调用，显著提升任务处理效率。
 - **企业级错误处理**：内置完善的错误重试与降级机制，确保系统稳健运行。
-- **Dino 生产编排**：多会话隔离、实时事件订阅、Token/工具/时间预算、循环检测、危险工具审批、优先任务队列、计划模式与子代理；内置文件/搜索/Shell 等工具集与 MCP、Skills 集成路径。
+- **Dino 生产编排**：多会话隔离、实时事件订阅、Token/工具/时间预算、循环检测、危险工具审批、优先任务队列、计划模式与子代理；会话快照保存/恢复（消息窗口、用量、记忆压缩轮次计数）；YAML 记忆调优（`max_budget_tokens`、`compact_after_turns`）及可选子代理结果回灌父会话记忆；内置工具与 MCP、Skills 集成。
 
 ## 架构概述
 
@@ -192,6 +192,8 @@ llmProvider, _ := llm.VolceClient("ak-...", "doubao-pro-32k")
 ### 资源与稳定性
 
 - **预算**：`Budget` 限制 Token、工具调用次数、 wall-clock，防止失控消耗。
+- **记忆调优（YAML / 工厂）**：`memory.max_budget_tokens`、`memory.compact_after_turns`；子代理历史条数上限（默认 48）；可选 `replay_to_parent_memory`，将子任务与输出（截断）写入父会话记忆。
+- **会话快照**：保存/恢复窗口内消息、累计用量及引擎记忆压缩轮次计数，便于持久化会话。
 - **循环检测**：`LoopDetection` 基于语义相似度与重复次数中断死循环。
 - **计划模式**：`PlannerMode` 可先产出步骤计划再执行，可选自动批准。
 
@@ -245,7 +247,7 @@ func main() {
 | `fs/` | `read_file`、`write_file`、`edit_file`、`file` |
 | `search/` | `glob`、`grep`、`codesearch`（当前为占位实现） |
 | `runtime/` | `command`（本地 Shell）、`question`（向用户澄清）、`job_kill`、`job_output`（后台命令任务） |
-| `task/` | `todo` |
+| `task/` | `todo`（进程内任务：ID、pending / in_progress / completed / cancelled，支持列出与更新） |
 | `net/` | `ssh`、`net_check`（连通性检测） |
 | `web/` | `web_search`、`web_fetch` |
 | `system/` | `get_time`、`http_request` |
@@ -276,9 +278,9 @@ Cortex 实现了一套独特的**基于文件系统的技能系统**，允许您
 ### 工作原理
 
 1.  **定义**：在技能目录中创建 `SKILL.md` 文件（例如 `./skills/my-skill/SKILL.md`）。
-2.  **描述**：使用 Markdown 描述任务并提供可执行的示例（如 `curl` 命令、SQL 查询等）。
-3.  **发现**：Cortex 会自动扫描技能目录，并将可用技能注入到系统提示词中。
-4.  **执行**：当 Agent 需要执行相关任务时，它会严格遵循 `SKILL.md` 中的指引进行操作。
+2.  **描述**：使用 Markdown 描述任务并提供可执行示例（如 `curl`、SQL）。可选 YAML 头可写 `name`、`description`、`paths`（适用路径 glob）、`when_to_use`、`allowed_tools`；按当前激活路径过滤后，仅匹配技能会合并进系统提示。
+3.  **发现**：扫描技能目录（可选解析符号链接、按真实路径去重）并注入适用技能。
+4.  **执行**：Agent 按 `SKILL.md` 指引完成任务。
 
 ### 技能示例 (`skills/weather/SKILL.md`)
 
@@ -333,10 +335,10 @@ Cortex 引入了先进的**混合记忆架构 (Hybrid Memory Architecture)**，�
 
 ### 架构特点
 
-1.  **全量记录 (Raw History)**：完整保留每一条对话记录，确保信息不丢失。
-2.  **滚动摘要 (Rolling Summary)**：后台异步对历史对话进行压缩摘要，生成精炼的上下文快照。
-3.  **智能检索**：在构建 Prompt 时，动态组合“摘要 + 近期对话”，在有限的 Context Window 内提供最丰富的信息。
-4.  **异步处理**：摘要生成过程完全异步，不阻塞主对话流程，且具备 Panic 自动恢复机制，确保系统高可用。
+1.  **全量记录 (Raw History)**：完整保留交互（读取侧多为窗口化，具体取决于后端）。
+2.  **滚动摘要 (Rolling Summary)**：后台异步压缩摘要；可按轮次（`CompactAfterTurns`）与可选消息计数门控触发。
+3.  **智能检索**：组合「摘要 + 近期对话」；近期对话可在请求前按粗略 Token 预算裁剪（`MaxBudgetTokens`、`RemainPromptTokens`，估算见 `agent/types`）。
+4.  **异步处理**：摘要与压缩后台执行，带 Panic 恢复与锁，避免与用户轮次争抢。
 
 ### 存储后端
 
@@ -356,6 +358,7 @@ agentEngine.SetMemory(context.Background(), memory)
 
 ## 示例
 
+- [版本摘要（英文）](docs/RELEASE_SUMMARY.md)：近期记忆、技能、工具与 Dino 变更说明。
 - [Basic Example](examples/basic): 基础用法演示。
 - [Dino Example](examples/dino): Dino 高级编排（会话、预算、工具审批）。
 - [Chat Web](examples/chat-web): 基于 Gin + React 的完整聊天应用。

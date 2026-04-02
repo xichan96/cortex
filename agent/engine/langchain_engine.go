@@ -330,7 +330,7 @@ func (e *LangChainAgentEngine) SetConfig(ctx context.Context, config *types.Agen
 		return
 	}
 	e.SetTemperature(ctx, config.Temperature)
-	e.SetMaxTokens(ctx, config.MaxTokens)
+	e.SetMaxTokens(ctx, config.EffectiveMaxCompletionTokens())
 	e.SetTopP(ctx, config.TopP)
 	e.SetFrequencyPenalty(ctx, config.FrequencyPenalty)
 	e.SetPresencePenalty(ctx, config.PresencePenalty)

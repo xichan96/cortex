@@ -98,12 +98,39 @@ func (m *memoryAdapter) SaveContext(ctx context.Context, input, output map[strin
 			if role == "" {
 				role = "user"
 			}
-			msg := types.Message{Role: role, Content: inputMsg}
-			if parts, ok := input["parts"].([]types.MessagePart); ok {
-				msg.Parts = parts
-			}
-			if err := m.provider.AddMessage(ctx, msg); err != nil {
-				return err
+			parts, _ := input["parts"].([]types.MessagePart)
+			if len(parts) > 0 {
+				sp, serr := types.SerializeMessageParts(parts)
+				if serr != nil {
+					logger.Warn("[memoryAdapter] serialize parts", slog.String("error", serr.Error()))
+					sp = "[]"
+				}
+				var wrap struct {
+					Input string          `json:"input"`
+					Role  string          `json:"role,omitempty"`
+					Parts json.RawMessage `json:"parts,omitempty"`
+				}
+				wrap.Input = inputMsg
+				wrap.Role = role
+				if sp != "" {
+					wrap.Parts = json.RawMessage(sp)
+				}
+				inputJSON, err := json.Marshal(wrap)
+				if err != nil {
+					logger.Warn("[memoryAdapter] failed to marshal input", slog.String("error", err.Error()))
+					inputJSON = []byte(fmt.Sprintf("%v", input))
+				}
+				if err := m.provider.AddMessage(ctx, memory.Message{
+					Role:    role,
+					Content: fmt.Sprintf("Input: %s", string(inputJSON)),
+				}); err != nil {
+					return err
+				}
+			} else {
+				msg := types.Message{Role: role, Content: inputMsg}
+				if err := m.provider.AddMessage(ctx, msg); err != nil {
+					return err
+				}
 			}
 		} else {
 			var role string
@@ -143,9 +170,12 @@ func (m *memoryAdapter) GetChatHistory(ctx context.Context) ([]types.Message, er
 	result := make([]types.Message, len(msgs))
 	for i, msg := range msgs {
 		result[i] = types.Message{
-			Role:    msg.Role,
-			Content: msg.Content,
-			Parts:   msg.Parts,
+			Role:       msg.Role,
+			Content:    msg.Content,
+			Name:       msg.Name,
+			Parts:      msg.Parts,
+			ToolCalls:  msg.ToolCalls,
+			ToolCallID: msg.ToolCallID,
 		}
 	}
 	return result, nil
@@ -189,10 +219,10 @@ func newDelegateParentMemoryTool(inner types.Tool, sessionID string, getMem func
 	return &delegateParentMemoryTool{inner: inner, sid: sessionID, getMem: getMem}
 }
 
-func (t *delegateParentMemoryTool) Name() string                       { return t.inner.Name() }
-func (t *delegateParentMemoryTool) Description() string                { return t.inner.Description() }
-func (t *delegateParentMemoryTool) Schema() map[string]interface{}     { return t.inner.Schema() }
-func (t *delegateParentMemoryTool) Metadata() types.ToolMetadata       { return t.inner.Metadata() }
+func (t *delegateParentMemoryTool) Name() string                   { return t.inner.Name() }
+func (t *delegateParentMemoryTool) Description() string            { return t.inner.Description() }
+func (t *delegateParentMemoryTool) Schema() map[string]interface{} { return t.inner.Schema() }
+func (t *delegateParentMemoryTool) Metadata() types.ToolMetadata   { return t.inner.Metadata() }
 func (t *delegateParentMemoryTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	if t.getMem != nil {
 		if m := t.getMem(); m != nil {
@@ -262,17 +292,17 @@ type DinoFactory interface {
 }
 
 type dinoFactory struct {
-	config          *Config
-	llmProvider     types.LLMProvider
-	tools           *dinoTools.Registry
-	loopDetector    agentutils.LoopDetector
-	budget          Budget
-	skills          []*Skill
-	approvalStore   *ApprovalStore
-	sessions        map[string]*session.Session
-	mu              sync.RWMutex
-	streamSender    StreamEventSender
-	subagentManager *dinoAgent.SubagentManager
+	config               *Config
+	llmProvider          types.LLMProvider
+	tools                *dinoTools.Registry
+	loopDetector         agentutils.LoopDetector
+	budget               Budget
+	skills               []*Skill
+	approvalStore        *ApprovalStore
+	sessions             map[string]*session.Session
+	mu                   sync.RWMutex
+	streamSender         StreamEventSender
+	subagentManager      *dinoAgent.SubagentManager
 	mcpManager           *dinoTools.MCPManager
 	sessionToolsProvider func(sessionID string) []types.Tool
 }
@@ -458,7 +488,7 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	agentConfig.ToolTimeoutCalculator = f.config.ToolTimeoutCalculator
 	agentConfig.DoomLoopThreshold = f.config.LoopDetection.MaxRepeats
 	agentConfig.Temperature = f.config.Temperature
-	agentConfig.MaxTokens = f.config.MaxTokens
+	agentConfig.MaxCompletionTokens = f.config.MaxTokens
 	agentConfig.TopP = f.config.TopP
 	agentConfig.MaxBudgetTokens = f.config.Memory.MaxBudgetTokens
 	agentConfig.CompactAfterTurns = f.config.Memory.CompactAfterTurns

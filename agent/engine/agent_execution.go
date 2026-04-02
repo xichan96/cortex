@@ -449,11 +449,8 @@ func (ae *AgentEngine) addConfigValuesToContext(ctx context.Context) context.Con
 	if config.Temperature > 0 {
 		ctx = context.WithValue(ctx, types.ContextKeyTemperature, config.Temperature)
 	}
-	if config.MaxTokens > 0 {
-		ctx = context.WithValue(ctx, types.ContextKeyMaxTokens, config.MaxTokens)
-	}
-	if config.MaxCompletionTokens > 0 {
-		ctx = context.WithValue(ctx, types.ContextKeyMaxCompletionTokens, config.MaxCompletionTokens)
+	if n := config.EffectiveMaxCompletionTokens(); n > 0 {
+		ctx = context.WithValue(ctx, types.ContextKeyMaxCompletionTokens, n)
 	}
 	if config.TopP > 0 {
 		ctx = context.WithValue(ctx, types.ContextKeyTopP, config.TopP)
@@ -874,6 +871,7 @@ func (ae *AgentEngine) prepareMessages(ctx context.Context, input types.AgentInp
 	if budgetTrim {
 		history = trimHistoryToTokenBudget(history, budgetCap, config, previousRequests, input)
 	}
+	history = repairLLMMessageToolOrdering(history)
 
 	if len(history) > 0 {
 		messages = append(messages, history...)
@@ -886,6 +884,88 @@ func (ae *AgentEngine) prepareMessages(ctx context.Context, input types.AgentInp
 	messages = append(messages, input.ToMessage("user"))
 
 	return messages, nil
+}
+
+// repairLLMMessageToolOrdering fixes history after token trim or DB compress: drops leading orphan tools,
+// drops tools not after an assistant with tool_calls, and strips tool_calls (and following partial tool
+// block) when not every tool_call_id has a matching tool message (OpenAI 400 otherwise).
+func repairLLMMessageToolOrdering(history []types.Message) []types.Message {
+	if len(history) == 0 {
+		return history
+	}
+	i := 0
+	for i < len(history) && strings.EqualFold(history[i].Role, "tool") {
+		i++
+	}
+	history = history[i:]
+	if len(history) == 0 {
+		return history
+	}
+	out := make([]types.Message, 0, len(history))
+	k := 0
+	for k < len(history) {
+		m := history[k]
+		if !strings.EqualFold(m.Role, "assistant") || len(m.ToolCalls) == 0 {
+			if strings.EqualFold(m.Role, "tool") {
+				if len(out) == 0 {
+					k++
+					continue
+				}
+				prev := out[len(out)-1]
+				if !strings.EqualFold(prev.Role, "assistant") || len(prev.ToolCalls) == 0 {
+					k++
+					continue
+				}
+			}
+			out = append(out, m)
+			k++
+			continue
+		}
+		need := make(map[string]struct{})
+		for _, tc := range m.ToolCalls {
+			if tc.ID != "" {
+				need[tc.ID] = struct{}{}
+			}
+		}
+		if len(need) == 0 {
+			mm := m
+			mm.ToolCalls = nil
+			out = append(out, mm)
+			k++
+			continue
+		}
+		tEnd := k + 1
+		for tEnd < len(history) && strings.EqualFold(history[tEnd].Role, "tool") {
+			tEnd++
+		}
+		toolRun := history[k+1 : tEnd]
+		got := make(map[string]struct{})
+		for _, t := range toolRun {
+			if t.ToolCallID != "" {
+				if _, ok := need[t.ToolCallID]; ok {
+					got[t.ToolCallID] = struct{}{}
+				}
+			}
+		}
+		complete := true
+		for id := range need {
+			if _, ok := got[id]; !ok {
+				complete = false
+				break
+			}
+		}
+		if !complete {
+			mm := m
+			mm.ToolCalls = nil
+			out = append(out, mm)
+			k = tEnd
+			continue
+		}
+		out = append(out, m)
+		out = append(out, toolRun...)
+		k = tEnd
+	}
+	return out
 }
 
 func trimHistoryToTokenBudget(history []types.Message, maxBudgetTokens int, config *types.AgentConfig, previousRequests []types.ToolCallData, input types.AgentInput) []types.Message {
