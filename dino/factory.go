@@ -488,7 +488,7 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	agentConfig.ToolTimeoutCalculator = f.config.ToolTimeoutCalculator
 	agentConfig.DoomLoopThreshold = f.config.LoopDetection.MaxRepeats
 	agentConfig.Temperature = f.config.Temperature
-	agentConfig.MaxTokens = f.config.MaxTokens
+	agentConfig.MaxCompletionTokens = f.config.MaxTokens
 	agentConfig.TopP = f.config.TopP
 	agentConfig.MaxBudgetTokens = f.config.Memory.MaxBudgetTokens
 	agentConfig.CompactAfterTurns = f.config.Memory.CompactAfterTurns

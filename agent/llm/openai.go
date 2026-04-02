@@ -16,7 +16,8 @@ import (
 
 // CompatibilityHTTPClient handles API compatibility issues
 type CompatibilityHTTPClient struct {
-	client *http.Client
+	client                   *http.Client
+	preferMaxCompletionTokens bool
 }
 
 // Do implements the Doer interface
@@ -37,38 +38,34 @@ func (c *CompatibilityHTTPClient) Do(req *http.Request) (*http.Response, error) 
 		shouldResetBody := true
 
 		if err := json.Unmarshal(bodyBytes, &bodyMap); err == nil {
-			// Verify it's a chat completion request
 			if _, hasMessages := bodyMap["messages"]; hasMessages {
+				isReasoning := false
 				if model, ok := bodyMap["model"].(string); ok {
-					isReasoning := strings.HasPrefix(model, "gpt-5") ||
-						strings.HasPrefix(model, "o1-") ||
-						strings.HasPrefix(model, "o3-")
-
-					// Reasoning models (GPT-5, o1, o3) have specific requirements
+					ml := strings.ToLower(strings.TrimSpace(model))
+					isReasoning = strings.HasPrefix(ml, "gpt-5") ||
+						strings.HasPrefix(ml, "o1") ||
+						strings.HasPrefix(ml, "o3") ||
+						strings.HasPrefix(ml, "o4")
+				}
+				if isReasoning || c.preferMaxCompletionTokens {
+					changed := false
+					if maxTokens, exists := bodyMap["max_tokens"]; exists {
+						bodyMap["max_completion_tokens"] = maxTokens
+						delete(bodyMap, "max_tokens")
+						changed = true
+					}
 					if isReasoning {
-						changed := false
-						// 1. Swap max_tokens to max_completion_tokens
-						if maxTokens, exists := bodyMap["max_tokens"]; exists {
-							bodyMap["max_completion_tokens"] = maxTokens
-							delete(bodyMap, "max_tokens")
-							changed = true
-						}
-
-						// 2. Reasoning models only accept temperature=1 (default), remove if set to other values
 						if _, exists := bodyMap["temperature"]; exists {
 							delete(bodyMap, "temperature")
 							changed = true
 						}
-
-						if changed {
-							// Re-marshal
-							newBodyBytes, err := json.Marshal(bodyMap)
-							if err == nil {
-								bodyBytes = newBodyBytes
-								// Update content length
-								req.ContentLength = int64(len(bodyBytes))
-								req.Header.Set("Content-Length", strconv.Itoa(len(bodyBytes)))
-							}
+					}
+					if changed {
+						newBodyBytes, err := json.Marshal(bodyMap)
+						if err == nil {
+							bodyBytes = newBodyBytes
+							req.ContentLength = int64(len(bodyBytes))
+							req.Header.Set("Content-Length", strconv.Itoa(len(bodyBytes)))
 						}
 					}
 				}
@@ -91,6 +88,8 @@ type OpenAIOptions struct {
 	Model   string
 	OrgID   string
 	APIType string // "openai", "azure"
+	// PreferMaxCompletionTokens maps max_tokens -> max_completion_tokens for APIs that reject max_tokens.
+	PreferMaxCompletionTokens bool
 }
 
 // NewOpenAIClient creates a new OpenAI client and returns LLMProvider
@@ -108,8 +107,10 @@ func NewOpenAIClient(opts OpenAIOptions) (types.LLMProvider, error) {
 	}
 
 	pooledClient := providers.GetPooledHTTPClient()
-	// Wrap with compatibility client to handle GPT-5/o1/o3 specific requirements
-	compatClient := &CompatibilityHTTPClient{client: pooledClient}
+	compatClient := &CompatibilityHTTPClient{
+		client:                    pooledClient,
+		preferMaxCompletionTokens: opts.PreferMaxCompletionTokens,
+	}
 
 	client, err := openai.New(
 		openai.WithToken(opts.APIKey),

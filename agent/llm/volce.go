@@ -29,12 +29,13 @@ func NewVolceClient(opts VolceOptions) (types.LLMProvider, error) {
 	}
 
 	pooledClient := providers.GetPooledHTTPClient()
+	compat := &CompatibilityHTTPClient{client: pooledClient, preferMaxCompletionTokens: true}
 
 	client, err := openai.New(
 		openai.WithToken(opts.APIKey),
 		openai.WithBaseURL(opts.BaseURL),
 		openai.WithModel(opts.Model),
-		openai.WithHTTPClient(pooledClient),
+		openai.WithHTTPClient(compat),
 	)
 	if err != nil {
 		return nil, errors.NewError(errors.EC_LLM_CLIENT_CREATE_FAILED.Code, errors.EC_LLM_CLIENT_CREATE_FAILED.Message).Wrap(err)
