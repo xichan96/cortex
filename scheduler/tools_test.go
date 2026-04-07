@@ -496,25 +496,25 @@ func (m mockLLMProvider) GetModelMetadata() types.ModelMetadata {
 }
 
 func TestParseAgentInstruction(t *testing.T) {
-	msg, out := parseAgentInstruction(`{"message":"hello"}`)
+	msg, out := ParseAgentInstruction(`{"message":"hello"}`)
 	assert.Equal(t, "hello", msg)
 	assert.Equal(t, "hello", out.Message)
 
-	msg, _ = parseAgentInstruction(`"plain"`)
+	msg, _ = ParseAgentInstruction(`"plain"`)
 	assert.Equal(t, "plain", msg)
 
-	msg, out = parseAgentInstruction(`{"message":"nested","skills":["a"],"tools":["b"],"max_iterations":5}`)
+	msg, out = ParseAgentInstruction(`{"message":"nested","skills":["a"],"tools":["b"],"max_iterations":5}`)
 	assert.Equal(t, "nested", msg)
 	assert.Equal(t, []string{"a"}, out.Skills)
 	assert.Equal(t, []string{"b"}, out.Tools)
 	assert.Equal(t, 5, out.MaxIterations)
 
-	msg, _ = parseAgentInstruction(`  {"message":"trimmed"}  `)
+	msg, _ = ParseAgentInstruction(`  {"message":"trimmed"}  `)
 	assert.Equal(t, "trimmed", msg)
-	msg, _ = parseAgentInstruction(`"{\"message\":\"inner\"}"`)
+	msg, _ = ParseAgentInstruction(`"{\"message\":\"inner\"}"`)
 	assert.Equal(t, "inner", msg)
 
-	msg, _ = parseAgentInstruction(`not json`)
+	msg, _ = ParseAgentInstruction(`not json`)
 	assert.Equal(t, "not json", msg)
 }
 

@@ -622,6 +622,8 @@ func (ae *AgentEngine) Execute(ctx context.Context, input types.AgentInput, prev
 	}
 	var doomState doomLoopState
 	var allIntermediateSteps []types.ToolCallData
+	var hitDoomBlock bool
+	var maxIterStop bool
 	for iteration < maxIterations {
 		select {
 		case <-ctx.Done():
@@ -652,10 +654,14 @@ func (ae *AgentEngine) Execute(ctx context.Context, input types.AgentInput, prev
 		doomState.appendSteps(result.IntermediateSteps)
 		if doomState.shouldStop(doomThreshold, onDoomLoop) {
 			logger.LogExecution("Execute", iteration, "Doom loop detected, stopping")
+			hitDoomBlock = true
 			break
 		}
 
 		messages = ae.buildNextMessages(messages, result)
+		if iteration+1 >= maxIterations {
+			maxIterStop = true
+		}
 		iteration++
 
 		// Avoid too fast execution - only delay if there are more iterations
@@ -680,6 +686,15 @@ func (ae *AgentEngine) Execute(ctx context.Context, input types.AgentInput, prev
 		slog.Duration("total_duration", executionTime),
 		slog.Int("total_iterations", iteration+1),
 		slog.Int("output_length", outputLength))
+
+	if finalResult != nil {
+		switch {
+		case hitDoomBlock:
+			finalResult.StopCause = types.AgentStopCauseDoomLoop
+		case maxIterStop:
+			finalResult.StopCause = types.AgentStopCauseMaxIterations
+		}
+	}
 
 	if ae.memory != nil && finalResult != nil {
 		chatRole := "user"
@@ -796,8 +811,9 @@ func (ae *AgentEngine) ExecuteStream(ctx context.Context, input types.AgentInput
 		if err != nil {
 			logger.LogError("ExecuteStream", err, slog.String("phase", "prepare_messages"))
 			resultChan <- types.StreamResult{
-				Type:  "error",
-				Error: errors.NewError(errors.EC_PREPARE_MESSAGES_FAILED.Code, "failed to prepare messages").Wrap(err),
+				Type:      "error",
+				Error:     errors.NewError(errors.EC_PREPARE_MESSAGES_FAILED.Code, "failed to prepare messages").Wrap(err),
+				StopCause: types.StopCauseFromChatError(err),
 			}
 			return
 		}
@@ -1095,6 +1111,8 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 	}
 	var doomState doomLoopState
 	var iteration int
+	var hitDoom bool
+	var lastHasMore bool
 
 	// Get hooks
 	hookRunner := hooks.NewRunner(ae.getHooks(), "", "")
@@ -1109,8 +1127,9 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 		case <-ctx.Done():
 			hookRunner.OnError(ctx.Err())
 			resultChan <- types.StreamResult{
-				Type:  "error",
-				Error: ctx.Err(),
+				Type:      "error",
+				Error:     ctx.Err(),
+				StopCause: types.StopCauseFromChatError(ctx.Err()),
 			}
 			return
 		default:
@@ -1125,11 +1144,13 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 			logger.LogError("executeStreamWithIterations", err, slog.Int("iteration", iteration+1))
 			hookRunner.OnError(err)
 			resultChan <- types.StreamResult{
-				Type:  "error",
-				Error: errors.NewError(errors.EC_STREAM_ITERATION_FAILED.Code, fmt.Sprintf("iteration %d failed", iteration+1)).Wrap(err),
+				Type:      "error",
+				Error:     errors.NewError(errors.EC_STREAM_ITERATION_FAILED.Code, fmt.Sprintf("iteration %d failed", iteration+1)).Wrap(err),
+				StopCause: types.StopCauseFromChatError(err),
 			}
 			return
 		}
+		lastHasMore = hasMore
 
 		finalResult.Output = iterationResult.Output
 		finalResult.Usage.PromptTokens += iterationResult.Usage.PromptTokens
@@ -1152,6 +1173,7 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 		doomState.appendSteps(iterationResult.IntermediateSteps)
 		if doomState.shouldStop(doomThreshold, onDoomLoop) {
 			logger.LogExecution("executeStreamWithIterations", iteration, "Doom loop detected, stopping")
+			hitDoom = true
 			break
 		}
 
@@ -1166,6 +1188,13 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 	// Set final result's tool calls and intermediate steps
 	finalResult.ToolCalls = toolCalls
 	finalResult.IntermediateSteps = intermediateSteps
+
+	switch {
+	case hitDoom:
+		finalResult.StopCause = types.AgentStopCauseDoomLoop
+	case lastHasMore:
+		finalResult.StopCause = types.AgentStopCauseMaxIterations
+	}
 
 	if ae.memory != nil && len(initialMessages) > 0 {
 		chatRole := "user"

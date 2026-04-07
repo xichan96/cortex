@@ -330,7 +330,9 @@ func (s *Scheduler) createJobWrapper(job *Job) func() {
 			defer s.locker.Unlock(ctx, "job_lock:"+currentJob.ID)
 		}
 
-		s.store.UpdateStatus(ctx, currentJob.ID, JobStatusRunning, nil, time.Time{}, 0, "")
+		if uerr := s.store.UpdateStatus(ctx, currentJob.ID, JobStatusRunning, nil, time.Time{}, 0, ""); uerr != nil {
+			logger.Error("xcron UpdateStatus running failed", slog.String("job_id", currentJob.ID), slog.String("error", uerr.Error()))
+		}
 		s.mu.RLock()
 		rec := s.metrics
 		s.mu.RUnlock()
@@ -383,7 +385,9 @@ func (s *Scheduler) createJobWrapper(job *Job) func() {
 			}
 			s.mu.Unlock()
 		}
-		s.store.UpdateStatus(ctx, currentJob.ID, status, &now, nextRun, duration, "")
+		if uerr := s.store.UpdateStatus(ctx, currentJob.ID, status, &now, nextRun, duration, ""); uerr != nil {
+			logger.Error("xcron UpdateStatus after success failed", slog.String("job_id", currentJob.ID), slog.String("error", uerr.Error()))
+		}
 	}
 }
 
@@ -409,7 +413,9 @@ func (s *Scheduler) executeWithRetry(ctx context.Context, handler TaskHandler, j
 
 func (s *Scheduler) handleFailure(ctx context.Context, job *Job, err error, duration time.Duration) {
 	logger.Error("Job failed after retries", slog.String("error", err.Error()), slog.String("job_id", job.ID))
-	s.store.UpdateStatus(ctx, job.ID, JobStatusFailed, nil, time.Time{}, duration, err.Error())
+	if uerr := s.store.UpdateStatus(ctx, job.ID, JobStatusFailed, nil, time.Time{}, duration, err.Error()); uerr != nil {
+		logger.Error("xcron UpdateStatus JobStatusFailed failed", slog.String("job_id", job.ID), slog.String("error", uerr.Error()))
+	}
 	if s.onFailure != nil {
 		s.onFailure(job, err)
 	}
