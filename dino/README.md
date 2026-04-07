@@ -57,6 +57,11 @@ Dino extends the core Cortex agent capabilities with advanced features designed 
 - **`dino/chatstore`**: per-session **chat transcript** `Provider` for the factory (`OpenSharedChatStore`, SQLite / in-memory backends)
 - **`pkg/memkit`**: **preferences, knowledge, index, PageIndex** — structured memory; complements `chatstore`, different role
 
+### Embedding Dino in a host app (`hostconfig`, `mem`, `pkg`)
+- **`dino/hostconfig`**: **mapstructure-friendly** types for a typical host YAML (`HostAppConfig`, cortex/tool/MCP slices), **`CoalesceDinoFromHost`** (merge into `dino.Config`), **`ExpandConfigPath`**, MCP entries → `dino.MCP` (`MergeMCPServersIntoDino`), and **`ListMCPTools` / `ListMCPToolsFromToolConfigs`** for capability discovery. No goclaw import.
+- **`dino/mem`**: optional **memory ingest loop** and **memory tool** wiring over shared chat SQLite + `memkit`; host supplies LLM factory, paths, and logging via options.
+- **`dino/pkg`**: small **non-config** helpers only, e.g. **user-echo skip** (`MarkPendingUserEcho` / `TakePendingUserEchoMatch`) and **scheduler tools bound to a chat session id**.
+
 ---
 
 ## Installation
@@ -240,6 +245,9 @@ dino/
 ├── task/            # Long-task types (Task, StopReason, SessionStore)
 ├── runner/          # Outer-loop engine, verifiers, checkpoint stores
 ├── chatstore/       # Session chat transcript Provider (SQLite / in-memory)
+├── hostconfig/      # Host YAML shapes + CoalesceDinoFromHost + MCP listing helpers
+├── mem/             # Memory ingest loop + memory tools (host-injected deps)
+├── pkg/             # Echo-skip + scheduler session tool wrappers
 ├── permission/      # Tool permission
 ├── agent/           # Subagent and prompts
 └── tools/           # Registry, builtin, skill, MCP
