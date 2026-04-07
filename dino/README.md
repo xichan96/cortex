@@ -49,6 +49,14 @@ Dino extends the core Cortex agent capabilities with advanced features designed 
 - Auto-approval option for trusted workflows
 - Plan visualization through events
 
+### Long-running tasks & harness (`dino/task`, `dino/runner`)
+- **`dino/task`**: neutral types (`Task`, `TaskConfig`, `StopReason`, checkpoint `TaskSession`, `SessionSwapper`, …)
+- **`dino/runner`**: `DefaultTaskEngine` wired to `dino/harness` (verify, stall, multi-outer iterations), shell/text/LLM verifiers, in-memory and blob-backed `SessionStore` implementations
+
+### Chat history vs structured memory (naming)
+- **`dino/chatstore`**: per-session **chat transcript** `Provider` for the factory (`OpenSharedChatStore`, SQLite / in-memory backends)
+- **`pkg/memkit`**: **preferences, knowledge, index, PageIndex** — structured memory; complements `chatstore`, different role
+
 ---
 
 ## Installation
@@ -229,7 +237,9 @@ dino/
 │   ├── info.go      # Session info
 │   └── planner.go   # Planner helper
 ├── queue/           # Task queue
-├── memory/          # Memory management
+├── task/            # Long-task types (Task, StopReason, SessionStore)
+├── runner/          # Outer-loop engine, verifiers, checkpoint stores
+├── chatstore/       # Session chat transcript Provider (SQLite / in-memory)
 ├── permission/      # Tool permission
 ├── agent/           # Subagent and prompts
 └── tools/           # Registry, builtin, skill, MCP
