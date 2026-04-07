@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/xichan96/cortex/agent/engine"
 	"github.com/xichan96/cortex/agent/providers"
@@ -16,19 +17,30 @@ import (
 	"github.com/xichan96/cortex/pkg/xcron"
 )
 
+// AgentTaskExecutor runs a scheduled agent task outside the built-in AgentEngine (e.g. Dino / gateway).
+type AgentTaskExecutor func(ctx context.Context, job *xcron.Job, instruction string, payload xcron.AgentPayload) error
+
 type Service struct {
-	xcronScheduler *xcron.Scheduler
-	llmProvider    types.LLMProvider
-	agentConfig    *types.AgentConfig
-	memoryProvider types.MemoryProvider
-	memoryFactory  func(sessionID string) types.MemoryProvider
-	toolRegistry   *tools.Registry
-	skillRegistry  *skills.Registry
+	xcronScheduler     *xcron.Scheduler
+	agentTaskExecutor  AgentTaskExecutor
+	llmProvider        types.LLMProvider
+	agentConfig        *types.AgentConfig
+	memoryProvider     types.MemoryProvider
+	memoryFactory      func(sessionID string) types.MemoryProvider
+	toolRegistry       *tools.Registry
+	skillRegistry      *skills.Registry
 }
 
 // NewService creates a new scheduler service
 func NewService(s *xcron.Scheduler) *Service {
 	return &Service{xcronScheduler: s}
+}
+
+// SetAgentTaskExecutor registers the xcron agent handler to invoke exec instead of AgentEngine.
+// When non-nil, scheduled tasks skip LLM-based AgentEngine and skill planner.
+func (s *Service) SetAgentTaskExecutor(exec AgentTaskExecutor) {
+	s.agentTaskExecutor = exec
+	s.registerAgentHandler()
 }
 
 // ConfigureAgent configures the base components for building agents for scheduled tasks
@@ -70,7 +82,8 @@ func (s *Service) ConfigureAgentWithMemoryFactory(
 	s.registerAgentHandler()
 }
 
-func parseAgentInstruction(payload string) (instruction string, out xcron.AgentPayload) {
+// ParseAgentInstruction extracts user instruction and merged AgentPayload from stored job payload JSON.
+func ParseAgentInstruction(payload string) (instruction string, out xcron.AgentPayload) {
 	if err := json.Unmarshal([]byte(payload), &out); err == nil && out.Message != "" {
 		return out.Message, out
 	}
@@ -98,57 +111,68 @@ func parseAgentInstruction(payload string) (instruction string, out xcron.AgentP
 }
 
 func (s *Service) registerAgentHandler() {
-	s.xcronScheduler.RegisterHandler(xcron.TaskTypeAgent, func(ctx context.Context, job *xcron.Job) error {
-		if s.llmProvider == nil {
-			return fmt.Errorf("agent LLM provider not configured")
+	s.xcronScheduler.RegisterHandler(xcron.TaskTypeAgent, s.handleAgentTask)
+}
+
+func (s *Service) handleAgentTask(ctx context.Context, job *xcron.Job) error {
+	payload := job.Payload
+	logger.Info("⏰ Scheduled Task Triggered", slog.String("payload", payload), slog.String("session_id", job.SessionID))
+
+	instruction, agentPayload := ParseAgentInstruction(payload)
+
+	if s.agentTaskExecutor != nil {
+		runCtx := ctx
+		if agentPayload.TimeoutSeconds > 0 {
+			var cancel context.CancelFunc
+			runCtx, cancel = context.WithTimeout(ctx, time.Duration(agentPayload.TimeoutSeconds)*time.Second)
+			defer cancel()
 		}
+		return s.agentTaskExecutor(runCtx, job, instruction, agentPayload)
+	}
 
-		payload := job.Payload
-		logger.Info("⏰ Scheduled Task Triggered", slog.String("payload", payload), slog.String("session_id", job.SessionID))
+	if s.llmProvider == nil {
+		return fmt.Errorf("agent LLM provider not configured")
+	}
 
-		instruction, agentPayload := parseAgentInstruction(payload)
-
-		if len(agentPayload.Skills) == 0 && s.skillRegistry != nil {
-			logger.Info("🔍 Planning skills for instruction", slog.String("instruction", instruction))
-			plan, err := skills.NewPlanner(s.skillRegistry).Plan(ctx, instruction)
-			if err != nil {
-				logger.Warn("❌ Planner failed", slog.String("error", err.Error()))
-			} else if len(plan.Steps) > 0 {
-				seen := map[string]struct{}{}
-				for _, step := range plan.Steps {
-					for _, sk := range step.Skills {
-						if _, ok := seen[sk.Name]; ok {
-							continue
-						}
-						seen[sk.Name] = struct{}{}
-						agentPayload.Skills = append(agentPayload.Skills, sk.Name)
-					}
-				}
-				logger.Info("✅ Planner identified skills", slog.Any("skills", agentPayload.Skills))
-			} else {
-				logger.Warn("⚠️ Planner found no skills for instruction", slog.String("instruction", instruction))
-			}
-		} else if s.skillRegistry == nil {
-			logger.Warn("⚠️ Skill registry is nil, cannot plan skills")
-		} else {
-			logger.Info("ℹ️ Skills already present in payload", slog.Any("skills", agentPayload.Skills))
-		}
-
-		taskConfig := s.buildTaskConfig(agentPayload)
-
-		agentEngine := s.newAgentEngine(ctx, job, &taskConfig, agentPayload)
-
-		// Execute Agent
-		logger.Info("🚀 Executing Agent", slog.String("instruction", instruction), slog.Int("skills_count", len(agentPayload.Skills)))
-		result, err := agentEngine.Execute(ctx, types.NewAgentInput(instruction), nil)
+	if len(agentPayload.Skills) == 0 && s.skillRegistry != nil {
+		logger.Info("🔍 Planning skills for instruction", slog.String("instruction", instruction))
+		plan, err := skills.NewPlanner(s.skillRegistry).Plan(ctx, instruction)
 		if err != nil {
-			logger.Error("❌ Agent execution failed", slog.Any("error", err))
-			return err
+			logger.Warn("❌ Planner failed", slog.String("error", err.Error()))
+		} else if len(plan.Steps) > 0 {
+			seen := map[string]struct{}{}
+			for _, step := range plan.Steps {
+				for _, sk := range step.Skills {
+					if _, ok := seen[sk.Name]; ok {
+						continue
+					}
+					seen[sk.Name] = struct{}{}
+					agentPayload.Skills = append(agentPayload.Skills, sk.Name)
+				}
+			}
+			logger.Info("✅ Planner identified skills", slog.Any("skills", agentPayload.Skills))
+		} else {
+			logger.Warn("⚠️ Planner found no skills for instruction", slog.String("instruction", instruction))
 		}
+	} else if s.skillRegistry == nil {
+		logger.Warn("⚠️ Skill registry is nil, cannot plan skills")
+	} else {
+		logger.Info("ℹ️ Skills already present in payload", slog.Any("skills", agentPayload.Skills))
+	}
 
-		logger.Info("✅ Agent Execution Result", slog.String("output", result.Output))
-		return nil
-	})
+	taskConfig := s.buildTaskConfig(agentPayload)
+
+	agentEngine := s.newAgentEngine(ctx, job, &taskConfig, agentPayload)
+
+	logger.Info("🚀 Executing Agent", slog.String("instruction", instruction), slog.Int("skills_count", len(agentPayload.Skills)))
+	result, err := agentEngine.Execute(ctx, types.NewAgentInput(instruction), nil)
+	if err != nil {
+		logger.Error("❌ Agent execution failed", slog.Any("error", err))
+		return err
+	}
+
+	logger.Info("✅ Agent Execution Result", slog.String("output", result.Output))
+	return nil
 }
 
 func (s *Service) ensureAgentConfig() {

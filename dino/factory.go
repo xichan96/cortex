@@ -20,7 +20,7 @@ import (
 	agentskills "github.com/xichan96/cortex/agent/skills"
 	agentutils "github.com/xichan96/cortex/agent/utils"
 	dinoAgent "github.com/xichan96/cortex/dino/agent"
-	"github.com/xichan96/cortex/dino/memory"
+	"github.com/xichan96/cortex/dino/chatstore"
 	"github.com/xichan96/cortex/dino/permission"
 	"github.com/xichan96/cortex/dino/session"
 	dinoTools "github.com/xichan96/cortex/dino/tools"
@@ -76,11 +76,11 @@ func NewBudget(cfg *BudgetConfig) Budget {
 }
 
 type memoryAdapter struct {
-	provider memory.Provider
+	provider chatstore.Provider
 }
 
 type memProvSaver struct {
-	p memory.Provider
+	p chatstore.Provider
 }
 
 func (s *memProvSaver) AddMessage(ctx context.Context, msg types.Message) error {
@@ -120,7 +120,7 @@ func (m *memoryAdapter) SaveContext(ctx context.Context, input, output map[strin
 					logger.Warn("[memoryAdapter] failed to marshal input", slog.String("error", err.Error()))
 					inputJSON = []byte(fmt.Sprintf("%v", input))
 				}
-				if err := m.provider.AddMessage(ctx, memory.Message{
+				if err := m.provider.AddMessage(ctx, chatstore.Message{
 					Role:    role,
 					Content: fmt.Sprintf("Input: %s", string(inputJSON)),
 				}); err != nil {
@@ -144,7 +144,7 @@ func (m *memoryAdapter) SaveContext(ctx context.Context, input, output map[strin
 				logger.Warn("[memoryAdapter] failed to marshal input", slog.String("error", err.Error()))
 				inputJSON = []byte(fmt.Sprintf("%v", input))
 			}
-			if err := m.provider.AddMessage(ctx, memory.Message{
+			if err := m.provider.AddMessage(ctx, chatstore.Message{
 				Role:    role,
 				Content: fmt.Sprintf("Input: %s", string(inputJSON)),
 			}); err != nil {
@@ -194,7 +194,7 @@ func (m *memoryAdapter) ReplayMessages(ctx context.Context, messages []types.Mes
 		return err
 	}
 	for _, msg := range messages {
-		mm := memory.Message{
+		mm := chatstore.Message{
 			Role:       msg.Role,
 			Content:    msg.Content,
 			Name:       msg.Name,
@@ -592,7 +592,7 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	agent.AddTools(ctx, wrappedTools)
 
 	if f.config.Memory.MaxHistoryMessages > 0 || f.config.Memory.EnableCompress {
-		memConfig := &memory.Config{
+		memConfig := &chatstore.Config{
 			MaxHistoryMessages:      f.config.Memory.MaxHistoryMessages,
 			EnableMemoryCompress:    f.config.Memory.EnableCompress,
 			MemoryCompressThreshold: compressTh,
@@ -601,19 +601,19 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 			SQLiteFile:              f.config.Memory.PersistFileName,
 		}
 
-		var memProvider memory.Provider
+		var memProvider chatstore.Provider
 		var err error
 
 		if f.config.Memory.Type == "sqlite" || f.config.Memory.PersistEnabled {
-			memProvider, err = memory.NewSQLite(sessionID, memConfig)
+			memProvider, err = chatstore.NewSQLite(sessionID, memConfig)
 			if err != nil {
 				logger.Warn("[DinoFactory] Failed to create SQLite memory, falling back to in-memory", slog.String("error", err.Error()))
-				memProvider = memory.NewInMemory(sessionID, memConfig)
+				memProvider = chatstore.NewInMemory(sessionID, memConfig)
 			} else {
 				logger.Info("[DinoFactory] SQLite memory enabled", slog.String("session_id", sessionID))
 			}
 		} else {
-			memProvider = memory.NewInMemory(sessionID, memConfig)
+			memProvider = chatstore.NewInMemory(sessionID, memConfig)
 		}
 
 		agent.SetMemory(ctx, &memoryAdapter{provider: memProvider})

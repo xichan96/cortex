@@ -215,6 +215,7 @@ type AgentResult struct {
 	ToolCalls         []ToolCallRequest `json:"tool_calls"`
 	IntermediateSteps []ToolCallData    `json:"intermediate_steps"`
 	Usage             Usage             `json:"usage"`
+	StopCause         AgentStopCause    `json:"stop_cause,omitempty"`
 }
 
 // ToolCacheEntry tool cache entry with LRU support
@@ -235,6 +236,8 @@ type StreamResult struct {
 	Error   error
 	// Tool event fields
 	ToolEvent *ToolEvent
+	// StopCause classifies Error (e.g. context_window) for harness consumers.
+	StopCause AgentStopCause
 }
 
 // ToolEvent represents a tool execution lifecycle event

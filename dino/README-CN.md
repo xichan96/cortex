@@ -49,6 +49,19 @@ Dino 在核心 Cortex 代理能力的基础上，添加了专为生产环境设�
 - 信任工作流可选择自动审批
 - 通过事件可视化计划
 
+### 长任务与 harness（`dino/task`、`dino/runner`）
+- **`dino/task`**：`Task` / `TaskConfig` / `StopReason`、检查点会话 `TaskSession`、`SessionSwapper` 等中性类型
+- **`dino/runner`**：`DefaultTaskEngine` 对接 `dino/harness` 外环（验证、停滞、多轮续跑）、shell/文本/LLM 验证器、内存与 Blob 上的 `SessionStore`
+
+### 聊天记录与结构化记忆（命名区分）
+- **`dino/chatstore`**：Dino 工厂使用的**会话聊天记录** `Provider`（`OpenSharedChatStore`、按会话 SQLite / InMemory）
+- **`pkg/memkit`**（模块 `github.com/xichan96/cortex/pkg/memkit`）：**偏好 / 知识 / 索引 / PageIndex** 等结构化记忆，与 `chatstore` 并列使用、职责不同
+
+### 宿主嵌入 Dino（`hostconfig`、`mem`、`pkg`）
+- **`dino/hostconfig`**：面向宿主 YAML 的 **mapstructure 类型**（如 `HostAppConfig`、cortex/工具/MCP 片段）、**`CoalesceDinoFromHost`**（合并进 `dino.Config`）、**`ExpandConfigPath`**、MCP 条目写入 **`dino.MCP`**（`MergeMCPServersIntoDino`），以及 **`ListMCPTools` / `ListMCPToolsFromToolConfigs`**（能力发现）。**不** import goclaw。
+- **`dino/mem`**：基于会话 SQLite + `memkit` 的 **memory ingest 循环** 与 **memory 工具** 装配；由宿主注入 LLM、路径、日志等。
+- **`dino/pkg`**：与配置无关的小工具，例如 **用户回显跳过**（`MarkPendingUserEcho` / `TakePendingUserEchoMatch`）和 **按会话 id 绑定的调度器工具**。
+
 ---
 
 ## 安装
@@ -229,7 +242,12 @@ dino/
 │   ├── info.go      # 会话信息
 │   └── planner.go   # 计划助手
 ├── queue/           # 任务队列
-├── memory/          # 内存管理
+├── task/            # 长任务类型（Task、StopReason、SessionStore 接口）
+├── runner/          # 外环编排与验证器、检查点存储实现
+├── chatstore/       # 会话聊天记录 Provider（SQLite / 内存）
+├── hostconfig/      # 宿主 YAML 形态 + CoalesceDinoFromHost + MCP 列举
+├── mem/             # memory ingest 与 memory 工具（宿主注入依赖）
+├── pkg/             # 回显跳过 + 调度器会话工具包装
 ├── permission/      # 工具权限
 ├── agent/           # 子代理与提示词
 └── tools/           # 注册表、内置工具、技能、MCP

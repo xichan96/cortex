@@ -403,7 +403,11 @@ func (s *Session) executeWithInput(ctx context.Context, agentInput types.AgentIn
 	var streamed strings.Builder
 	for result := range stream {
 		if result.Error != nil {
-			s.emit(&Event{Type: EventTypeError, Error: result.Error.Error()})
+			ev := &Event{Type: EventTypeError, Error: result.Error.Error()}
+			if result.StopCause != "" {
+				ev.StopCause = string(result.StopCause)
+			}
+			s.emit(ev)
 			return &ExecuteResponse{SessionID: s.id, Error: result.Error}
 		}
 		switch result.Type {
@@ -488,7 +492,11 @@ func (s *Session) executeWithInput(ctx context.Context, agentInput types.AgentIn
 		})
 	}
 
-	s.emit(&Event{Type: EventTypeDone})
+	doneEv := &Event{Type: EventTypeDone}
+	if execResult.StopCause != "" {
+		doneEv.StopCause = string(execResult.StopCause)
+	}
+	s.emit(doneEv)
 
 	return &ExecuteResponse{
 		SessionID: s.id,

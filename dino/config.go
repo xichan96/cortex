@@ -21,7 +21,7 @@ type Config struct {
 	MaxSessions           int                      `yaml:"max_sessions"`
 	ToolExecutionTimeout  time.Duration            `yaml:"tool_execution_timeout"`
 	ToolTimeouts          map[string]time.Duration `yaml:"tool_timeouts"`
-	ToolTimeoutCalculator func(toolName string, input map[string]interface{}) time.Duration
+	ToolTimeoutCalculator func(toolName string, input map[string]interface{}) time.Duration `json:"-" yaml:"-"`
 	LoopDetection         LoopDetectionConfig    `yaml:"loop_detection"`
 	Budget                BudgetConfig           `yaml:"budget"`
 	Tools                 ToolConfig             `yaml:"tools"`

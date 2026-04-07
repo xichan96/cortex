@@ -141,3 +141,42 @@ func TestService_Integration_SerialAndConcurrent(t *testing.T) {
 	assert.Equal(t, xcron.JobStatusCompleted, job1.Status, "job1")
 	assert.Equal(t, xcron.JobStatusCompleted, job2.Status, "job2")
 }
+
+func TestService_AgentTaskExecutorBypassesAgentEngine(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	assert.NoError(t, err)
+	assert.NoError(t, db.AutoMigrate(&xcron.Job{}))
+
+	jobStore := xcron.NewGormJobStore(db)
+	cronScheduler := xcron.NewScheduler(jobStore)
+	svc := scheduler.NewService(cronScheduler)
+
+	var calls int32
+	svc.SetAgentTaskExecutor(func(ctx context.Context, job *xcron.Job, instruction string, payload xcron.AgentPayload) error {
+		assert.Equal(t, "hello from executor", instruction)
+		assert.Equal(t, "s-1", job.SessionID)
+		atomic.AddInt32(&calls, 1)
+		return nil
+	})
+
+	cronScheduler.Start()
+	defer cronScheduler.Stop()
+
+	_, err = svc.ScheduleJob(context.Background(), scheduler.ScheduleJobInput{
+		Name:      "exec-test",
+		Type:      "oneshot",
+		Schedule:  "10ms",
+		SessionID: "s-1",
+		Payload:   "hello from executor",
+	})
+	assert.NoError(t, err)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(&calls) >= 1 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("executor not invoked, calls=%d", atomic.LoadInt32(&calls))
+}

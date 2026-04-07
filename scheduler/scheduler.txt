@@ -1,11 +1,11 @@
 - Schedule a new job with the scheduler service
 - Supports 'oneshot' (run once after delay), 'periodic' (run every interval), and 'cron' (run at specific times)
-- Use this tool when you need to create timed or recurring tasks
+- **Prefer this tool** for user reminders and delayed work (e.g. "remind me in 1 minute", "一分钟后提醒我"). Do NOT use bash `sleep` or background shells for delays; use **oneshot** + duration instead.
 - Jobs can carry agent tasks, instructions, or custom payloads
 
 Usage notes:
-  - oneshot: schedule expression is a duration (e.g. '10s', '1h')
+  - oneshot: schedule expression is a duration (e.g. '10s', '1m', '1h')
   - periodic: schedule expression is an interval duration
   - cron: schedule expression is a cron expression (e.g. '* * * * * *')
-  - Optional session_id for memory context persistence
+  - For chat-bound reminders: set **session_id** to the current session so the scheduled run uses the same conversation context
   - Set execution_mode to 'serial' to run one-at-a-time with other serial jobs

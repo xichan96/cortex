@@ -37,6 +37,7 @@ type Event struct {
 	Approved   bool           `json:"approved,omitempty"`
 	Usage      *Usage         `json:"usage,omitempty"`
 	Plan       *Plan          `json:"plan,omitempty"`
+	StopCause  string         `json:"stop_cause,omitempty"`
 	Timestamp  time.Time      `json:"timestamp"`
 }
 
