@@ -39,6 +39,7 @@ type EventType = session.EventType
 type Usage = session.Usage
 type Observer = session.Observer
 type ObserverFunc = session.ObserverFunc
+type OutputObserver = session.OutputObserver
 type ExecuteResponse = session.ExecuteResponse
 type ToolCallInfo = session.ToolCallInfo
 type Plan = session.Plan

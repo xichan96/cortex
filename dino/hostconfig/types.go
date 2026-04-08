@@ -64,6 +64,7 @@ type LLMConfig struct {
 	DeepSeek  ProviderConfig            `mapstructure:"deepseek"`
 	Volce     ProviderConfig            `mapstructure:"volce"`
 	Gemini    ProviderConfig            `mapstructure:"gemini"`
+	Anthropic ProviderConfig            `mapstructure:"anthropic"`
 }
 
 type ToolConfig struct {

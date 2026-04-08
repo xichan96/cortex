@@ -242,6 +242,13 @@ func init() {
 			Model:  cfg.DefaultModel,
 		})
 	})
+	RegisterLLMProvider("anthropic", func(cfg *Config) (types.LLMProvider, error) {
+		return llm.NewAnthropicClient(llm.AnthropicOptions{
+			APIKey:  cfg.Provider.APIKey,
+			BaseURL: cfg.Provider.BaseURL,
+			Model:   cfg.DefaultModel,
+		})
+	})
 }
 
 func createLLMProvider(cfg *Config) (types.LLMProvider, error) {
