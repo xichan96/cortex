@@ -448,6 +448,15 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 				}
 			}
 		}
+		// Register tools discovered from all connected MCP servers so the agent
+		// can call them directly without going through the generic mcp_client tool.
+		for _, t := range f.mcpManager.GetAllMCPTools() {
+			if err := toolRegistry.Register(t); err != nil {
+				logger.Warn("[DinoFactory] Failed to register MCP tool", slog.String("tool", t.Name()), slog.String("error", err.Error()))
+			} else {
+				logger.Info("[DinoFactory] Registered MCP tool", slog.String("tool", t.Name()))
+			}
+		}
 	}
 	for _, opt := range opts {
 		opt(f)

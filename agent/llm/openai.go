@@ -1,8 +1,10 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -14,14 +16,20 @@ import (
 	"github.com/xichan96/cortex/pkg/errors"
 )
 
+// maxSSELineBytes is the safe limit for SSE line size.
+// langchaingo's bufio.Scanner defaults to 64KB; we stay well below that.
+const maxSSELineBytes = 32 * 1024
+
 // CompatibilityHTTPClient handles API compatibility issues
 type CompatibilityHTTPClient struct {
-	client                   *http.Client
+	client                    *http.Client
 	preferMaxCompletionTokens bool
 }
 
 // Do implements the Doer interface
 func (c *CompatibilityHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	isStreaming := false
+
 	// Only intercept chat completion requests
 	// Relaxed check: POST method and body contains "model" and "messages"
 	// This handles cases where the URL path might be rewritten or different (e.g. proxies)
@@ -39,6 +47,9 @@ func (c *CompatibilityHTTPClient) Do(req *http.Request) (*http.Response, error) 
 
 		if err := json.Unmarshal(bodyBytes, &bodyMap); err == nil {
 			if _, hasMessages := bodyMap["messages"]; hasMessages {
+				if v, ok := bodyMap["stream"].(bool); ok && v {
+					isStreaming = true
+				}
 				isReasoning := false
 				if model, ok := bodyMap["model"].(string); ok {
 					ml := strings.ToLower(strings.TrimSpace(model))
@@ -78,7 +89,122 @@ func (c *CompatibilityHTTPClient) Do(req *http.Request) (*http.Response, error) 
 		}
 	}
 
-	return c.client.Do(req)
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Wrap streaming response body to prevent bufio.Scanner "token too long" errors.
+	// langchaingo uses bufio.NewScanner with default 64KB limit; some proxies send
+	// large SSE lines (e.g. entire response in one delta). We split those here.
+	if isStreaming && resp != nil && resp.StatusCode == http.StatusOK {
+		resp.Body = wrapSSEBody(resp.Body)
+	}
+
+	return resp, nil
+}
+
+// wrapSSEBody wraps an SSE response body so that no single "data:" line exceeds
+// maxSSELineBytes. It reads with a large internal buffer and splits content that
+// is too large for langchaingo's fixed-size scanner.
+func wrapSSEBody(body io.ReadCloser) io.ReadCloser {
+	pr, pw := io.Pipe()
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024) // up to 10MB per line
+
+	go func() {
+		defer pw.Close()
+		defer body.Close()
+		for scanner.Scan() {
+			line := scanner.Text()
+			if len(line) <= maxSSELineBytes || !strings.HasPrefix(line, "data:") {
+				fmt.Fprintf(pw, "%s\n", line)
+				continue
+			}
+			// Large data line: try to split content across multiple events.
+			if !writeSplitSSELine(pw, line) {
+				// Fallback: emit as-is and let the downstream scanner fail
+				// (better than silently dropping the event).
+				fmt.Fprintf(pw, "%s\n", line)
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			pw.CloseWithError(err)
+		}
+	}()
+
+	return pr
+}
+
+// writeSplitSSELine attempts to split a large "data: <JSON>" SSE line into
+// multiple smaller events by chunking choices[0].delta.content.
+// Returns false if splitting is not possible.
+func writeSplitSSELine(w io.Writer, line string) bool {
+	jsonStr := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+	if jsonStr == "[DONE]" {
+		fmt.Fprintf(w, "%s\n", line)
+		return true
+	}
+
+	var chunk map[string]interface{}
+	if err := json.Unmarshal([]byte(jsonStr), &chunk); err != nil {
+		return false
+	}
+
+	choices, ok := chunk["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		return false
+	}
+	choice0, ok := choices[0].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	delta, ok := choice0["delta"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	content, ok := delta["content"].(string)
+	if !ok || len(content) == 0 {
+		return false
+	}
+
+	finishReason := choice0["finish_reason"]
+	const chunkSize = 8 * 1024 // 8KB content chunks
+
+	for i := 0; i < len(content); i += chunkSize {
+		end := i + chunkSize
+		if end > len(content) {
+			end = len(content)
+		}
+		isLast := end == len(content)
+
+		var fr interface{}
+		if isLast {
+			fr = finishReason
+		}
+
+		sub := map[string]interface{}{
+			"id":      chunk["id"],
+			"object":  chunk["object"],
+			"created": chunk["created"],
+			"model":   chunk["model"],
+			"choices": []interface{}{
+				map[string]interface{}{
+					"index": choice0["index"],
+					"delta": map[string]interface{}{
+						"content": content[i:end],
+					},
+					"finish_reason": fr,
+				},
+			},
+		}
+		b, err := json.Marshal(sub)
+		if err != nil {
+			return false
+		}
+		fmt.Fprintf(w, "data: %s\n", b)
+	}
+	return true
 }
 
 // OpenAIOptions OpenAI configuration options

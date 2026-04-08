@@ -142,6 +142,9 @@ func MergeMCPServersIntoDino(out *dino.Config, entries []MCPToolConfig) {
 			}
 			if len(parts) > 0 {
 				env = map[string]string{MCPToolAllowListEnvKey: strings.Join(parts, "\x1e")}
+				for _, t := range parts {
+					appendUniqueString(&out.Tools.Allowed, t)
+				}
 			}
 		}
 		out.MCP.Servers[name] = dino.MCPServerConfig{

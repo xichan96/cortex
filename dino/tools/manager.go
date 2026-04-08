@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	mcpclient "github.com/xichan96/cortex/pkg/mcp"
+	"github.com/xichan96/cortex/agent/types"
 )
 
 type ServerConfig struct {
@@ -26,10 +28,11 @@ type MCPManager struct {
 }
 
 type MCPClient struct {
-	client *mcpclient.Client
-	config *ServerConfig
-	tools  map[string]ToolInfo
-	mu     sync.RWMutex
+	client   *mcpclient.Client
+	config   *ServerConfig
+	tools    map[string]ToolInfo
+	mcpTools []types.Tool
+	mu       sync.RWMutex
 }
 
 type ToolInfo struct {
@@ -67,10 +70,34 @@ func (m *MCPManager) AddServer(ctx context.Context, name string, config *ServerC
 		return fmt.Errorf("failed to connect to MCP server %s: %w", name, err)
 	}
 
+	// Build allow-set from env (populated by MergeMCPServersIntoDino).
+	var allowSet map[string]struct{}
+	if raw := config.Env["_goclaw_mcp_allow"]; raw != "" {
+		parts := strings.Split(raw, "\x1e")
+		allowSet = make(map[string]struct{}, len(parts))
+		for _, p := range parts {
+			if p = strings.TrimSpace(p); p != "" {
+				allowSet[p] = struct{}{}
+			}
+		}
+	}
+
+	allTools := client.GetTools()
+	filtered := make([]types.Tool, 0, len(allTools))
+	for _, t := range allTools {
+		if allowSet != nil {
+			if _, ok := allowSet[t.Name()]; !ok {
+				continue
+			}
+		}
+		filtered = append(filtered, t)
+	}
+
 	mcpclientClient := &MCPClient{
-		client: client,
-		config: config,
-		tools:  make(map[string]ToolInfo),
+		client:   client,
+		config:   config,
+		tools:    make(map[string]ToolInfo),
+		mcpTools: filtered,
 	}
 
 	m.servers[name] = mcpclientClient
@@ -107,6 +134,21 @@ func (m *MCPManager) ListServers() []string {
 		servers = append(servers, name)
 	}
 	return servers
+}
+
+// GetAllMCPTools returns all types.Tool objects collected from every connected
+// MCP server (already filtered by the per-server allow-list).
+func (m *MCPManager) GetAllMCPTools() []types.Tool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var out []types.Tool
+	for _, c := range m.servers {
+		c.mu.RLock()
+		out = append(out, c.mcpTools...)
+		c.mu.RUnlock()
+	}
+	return out
 }
 
 func (m *MCPManager) ListTools() map[string][]ToolInfo {

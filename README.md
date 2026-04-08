@@ -170,6 +170,8 @@ llmProvider, _ := llm.VolceClient("ak-...", "doubao-pro-32k")
 
 ## Dino
 
+<p align="center"><img src="docs/images/dino.png" alt="dino" width="120" /></p>
+
 [Dino](dino/README.md) targets **intelligent agent** workloads: multi-turn dialogue, automatic tool choice and chained execution, long-lived runs. It reuses `agent` for execution while owning session lifecycle, observability, and guardrails.
 
 ### Role split

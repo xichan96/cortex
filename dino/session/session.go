@@ -119,6 +119,11 @@ func (f ObserverFunc) OnEvent(event *Event) {
 	f(event)
 }
 
+// OutputObserver streams session events (same contract as Observer). Subscribe runs
+// callbacks synchronously in the session loop; for channel fan-out, use a goroutine
+// ranging Session.Output() so slow consumers do not block emit.
+type OutputObserver = Observer
+
 func NewSession(id string, agent *engine.AgentEngine, factory SessionFactory, ctx context.Context, cfg *Config, planner *PlannerHelper, budget interface{ CanExecute(sessionID string) bool }) *Session {
 	sessionCtx, cancel := context.WithCancel(ctx)
 

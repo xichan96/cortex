@@ -170,6 +170,8 @@ llmProvider, _ := llm.VolceClient("ak-...", "doubao-pro-32k")
 
 ## Dino 高级编排
 
+<p align="center"><img src="docs/images/dino.png" alt="dino" width="120" /></p>
+
 [Dino](dino/README-CN.md) 用于构建**智能体产品**：多轮对话、模型根据上下文**自动决定是否调用工具、调用哪几个、如何衔接多步**，并在长会话中持续迭代；同时满足多用户、多会话、预算与审批等上线要求。底层仍依赖 `agent` 的执行能力，由 **`dino` 管会话生命周期、观测面与风控面**。
 
 ### 定位
