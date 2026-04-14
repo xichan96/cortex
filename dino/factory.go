@@ -297,7 +297,7 @@ type dinoFactory struct {
 	tools                *dinoTools.Registry
 	loopDetector         agentutils.LoopDetector
 	budget               Budget
-	skills               []*Skill
+	cortexSkills         []*agentskills.Skill
 	approvalStore        *ApprovalStore
 	sessions             map[string]*session.Session
 	mu                   sync.RWMutex
@@ -386,7 +386,7 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 		return nil, fmt.Errorf("load builtin tools: %w", err)
 	}
 
-	var loadedSkills []*Skill
+	var loadedCortexSkills []*agentskills.Skill
 	skillRegistry := agentskills.NewRegistry()
 	if cfg.Skills.Path != "" && cfg.Skills.AutoLoad {
 		if err := skillRegistry.LoadFromDirs(context.Background(), logger.GetLogger(), []string{cfg.Skills.Path}); err != nil {
@@ -396,12 +396,8 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 			logger.Info("loaded skills", slog.Int("count", len(cortexSkills)), slog.String("path", cfg.Skills.Path))
 			for _, s := range cortexSkills {
 				logger.Info("skill loaded", slog.String("name", s.Name))
-				loadedSkills = append(loadedSkills, &Skill{
-					Name:        s.Name,
-					Description: s.Description,
-					Prompt:      s.Content,
-				})
 			}
+			loadedCortexSkills = cortexSkills
 			if len(cortexSkills) > 0 {
 				if err := toolRegistry.Register(dinoTools.NewSkillTool(cortexSkills)); err != nil {
 					logger.Warn("failed to register skill tool", slog.String("error", err.Error()))
@@ -422,7 +418,7 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 			SimilarityThreshold: cfg.LoopDetection.SimilarityThreshold,
 		}),
 		budget:        NewBudget(&cfg.Budget),
-		skills:        loadedSkills,
+		cortexSkills:  loadedCortexSkills,
 		approvalStore: approvalStore,
 		sessions:      make(map[string]*session.Session),
 	}
@@ -483,11 +479,8 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 
 	agentConfig := types.NewAgentConfig()
 	systemPrompt := f.config.SystemPrompt
-	if len(f.skills) > 0 {
-		systemPrompt += "\n\nAvailable Skills:\n"
-		for _, s := range f.skills {
-			systemPrompt += fmt.Sprintf("- %s: %s\n", s.Name, s.Description)
-		}
+	if len(f.cortexSkills) > 0 {
+		systemPrompt += agentskills.BuildSystemPromptInjectionWithTriggers(f.cortexSkills)
 	}
 	agentConfig.SystemMessage = systemPrompt
 	agentConfig.MaxIterations = f.config.MaxIterations
@@ -684,7 +677,15 @@ func (f *dinoFactory) GetTools() []types.Tool {
 }
 
 func (f *dinoFactory) GetSkills() []*Skill {
-	return f.skills
+	result := make([]*Skill, len(f.cortexSkills))
+	for i, s := range f.cortexSkills {
+		result[i] = &Skill{
+			Name:        s.Name,
+			Description: s.Description,
+			Prompt:      s.Content,
+		}
+	}
+	return result
 }
 
 func (f *dinoFactory) RespondToolApproval(requestID string, approved bool) {

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/xichan96/cortex/agent/skills"
@@ -66,10 +67,12 @@ func (t *SkillTool) Execute(ctx context.Context, input map[string]interface{}) (
 	}
 
 	inputText := firstString(input, "input", "task", "query")
+	skillDir := filepath.Dir(skill.Path)
+	header := fmt.Sprintf("Skill: %s\nSkill directory (resolve relative paths from here): %s\n\n", skill.Name, skillDir)
 	if inputText == "" {
-		return skill.Content, nil
+		return header + skill.Content, nil
 	}
-	return fmt.Sprintf("Skill: %s\n\n%s\n\nInput: %s", skill.Name, skill.Content, inputText), nil
+	return fmt.Sprintf("%s%s\n\nInput: %s", header, skill.Content, inputText), nil
 }
 
 func (t *SkillTool) Metadata() types.ToolMetadata {

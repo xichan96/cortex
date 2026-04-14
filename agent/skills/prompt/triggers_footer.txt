@@ -1,1 +1,1 @@
-When a user request matches a skill's triggers, you should use that skill's instructions to fulfill the request.
+When a user request matches a skill's triggers, invoke the `skill` tool with the skill_name to load its full instructions. Do not guess or infer skill content — always call the skill tool first.
