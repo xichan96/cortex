@@ -271,6 +271,7 @@ func CoalesceDinoFromHost(in *dino.Config, host *HostAppConfig, brand *HostDinoB
 		root := strings.TrimSpace(host.Server.Cortex.SkillsRoot)
 		if root != "" {
 			out.Skills.Path = ExpandConfigPath(root)
+			out.Skills.AutoLoad = true
 		}
 	}
 	if host != nil {

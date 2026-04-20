@@ -445,7 +445,7 @@ func (p *NativeAnthropicProvider) buildRequest(messages []types.Message, tools [
 		anthropicTools = append(anthropicTools, anthropicTool{
 			Name:        t.Name(),
 			Description: t.Description(),
-			InputSchema: t.Schema(),
+			InputSchema: sanitizeToolSchema(t.Schema()),
 		})
 	}
 
@@ -480,6 +480,44 @@ func mergeConsecutiveRoles(msgs []anthropicMessage) []anthropicMessage {
 			prev.Content = append(prevBlocks, curBlocks...)
 		} else {
 			result = append(result, cur)
+		}
+	}
+	return result
+}
+
+// sanitizeToolSchema recursively ensures all array-type properties have an "items" field,
+// which is required by the Anthropic API.
+func sanitizeToolSchema(schema interface{}) interface{} {
+	m, ok := schema.(map[string]interface{})
+	if !ok {
+		return schema
+	}
+	result := make(map[string]interface{}, len(m))
+	for k, v := range m {
+		result[k] = v
+	}
+	if t, ok := result["type"].(string); ok && t == "array" {
+		if _, hasItems := result["items"]; !hasItems {
+			result["items"] = map[string]interface{}{}
+		}
+	}
+	if props, ok := result["properties"].(map[string]interface{}); ok {
+		newProps := make(map[string]interface{}, len(props))
+		for pk, pv := range props {
+			newProps[pk] = sanitizeToolSchema(pv)
+		}
+		result["properties"] = newProps
+	}
+	if items, ok := result["items"]; ok {
+		result["items"] = sanitizeToolSchema(items)
+	}
+	for _, key := range []string{"anyOf", "oneOf", "allOf"} {
+		if arr, ok := result[key].([]interface{}); ok {
+			newArr := make([]interface{}, len(arr))
+			for i, item := range arr {
+				newArr[i] = sanitizeToolSchema(item)
+			}
+			result[key] = newArr
 		}
 	}
 	return result

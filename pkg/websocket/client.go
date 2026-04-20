@@ -3,6 +3,8 @@ package websocket
 
 import (
 	"log/slog"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -21,6 +23,9 @@ type Client struct {
 	Send         chan []byte // data to send
 	AccessTime   int64       // access timestamp
 	OnDisconnect func(*Client)
+
+	closed    atomic.Bool
+	closeOnce sync.Once
 }
 
 // NewClient initializes a new client.
@@ -35,14 +40,21 @@ func NewClient(addr string, user string, socket *websocket.Conn) (client *Client
 	}
 }
 
+func (c *Client) closeSend() {
+	c.closeOnce.Do(func() {
+		c.closed.Store(true)
+		c.IsActive = false
+		close(c.Send)
+	})
+}
+
 // Read reads messages from the client.
 func (c *Client) Read(processData Callback) {
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Error("read stop", slog.Any("recover", r))
 		}
-		c.IsActive = false
-		close(c.Send)
+		c.closeSend()
 		if c.OnDisconnect != nil {
 			c.OnDisconnect(c)
 			c.OnDisconnect = nil
@@ -91,17 +103,9 @@ func (c *Client) Write() {
 
 // SendMsg sends a message to the client.
 func (c *Client) SendMsg(msg []byte) {
-	if c == nil {
+	if c == nil || c.closed.Load() {
 		return
 	}
-	defer func() {
-		if r := recover(); r != nil {
-			logger.Error("SendMsg panic, client may be closed",
-				slog.String("user", c.User),
-				slog.Any("recover", r),
-			)
-		}
-	}()
 	select {
 	case c.Send <- msg:
 	default:

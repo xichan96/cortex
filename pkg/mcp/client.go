@@ -215,7 +215,7 @@ func (c *Client) refreshTools(ctx context.Context) error {
 		if tool.InputSchema.Type != "" {
 			schema["type"] = tool.InputSchema.Type
 			if tool.InputSchema.Properties != nil {
-				schema["properties"] = tool.InputSchema.Properties
+				schema["properties"] = sanitizeSchemaProperties(tool.InputSchema.Properties)
 			}
 			if tool.InputSchema.Required != nil {
 				schema["required"] = tool.InputSchema.Required
@@ -300,4 +300,90 @@ func (t *MCPTool) Metadata() types.ToolMetadata {
 			"client_connected": t.client != nil && t.client.IsConnected(),
 		},
 	}
+}
+
+// sanitizeSchemaProperties recursively ensures all array-typed schema nodes have
+// a valid "items" field, which is required by strict tool-schema validators (e.g. Anthropic).
+func sanitizeSchemaProperties(props map[string]any) map[string]any {
+	result := make(map[string]any, len(props))
+	for k, v := range props {
+		result[k] = sanitizeSchemaNode(v)
+	}
+	return result
+}
+
+func schemaTypeIncludesArray(t any) bool {
+	switch v := t.(type) {
+	case string:
+		return v == "array"
+	case []any:
+		for _, x := range v {
+			if s, ok := x.(string); ok && s == "array" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func sanitizeSchemaMapValues(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = sanitizeSchemaNode(v)
+	}
+	return out
+}
+
+func sanitizeSchemaNode(node any) any {
+	m, ok := node.(map[string]any)
+	if !ok {
+		return node
+	}
+
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+
+	if nestedMap, ok := out["properties"].(map[string]any); ok {
+		out["properties"] = sanitizeSchemaProperties(nestedMap)
+	}
+	if defs, ok := out["$defs"].(map[string]any); ok {
+		out["$defs"] = sanitizeSchemaMapValues(defs)
+	}
+	if defs, ok := out["definitions"].(map[string]any); ok {
+		out["definitions"] = sanitizeSchemaMapValues(defs)
+	}
+	for _, key := range []string{"anyOf", "oneOf", "allOf"} {
+		if arr, ok := out[key].([]any); ok {
+			next := make([]any, len(arr))
+			for i, el := range arr {
+				next[i] = sanitizeSchemaNode(el)
+			}
+			out[key] = next
+		}
+	}
+	if ap, ok := out["additionalProperties"].(map[string]any); ok {
+		out["additionalProperties"] = sanitizeSchemaNode(ap)
+	}
+	if arr, ok := out["prefixItems"].([]any); ok {
+		next := make([]any, len(arr))
+		for i, el := range arr {
+			next[i] = sanitizeSchemaNode(el)
+		}
+		out["prefixItems"] = next
+	}
+
+	if schemaTypeIncludesArray(out["type"]) {
+		itemsVal, has := out["items"]
+		if !has || itemsVal == nil {
+			out["items"] = map[string]any{"type": "object", "additionalProperties": true}
+		} else if itemsMap, ok := itemsVal.(map[string]any); ok {
+			out["items"] = sanitizeSchemaNode(itemsMap)
+		}
+	} else if items, ok := out["items"]; ok {
+		out["items"] = sanitizeSchemaNode(items)
+	}
+
+	return out
 }
