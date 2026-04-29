@@ -180,25 +180,7 @@ func (m *InMemory) generateSummary(existingSummary string, messages []Message) s
 	if len(messages) == 0 {
 		return existingSummary
 	}
-
-	var contentBuilder strings.Builder
-	if existingSummary != "" {
-		contentBuilder.WriteString("Previous Summary: ")
-		contentBuilder.WriteString(existingSummary)
-		contentBuilder.WriteString("\n")
-	}
-	for _, msg := range messages {
-		contentBuilder.WriteString(msg.Role)
-		contentBuilder.WriteString(": ")
-		contentBuilder.WriteString(msg.Content)
-		contentBuilder.WriteString("\n")
-	}
-
-	summary := "Summary of previous conversation:\n"
-	summary += "User and assistant exchanged " + strconv.Itoa(len(messages)) + " messages.\n"
-	summary += "Topics discussed include the user's requests and assistant's responses.\n"
-
-	return summary
+	return DeterministicCompact(existingSummary, messages, DefaultCompactConfig())
 }
 
 type ConversationSummary struct {
