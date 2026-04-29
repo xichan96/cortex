@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/xichan96/cortex/agent/engine"
+	"github.com/xichan96/cortex/agent/hooks"
 	agentproviders "github.com/xichan96/cortex/agent/providers"
 	agentTools "github.com/xichan96/cortex/agent/tools/builtin/fs"
 	"github.com/xichan96/cortex/agent/types"
@@ -305,6 +306,7 @@ type dinoFactory struct {
 	subagentManager      *dinoAgent.SubagentManager
 	mcpManager           *dinoTools.MCPManager
 	sessionToolsProvider func(sessionID string) []types.Tool
+	hooks                hooks.Hooks
 }
 
 func (f *dinoFactory) LoopDetector() agentutils.LoopDetector {
@@ -368,6 +370,15 @@ func WithApprovalSender(sender ApprovalSender) FactoryOption {
 func WithSessionTools(fn func(sessionID string) []types.Tool) FactoryOption {
 	return func(f *dinoFactory) {
 		f.sessionToolsProvider = fn
+	}
+}
+
+// WithHooks sets lifecycle hooks that will be applied to every session
+// created by this factory. This is a convenience alternative to calling
+// session.GetAgent().SetHooks() after CreateSession.
+func WithHooks(h hooks.Hooks) FactoryOption {
+	return func(f *dinoFactory) {
+		f.hooks = h
 	}
 }
 
@@ -517,6 +528,9 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	agentConfig.MemoryCompressThreshold = compressTh
 
 	agent := engine.NewAgentEngine(f.llmProvider, agentConfig)
+	if f.hooks != nil {
+		agent.SetHooks(ctx, f.hooks)
+	}
 
 	sessionTools := f.tools.GetAll()
 	logger.Info("[DinoFactory] Total tools in registry", slog.Int("count", len(sessionTools)))

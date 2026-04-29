@@ -297,8 +297,7 @@ func (s *SQLite) Compress(ctx context.Context) error {
 
 	old := messages[:len(messages)-s.config.KeepRecentCount]
 
-	summary := fmt.Sprintf("Previous conversation summary: %d messages about: %s",
-		len(old), summarizeMessages(old))
+	summary := DeterministicCompact("", old, DefaultCompactConfig())
 
 	_, err = s.db.ExecContext(ctx, `DELETE FROM messages WHERE session_id = ? AND id NOT IN (
 		SELECT id FROM (SELECT id FROM messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT ?)
@@ -370,70 +369,4 @@ func (s *SQLite) StoredMessageCount(ctx context.Context) (int, error) {
 
 func (s *SQLite) Close() error {
 	return nil
-}
-
-func summarizeMessages(messages []Message) string {
-	if len(messages) == 0 {
-		return "nothing"
-	}
-	var topics []string
-	seen := make(map[string]bool)
-	for _, msg := range messages {
-		words := extractKeywords(msg.Content)
-		for _, w := range words {
-			if !seen[w] && len(w) > 3 {
-				seen[w] = true
-				topics = append(topics, w)
-				if len(topics) >= 5 {
-					break
-				}
-			}
-		}
-		if len(topics) >= 5 {
-			break
-		}
-	}
-	if len(topics) == 0 {
-		return "various topics"
-	}
-	result := ""
-	for i, t := range topics {
-		if i > 0 {
-			result += ", "
-		}
-		result += t
-	}
-	return result
-}
-
-func extractKeywords(text string) []string {
-	keywords := []string{}
-	words := []string{}
-	current := ""
-	for _, c := range text {
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
-			current += string(c)
-		} else {
-			if len(current) > 4 {
-				words = append(words, current)
-			}
-			current = ""
-		}
-	}
-	if len(current) > 4 {
-		words = append(words, current)
-	}
-
-	stopWords := map[string]bool{
-		"the": true, "and": true, "that": true, "this": true, "with": true,
-		"have": true, "from": true, "they": true, "will": true, "your": true,
-	}
-
-	for _, w := range words {
-		lower := strings.ToLower(w)
-		if !stopWords[lower] {
-			keywords = append(keywords, lower)
-		}
-	}
-	return keywords
 }

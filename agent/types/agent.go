@@ -119,7 +119,7 @@ func NewAgentConfig() *AgentConfig {
 		MemoryCompressRatio:      0.5,
 		LogSilent:                false,
 		LogFile:                  "",
-		DoomLoopThreshold:        3,
+		DoomLoopThreshold:        5,
 		OnDoomLoop:               nil,
 		MaxToolCallsPerIteration: 0,
 		ToolResultWriteDir:       "",
