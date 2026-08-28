@@ -1091,3 +1091,344 @@ func TestResultSender_NoDrop(t *testing.T) {
 		}
 	}
 }
+
+// TestChunkMerger_FlushByInterval verifies the merge window's happy path: many
+// fragments collapse into few merged chunks, content concatenates in order, and
+// no fragment is lost.
+func TestChunkMerger_FlushByInterval(t *testing.T) {
+	var mu sync.Mutex
+	var got []string
+	flushCount := 0
+	flushCh := make(chan struct{}, 1)
+
+	m := newChunkMerger(50*time.Millisecond, func(r types.StreamResult) bool {
+		mu.Lock()
+		got = append(got, r.Content)
+		flushCount++
+		mu.Unlock()
+		select {
+		case flushCh <- struct{}{}:
+		default:
+		}
+		return true
+	})
+
+	// Feed fragments faster than the 50ms flush window for long enough that the
+	// interval flush must fire mid-stream (not only on the final explicit
+	// Flush), proving the window flushes on its own.
+	const n = 60
+	const feedInterval = 2 * time.Millisecond
+	go func() {
+		for i := 0; i < n; i++ {
+			m.Add(fmt.Sprintf("p-%03d|", i))
+			time.Sleep(feedInterval)
+		}
+		m.Flush() // drain the tail; a no-op if already flushed
+	}()
+
+	// The merger must produce at least two flushes over the feed duration —
+	// otherwise the interval timer never fired and the test is vacuous.
+	deadline := time.After(5 * time.Second)
+	observed := 0
+	for observed < 2 {
+		select {
+		case <-flushCh:
+			observed++
+		case <-deadline:
+			t.Fatalf("timeout: expected the 50ms flush window to fire mid-stream, only %d flush(es) observed", observed)
+		}
+	}
+
+	// Now wait until the feed + final flush complete.
+	deadline = time.After(5 * time.Second)
+	for {
+		mu.Lock()
+		done := flushCount > 0 && strings.Join(got, "") == streamOf(n)
+		mu.Unlock()
+		if done {
+			break
+		}
+		select {
+		case <-time.After(5 * time.Millisecond):
+		case <-deadline:
+			mu.Lock()
+			merged := strings.Join(got, "")
+			mu.Unlock()
+			t.Fatalf("timeout waiting for complete stream; got %d/%d fragments", len(merged), len(streamOf(n)))
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	merged := strings.Join(got, "")
+	if merged != streamOf(n) {
+		t.Fatalf("merged content mismatch\n got: %.120s...\nwant: %.120s...", merged, streamOf(n))
+	}
+	if flushCount >= n {
+		t.Errorf("expected merging to cut event count below %d, got %d chunks", n, flushCount)
+	}
+}
+
+// streamOf builds the concatenated fragment stream "p-000|p-001|...".
+func streamOf(n int) string {
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&b, "p-%03d|", i)
+	}
+	return b.String()
+}
+
+// TestChunkMerger_FlushExplicit verifies manual Flush after Add delivers the
+// buffer synchronously and a second Flush is a no-op.
+func TestChunkMerger_FlushExplicit(t *testing.T) {
+	var got []string
+	m := newChunkMerger(time.Hour, func(r types.StreamResult) bool {
+		got = append(got, r.Content)
+		return true
+	})
+
+	if !m.Add("ab") || !m.Add("cd") {
+		t.Fatal("Add should succeed")
+	}
+	if !m.Flush() {
+		t.Fatal("Flush should succeed")
+	}
+	if len(got) != 1 || got[0] != "abcd" {
+		t.Fatalf("expected one merged chunk 'abcd', got %v", got)
+	}
+	if !m.Flush() {
+		t.Fatal("empty Flush should be a no-op success")
+	}
+	if len(got) != 1 {
+		t.Fatalf("second empty Flush must not send anything, got %v", got)
+	}
+}
+
+// TestChunkMerger_FlushErrorPropagates verifies that a failing send is surfaced
+// by Add (turn ctx cancellation mid-flush) and the buffer is cleared.
+func TestChunkMerger_FlushErrorPropagates(t *testing.T) {
+	send := 0
+	m := newChunkMerger(time.Hour, func(r types.StreamResult) bool {
+		send++
+		return false // simulate cancelled turn ctx
+	})
+
+	// Fill the buffer near the cap, then Add a fragment large enough that the
+	// cap is exceeded and the pending merge is flushed. The flush send fails,
+	// so Add must report failure.
+	if !m.Add(strings.Repeat("x", chunkMergeMaxBytes-100)) {
+		t.Fatal("Add of first fragment should succeed (buffered)")
+	}
+	if m.Add(strings.Repeat("y", 200)) {
+		t.Fatal("Add must report failure when the cap-triggered flush send fails")
+	}
+	if send != 1 {
+		t.Fatalf("expected one flush attempt, got %d", send)
+	}
+	if m.sb.Len() != 0 {
+		t.Fatalf("buffer must be cleared after failed flush, len=%d", m.sb.Len())
+	}
+}
+
+// TestExecuteStream_ChunkMerging_HighThroughput is the F6 second-stage
+// end-to-end test: 1000 streamed fragments must collapse into a far smaller
+// number of "chunk" events (with a tight flush window to keep the test fast),
+// the concatenated content must match exactly, and the terminal "end" must
+// still arrive immediately after the final merged chunk.
+func TestExecuteStream_ChunkMerging_HighThroughput(t *testing.T) {
+	provider := NewMockLLMProvider()
+	const n = 1000
+	for i := 0; i < n; i++ {
+		provider.AddStreamMessage(types.StreamMessage{
+			Type:    "chunk",
+			Content: fmt.Sprintf("tok-%04d|", i),
+		})
+	}
+
+	config := types.NewAgentConfig()
+	config.MaxIterations = 1
+	config.ChunkMergeFlushInterval = time.Millisecond // tight window keeps the test fast
+	engine := NewAgentEngine(provider, config)
+
+	ctx := context.Background()
+	stream, err := engine.ExecuteStream(ctx, types.NewAgentInput("go"), nil)
+	if err != nil {
+		t.Fatalf("ExecuteStream: %v", err)
+	}
+
+	var chunkEvents []string
+	var endEvents []string
+	for r := range stream {
+		switch r.Type {
+		case "chunk":
+			chunkEvents = append(chunkEvents, r.Content)
+		case "end":
+			endEvents = append(endEvents, r.Type)
+		case "error":
+			t.Fatalf("unexpected error result: %v", r.Error)
+		}
+	}
+
+	if len(chunkEvents) >= n {
+		t.Fatalf("expected chunk merging to cut event count below %d, got %d chunk events", n, len(chunkEvents))
+	}
+	merged := strings.Join(chunkEvents, "")
+	want := ""
+	for i := 0; i < n; i++ {
+		want += fmt.Sprintf("tok-%04d|", i)
+	}
+	if merged != want {
+		t.Fatalf("merged content mismatch\n got: %.120s...\nwant: %.120s...", merged, want)
+	}
+	if len(endEvents) != 1 {
+		t.Fatalf("expected exactly one 'end', got %d", len(endEvents))
+	}
+}
+
+// TestExecuteStream_ChunkMerging_ErrorImmediate verifies that a stream "error"
+// is delivered without waiting for the merge window, and buffered text is
+// flushed (not dropped) before the error.
+func TestExecuteStream_ChunkMerging_ErrorImmediate(t *testing.T) {
+	provider := NewMockLLMProvider()
+	provider.AddStreamMessage(types.StreamMessage{Type: "chunk", Content: "partial"})
+	provider.AddStreamMessage(types.StreamMessage{Type: "error", Error: "boom"})
+
+	config := types.NewAgentConfig()
+	config.MaxIterations = 1
+	// Generous window: only a deferred/tool-path flush can deliver "partial".
+	config.ChunkMergeFlushInterval = time.Hour
+	engine := NewAgentEngine(provider, config)
+
+	ctx := context.Background()
+	stream, err := engine.ExecuteStream(ctx, types.NewAgentInput("go"), nil)
+	if err != nil {
+		t.Fatalf("ExecuteStream: %v", err)
+	}
+
+	var contents []string
+	var errors []string
+	for r := range stream {
+		switch r.Type {
+		case "chunk":
+			contents = append(contents, r.Content)
+		case "error":
+			if r.Error != nil {
+				errors = append(errors, r.Error.Error())
+			}
+		}
+	}
+
+	if len(contents) != 1 || contents[0] != "partial" {
+		t.Fatalf("expected buffered text to be flushed before error, got %v", contents)
+	}
+	if len(errors) != 1 || !strings.Contains(errors[0], "boom") {
+		t.Fatalf("expected error to be delivered, got %v", errors)
+	}
+}
+
+// TestExecuteStream_ChunkMerging_ToolEventOrder verifies the critical ordering
+// constraint: when a chunk stream is followed by tool calls, the merged text
+// chunks must arrive before the tool_events (a deferred-only flush would
+// reorder them).
+func TestExecuteStream_ChunkMerging_ToolEventOrder(t *testing.T) {
+	provider := NewMockLLMProvider()
+	provider.AddStreamMessage(types.StreamMessage{Type: "chunk", Content: "text-before-tool"})
+	provider.AddStreamMessage(types.StreamMessage{
+		Type: "tool_calls",
+		ToolCalls: []types.ToolCall{
+			{
+				ID:   "call_1",
+				Type: "function",
+				Function: types.ToolFunction{
+					Name:      "echo_tool",
+					Arguments: map[string]interface{}{"msg": "hi"},
+				},
+			},
+		},
+	})
+
+	config := types.NewAgentConfig()
+	config.MaxIterations = 2
+	config.ChunkMergeFlushInterval = time.Hour // force buffered text to depend on the pre-tool flush
+	engine := NewAgentEngine(provider, config)
+
+	tool := NewMockTool("echo_tool").WithExecuteFunc(func(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+		return "echoed", nil
+	})
+	engine.AddTool(context.Background(), tool)
+
+	ctx := context.Background()
+	stream, err := engine.ExecuteStream(ctx, types.NewAgentInput("go"), nil)
+	if err != nil {
+		t.Fatalf("ExecuteStream: %v", err)
+	}
+
+	// Collect events in arrival order. MockLLMProvider replays the full stream
+	// on every iteration, so a later iteration can re-emit a chunk AFTER the
+	// first iteration's tool events — that is a mock artifact, not a reorder.
+	// The property under test is scoped to the FIRST tool_event: the merged
+	// text chunks that precede it must concatenate to exactly "text-before-tool".
+	var chunksBefore []string
+	var toolEventSeen bool
+	for r := range stream {
+		if r.Type == "tool_event" {
+			toolEventSeen = true
+			if got := strings.Join(chunksBefore, ""); got != "text-before-tool" {
+				t.Fatalf("merged text before first tool_event = %q, want %q", got, "text-before-tool")
+			}
+			break
+		}
+		if r.Type == "chunk" {
+			chunksBefore = append(chunksBefore, r.Content)
+		}
+	}
+	if !toolEventSeen {
+		t.Fatal("expected at least one tool_event")
+	}
+	if len(chunksBefore) == 0 {
+		t.Fatal("expected merged text chunk(s) before the first tool_event")
+	}
+}
+
+// TestExecuteStream_ChunkMerging_Disabled verifies the escape hatch: a negative
+// interval restores per-fragment delivery (no merging).
+func TestExecuteStream_ChunkMerging_Disabled(t *testing.T) {
+	provider := NewMockLLMProvider()
+	const n = 20
+	for i := 0; i < n; i++ {
+		provider.AddStreamMessage(types.StreamMessage{
+			Type:    "chunk",
+			Content: fmt.Sprintf("solo-%02d|", i),
+		})
+	}
+
+	config := types.NewAgentConfig()
+	config.MaxIterations = 1
+	config.ChunkMergeFlushInterval = -1 // disable merging
+	engine := NewAgentEngine(provider, config)
+
+	ctx := context.Background()
+	stream, err := engine.ExecuteStream(ctx, types.NewAgentInput("go"), nil)
+	if err != nil {
+		t.Fatalf("ExecuteStream: %v", err)
+	}
+
+	var nChunk int
+	got := ""
+	for r := range stream {
+		if r.Type == "chunk" {
+			nChunk++
+			got += r.Content
+		}
+	}
+	if nChunk != n {
+		t.Fatalf("expected %d individual chunks when merging disabled, got %d", n, nChunk)
+	}
+	want := ""
+	for i := 0; i < n; i++ {
+		want += fmt.Sprintf("solo-%02d|", i)
+	}
+	if got != want {
+		t.Fatalf("content mismatch with merging disabled")
+	}
+}
