@@ -434,3 +434,28 @@ ctx 取消会让**已发出的 LLM 请求**中断（HTTP 层已支持），不�
 2. **B 阶段是否需要 `spawn_agent`/`wait_agent` 新工具名**，还是继续只扩 `delegate_to_agent` 的 schema（`async: true` + `task_id`）——两种都对 codex 语义有取舍（新工具更贴近 codex 工具族，扩 schema 改动更小）。
 3. **`files_changed` 采集的 prompt 引导文案**是否需要本地化（`general.txt` 目前是英文）。
 4. **mailbox TTL / 并发上限默认值**（1h / 4）是否符合生产预期。
+
+---
+
+## 15. 实现备注（S1 + S2/S3 铺路，2026-08-28）
+
+> 实现纪律要求：记录实现中偏离设计的决策。S1（方案 A）+ S2（ctx 传播验证）+ S3/B1 铺路（B2 回收钩子）已落地，S2 超时本体 / S3 fire-and-forget / S4 B2 未实现，见 §10 迁移表。
+
+**评审修正的落地情况：**
+- **B1（缓存毒化）**：`SubagentTool.Metadata()` 返回 `Extra["no_cache"]=true`。已用 `TestDelegateTool_EngineCacheBypass` 验证：两次同 args 的 delegate 调用，子代理 LLM 各执行一次（缓存不命中）。
+- **B2（session 回收钩子）**：`SubagentManager` 加 `map[sessionID]map[taskID]CancelFunc` 分包 + `CloseSession(sessionID)` + `register/unregisterSubagentCancel` + `cancelSessionAll`；`dino/factory.go` `CloseSession` 已调 `subagentManager.CloseSession(sessionID)`。S1 无 spawn，接口是 S3 预留。
+- **R1（错误折叠）**：`SubagentTool.Execute` 的 error 路径返回 `*DelegateResult{Status:"error", Error:...}` + nil error（不再走 `toolObservationError` 字符串）。
+- **R2（字段类型统一）**：信封时间字段 `TimestampMS int64`（unix_ms）+ `DurationMS int64`，可选字段 omitempty；不用 `time.Time`。
+- **R3（files_changed 双路）**：程序化 (b) 走 `tool_event` 采集 `write_file`/`edit_file` 的 `path` 键（`StreamEventToolInputStart` 阶段，避免与结果阶段重复）；prompt 引导 (a) 留 S5。bash git 场景已知残留。
+
+**实现中的关键决策（偏离/补充设计）：**
+1. **Iterations 来源改用 `OnAfterIteration` 钩子**：设计 §6.1 提"stream 循环数 result.Result"，但 `ExecuteStream` 只在 `end` 事件携带 `AgentResult`（`agent_execution.go:1225-1228`），stream 循环计数只会是 1。改用 `eng.SetHooks` 的 `OnAfterIteration` 取最大轮数，权威且不依赖 stream 事件。`subagent.go` 的 stream 循环只负责 output/files_changed/usage。
+2. **错误态 Status 判定**：stream `error` 事件按 `ctx.DeadlineExceeded -> "timeout"` / `ctx.Canceled -> "cancelled"` / 其余 `"error"` 折叠（`statusFromStreamError`）。这依赖 mock/真实 provider 在 ctx 取消时把 `ctx.Err()` 作为错误返回（anthropic 原生与 langchain HTTP 层都传 ctx，符合设计 F16 核实）。
+3. **task_id 每次委派生成**：`SubagentTool.Execute` 入口 `uuid.NewString()`（复用 go.mod 已有依赖）。B 阶段可改为从 `input["task_id"]` 读取。
+4. **`DelegateResult.Truncated` 的 Sender 硬编码 `/root/`**：S1 无 `AgentPath`（§3.3 未落盘，按评审 O1），`AgentPath` 铺路留 S3。`task name /root` 同理。
+5. **`newTestSubagentManager` / `subagentMockFactory.llm`**：测试基建扩展，允许注入自定义 LLM。
+6. **配置字段**：按评审 O2，S1 只加 `NotifyCompletion`/`CompletionMaxRunes`；`SpawnTimeout`/`MaxConcurrentSpawns` 留 S3 再引入，避免 S1 背"未使用配置"。
+
+**S2 超时治理落地程度：** `executeToolWithTimeout` 本体未改（评审 O5 澄清：它已把 timeout ctx 传给 `tool.Execute`，`agent_tools.go:67`）。S2 的"子代理侧 ctx 派生 + watchdog + Close cancel"中：ctx 传播链路已由 `TestSubagentExecute_StatusTimeoutAndCancel` 验证（子代理 `Execute(ctx)` → engine `enrichContextWithConfig` → LLM provider，ctx deadline/cancel 到达 provider 且折叠进信封 Status）；watchdog 兜底在 S1 是 `cfg.Timeout = 3min`（`buildConfig`，子代理引擎级超时，等价设计 §7.2.3 的 watchdog 行为）；`Close` cancel 见 B2 铺路。**S2 无需额外代码，S1+S3 铺路已覆盖其验证点。**
+
+**roadmap 待办（未实现，按 §10/§12）：** S3（mailbox + spawn/wait + notifier）、S4（B2 turn 唤醒）、send_message/followup_task、list_agents/close_agent、持久化拓扑、自动委派死代码接线/删除。
