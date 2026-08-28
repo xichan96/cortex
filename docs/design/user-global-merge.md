@@ -279,3 +279,146 @@ if cfg.UserMergeEnabled {
 - **幂等**：第二步的归属查询天然幂等——归拢过的 uid 已不再是 `knowledge.user_id` 候选（除非该 session 又写入了新条目；此时它「旧条目已归拢、新条目直接写 user_id」，下次迁移只搬新条目）。重复执行不产生重复行。
 - **失败路径**：`MigrateLegacySessionKnowledge` 内用单个 `UPDATE`（原子）逐 session 处理；任一失败返回错误，Phase 2 记日志，下一 tick（或 6h 冷却后）重试。**半途中断**：已成功的 session 归拢保留，未处理的下次继续——无中间态损坏。
 - **无归属 session**：跳过（§4.3-2）。这意味着「开启合并前已存在、但从未重建、也没被 `SetSessionUser` 写过的 session」其数据**永远留在 per-session 态**，直到该 session 被创建一次。这是可接受的折中——迁移不猜用户身份。
+
+---
+
+## 5. 配置
+
+### 5.1 默认值策略
+
+**默认关**（`UserMergeEnabled: false`）。理由：
+
+1. **迁移有数据归拢副作用**：开启后 Phase 2 会把旧 session 数据重新归属，破坏「per-session 即租户隔离」的现状语义（虽然当前没有真正多租户，但语义改变需要显式 opt-in）。
+2. **与整个 LTM 一致**：`LongTermMemory.Enabled` 默认 false（`dino/config.go:231`），开启长期记忆已是 opt-in；user 合并是更进一步的 opt-in。
+3. **零破坏承诺**：默认关 = 行为与当前实现逐字节一致，可随时回退。
+
+### 5.2 新增配置字段
+
+`dino/mem/types.go` `MemLongTermConfig` 追加（§1.2 已列，此处给出完整默认值）：
+
+```go
+// UserMergeEnabled 默认 false：开启后 session 归属到 user（WithUserID > DefaultUserID > "default"），
+// L1/工具/ingest 以 user 为 uid 检索，Phase 2 迁移旧 session 数据并跨 session 合并。
+UserMergeEnabled bool   `yaml:"user_merge_enabled"`
+// DefaultUserID 默认 ""：未显式 WithUserID 的 session 归属到该值；为空则回退常量 "default"。
+// 单用户部署设一个固定 uid 即可让所有 session 共享记忆空间。
+DefaultUserID     string `yaml:"default_user_id"`
+```
+
+`dino/config.go` `DefaultConfig()` 追加：
+
+```go
+LongTermMemory: MemLongTermConfig{
+    // ...现有字段
+    UserMergeEnabled: false,
+    DefaultUserID:    "",
+},
+```
+
+### 5.3 配置交互矩阵
+
+| `UserMergeEnabled` | 显式 `WithUserID` | 行为 |
+|---|---|---|
+| false | — | per-session，与现状一致 |
+| true | 有 | 该 session 归属显式 uid，读写 user 全局 |
+| true | 无（`DefaultUserID` 非空） | 归属 `DefaultUserID` |
+| true | 无（`DefaultUserID` 空） | 归属 `"default"` |
+
+---
+
+## 6. 测试清单
+
+### 6.1 单测（纯函数/层内）
+
+| # | 位置 | 用例 |
+|---|---|---|
+| T1 | `dino/mem/user_test.go`（新） | `ResolveUserID`：三个优先级（WithUserID > DefaultUserID > "default"）、空值组合 |
+| T2 | `dino/mem/subsystem_test.go` | `SetSessionUser`：写 metadata `user_id` 键；重复调用不覆盖（INSERT OR IGNORE）；空 userID 拒绝或回退 |
+| T3 | `pkg/memkit/sqlite/migrate_user_test.go`（新） | `MigrateLegacySessionKnowledge`：有归属的 session 条目归拢；无归属跳过；已归拢不重复处理（幂等）；knowledge+preferences 都搬 |
+| T4 | 同上 | 迁移后同 user 内容重复由 `mergeDuplicateKnowledge` 收敛（调用现有去重验证条数） |
+| T5 | `dino/mem/tool_test.go` | 工具 `userID` 字段：有值用 userID、空值回退 sessionID；`search_knowledge` probe 仍按 session 登记 |
+
+### 6.2 集成测试（多 session 场景）
+
+| # | 用例 | 验证点 |
+|---|---|---|
+| I1 | `UserMergeEnabled=true`，session A、B 同 user（`WithUserID("u1")`）→ A 写 knowledge `K`，B `search_knowledge(K 关键词)` | B 能搜到 A 写的 K（跨 session 检索） |
+| I2 | A 写 content `X`，B 写同 content `X` → 查 `knowledge` 表 | 同 user 下合并为 1 条、tags 合并（`usage_count` 不变） |
+| I3 | A `set_preference(cat,key,v1)`，B `set_preference(cat,key,v2)` → B `get_preference` | B 读到 v2（后写覆盖跨 session 生效） |
+| I4 | `UserMergeEnabled=false` → A、B 各自写同名 content `X` → 查表 | **仍是 2 条**（per-session 不变，回归） |
+| I5 | 预置旧数据（`user_id="sess_old"` 若干条目 + `metadata(sess_old,'user_id','u1')`）→ 触发一次 Phase 2（`runPhase2Merge` 或 `MigrateLegacySessionKnowledge`）→ 查 `knowledge` | 条目 `user_id` 变为 `u1`，`sess_old` 名下无残留；`search_knowledge(u1)` 能搜到 |
+| I6 | 旧 session 无归属（无 `metadata.user_id`）→ 跑迁移 | 其条目不动，`search_knowledge(sess_old)` 仍按 sessionID 能搜到（兼容） |
+| I7 | `Phase2LLMMerge=true` + A、B 各写语义重复条目 → 跑 Phase 2 | LLM 判定合并为 1 条（跨 session 语义合并） |
+| I8 | 引用反馈：A 搜索条目 `K`，A turn 输出包含 `K` 片段 → `K.usage_count` +1；B 的搜索不干扰 A 的 probe | probe per-session 隔离；计数按全局 id |
+| I9 | `UserMergeEnabled=true` + 并发两个进程各跑 Phase 2 | `TryClaimPhase2` 只放行一个（迁移+合并串行） |
+
+### 6.3 迁移专项
+
+| # | 用例 |
+|---|---|
+| M1 | 迁移目标 user 已存在同名 content（A 旧条目 + B 新条目同内容）→ 归拢后合并为 1 条、tags 并 |
+| M2 | 迁移中 `metadata.user_id` 指向自己（`u==uid`）→ 跳过（不产生无意义 UPDATE） |
+| M3 | 迁移幂等：连续跑两次 → 第二次迁移条数为 0 |
+| M4 | `UserMergeEnabled` 从 false 改 true 再改 false → 已归拢数据保留（不回滚），新写入回到 per-session |
+
+---
+
+## 7. 迁移顺序（分步，每步独立可验证）
+
+| Step | 内容 | 验证 | 涉及文件 |
+|---|---|---|---|
+| **1. uid 语义打通（最小可用）** | `ResolveUserID` + `SetSessionUser` + factory 写归属 + L1/工具改传 userID + `WithUserID` option；`UserMergeEnabled=true` 生效 | T1/T2/T5、I1/I3/I4、I8；`go build ./...`、`go test ./dino/... ./pkg/memkit/...` | 新增 `dino/mem/user.go`；改 `dino/mem/{subsystem,tool,types}.go`、`dino/session/session.go`、`dino/factory.go`、`dino/config.go` |
+| **2. 检索跨 session** | 确认全部检索入口（工具 6 处 + L1）uid 已换成 userID；验证跨 session 检索 | I1/I2/I3 | 同 Step 1（复用），无新文件 |
+| **3. 迁移** | `MigrateLegacySessionKnowledge` + 挂进 Phase 2 + `WithUserID` 时旧 session 创建即写归属 | I5/I6、M1-M4 | 新增 `pkg/memkit/sqlite/migrate_user.go`；改 `dino/mem/subsystem.go`（runPhase2Merge） |
+| **4. 合并增强** | 修 `reingestUserKnowledge` 的 `updated_at` 刷平缺陷；验证 Phase 2 合并跨 session 收敛 | I2/I7 | `pkg/memkit/sqlite/sqlite_knowledge.go`（`Add` UPDATE 分支）、`dino/mem/subsystem.go` |
+
+> Step 1-2 构成「跨 session 共享」最小可用（无迁移）；Step 3 补旧数据归拢；Step 4 修已知缺陷。每步独立 commit（`feat(mem): ...`），不 push。
+
+---
+
+## 8. 改动文件清单
+
+### 新增
+- `dino/mem/user.go` — `ResolveUserID` / `defaultUserIDFallback`
+- `pkg/memkit/sqlite/migrate_user.go` — `MigrateLegacySessionKnowledge`
+- 测试：`dino/mem/user_test.go`、`pkg/memkit/sqlite/migrate_user_test.go`
+
+### 修改
+- `dino/mem/types.go` — `MemLongTermConfig` 加 `UserMergeEnabled`/`DefaultUserID`；`MemoryToolOptions` 加 `UserID`
+- `dino/mem/subsystem.go` — `SetSessionUser`、`WithUserID` option、`runPhase2Merge` 插迁移钩子
+- `dino/mem/tool.go` — `sqliteMemoryTool.userID` 字段 + `Execute` uid 解析（`tool.go:215`）
+- `dino/session/session.go` — `Config.UserID` + `WithUserID`
+- `dino/factory.go` — `CreateSession` 解析 userID、写归属、L1/工具传 userID（`factory.go:526-530,577`）
+- `dino/config.go` — 默认值
+- `pkg/memkit/sqlite/sqlite_knowledge.go` — （Step 4）`Add` UPDATE 分支保留原 `updated_at`
+- `docs/design/user-global-merge.md`（本文档）
+
+### 不动
+- `pkg/memkit/sqlite/sqlite_knowledge.go`（`Search`/`Add`）的 per-user 逻辑——uid 参数变了就够
+- `pkg/memkit/sqlite/sqlite_preference.go`——同上
+- `dino/mem/ingest.go` `getGlobalUserID`——已读 metadata，`SetSessionUser` 写入后自动生效
+- `dino/mem/usage_feedback.go`——probe 按 session 隔离保持
+- `pkg/memkit/sqlite/phase2.go`——锁/剪枝原样复用
+
+---
+
+## 9. 风险点与待定点
+
+### 9.1 风险
+
+| 风险 | 等级 | 缓解 |
+|---|---|---|
+| 多 session 同 user 记忆互相污染（A 的记忆误导 B） | 中 | 这正是 user 全局合并的**意图**，非缺陷；隔离需求方（如不同项目共用一个 user）需上层按 project 拆分 user_id，或在 `DefaultUserID` 里含 workspace 维度 |
+| 迁移误归拢（把 sessionID 当成 user_id 处理） | 低 | 迁移只动 `knowledge`/`preferences` 的 `user_id`；目标取 metadata 归属，无归属不动 |
+| `updated_at` 刷平影响 L1 选条（Step 4 前） | 低-中 | Step 4 修复；Step 1-3 期间 L1 选条用 `updated_at DESC` 会偏向最近合并的条目 |
+| 迁移与 ingest 并发写同一 user 的 knowledge | 低 | SQLite 单连接 + WAL + busy_timeout（`chatstore/sqlite.go:80`）；Phase 2 有全局锁，ingest 靠 cursor 幂等 |
+| 多租户下 `"default"` 兜底误串 | 中 | 文档明确：多租户必须显式 `WithUserID`，不能依赖 `"default"`；未来可加「无显式 uid 时禁用 user 合并」的开关（待定点） |
+| `context`/`indexes`/`page_index` 的 `user_id` 不迁移，跨 session 检索时这些表仍是 per-session | 低 | 这些表不是「长期用户记忆」的主体；`search_indexes` 默认不暴露（`ExposeSearchIndexes=false`），影响面小 |
+
+### 9.2 留给用户的待定点
+
+1. **`WithUserID` 的调用方**：本设计在 `CreateSession` 签名上通过 `session.WithUserID(uid)` 传入，但当前所有调用方（`examples/dino/main.go:142`、`dino/client.go:60`、`dino/factory.go:795`）都不传。**需用户决定**：上层服务是否在 `Client.CreateSession` 暴露 userID 参数？还是只在配置 `DefaultUserID` 层支持（单用户场景够用）？
+2. **`context` 表是否归并**：`context` 表是 session 级临时上下文（`sqlite.go:97-111`），本设计不迁移。若上层想让它跨 session 共享（比如跨 session 传递临时偏好），需单独设计——建议不并入，保持 session 级语义。
+3. **归属可否变更**：`SetSessionUser` 用 `INSERT OR IGNORE` 固化归属。若用户需要「同 session 切换 user」（如账号切换），需要新的覆盖策略——建议不支持，session 创建即固定归属，账号切换开新 session。
+4. **迁移时机**：迁移挂 Phase 2（6h 冷却内最多跑一次成功）。若用户希望开启后立刻迁移，可提供 `IngestNow` 之外的 `MigrateNow(ctx)` 手动触发入口。
+5. **`DefaultUserID` 是否含 workspace 维度**：单进程多项目（各自独立代码库）共用一个 user 会让记忆串项目。若需要按项目隔离，`DefaultUserID` 应设为 `"<workspace>"` 或 `"<project>"`——由部署方决定。
