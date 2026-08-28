@@ -108,6 +108,40 @@ func (m *MockLLMProvider) GetModelMetadata() types.ModelMetadata {
 	return types.ModelMetadata{Name: "mock-model"}
 }
 
+// cacheConfigurableProvider wraps a provider and records prompt-cache opts it
+// receives via SetPromptCacheOptions (R4 verification).
+type cacheConfigurableProvider struct {
+	types.LLMProvider
+	opts types.PromptCacheOptions
+}
+
+func (p *cacheConfigurableProvider) SetPromptCacheOptions(opts types.PromptCacheOptions) {
+	p.opts = opts
+}
+
+// TestNewAgentEngine_PropagatesPromptCacheConfig (R4) verifies that the engine
+// applies PromptCaching to a PromptCacheConfigurer provider at construction —
+// dino/factory.go never calls SetConfig, so this is the only guaranteed path.
+func TestNewAgentEngine_PropagatesPromptCacheConfig(t *testing.T) {
+	inner := NewMockLLMProvider()
+	provider := &cacheConfigurableProvider{LLMProvider: inner}
+
+	config := types.NewAgentConfig()
+	config.PromptCaching = true
+	NewAgentEngine(provider, config)
+	if !provider.opts.Enabled {
+		t.Error("expected prompt cache enabled by default construction")
+	}
+
+	provider2 := &cacheConfigurableProvider{LLMProvider: inner}
+	cfg2 := types.NewAgentConfig()
+	cfg2.PromptCaching = false
+	NewAgentEngine(provider2, cfg2)
+	if provider2.opts.Enabled {
+		t.Error("expected prompt cache disabled when AgentConfig.PromptCaching=false")
+	}
+}
+
 // MockTool is a mock tool for testing
 type MockTool struct {
 	name        string

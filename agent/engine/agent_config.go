@@ -130,9 +130,25 @@ func (ae *AgentEngine) SetConfig(ctx context.Context, config *types.AgentConfig)
 		ae.config = config
 	}
 
+	ae.propagateConfigLocked()
+}
+
+// propagateConfigLocked applies engine-level config to the LLM provider that
+// supports it. Must be called with ae.mu held (or before the engine is shared).
+//
+// R4 (review): dino/factory.go never calls SetConfig, so NewAgentEngine must
+// call this too or the dino default path never enables prompt caching.
+func (ae *AgentEngine) propagateConfigLocked() {
 	// Propagate logger to model if supported
 	if provider, ok := ae.model.(interface{ SetLogger(*logger.Logger) }); ok {
 		provider.SetLogger(logger.GetLogger())
+	}
+
+	// Propagate prompt caching to providers that implement the configurer.
+	if pc, ok := ae.model.(types.PromptCacheConfigurer); ok {
+		opts := types.DefaultPromptCacheOptions()
+		opts.Enabled = ae.config != nil && ae.config.PromptCaching
+		pc.SetPromptCacheOptions(opts)
 	}
 }
 

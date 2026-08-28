@@ -25,10 +25,22 @@ const (
 
 // ---- Request types --------------------------------------------------------
 
+// anthropicCacheControl marks a content block as a prompt-cache breakpoint.
+// Anthropic enforces a hard cap of types.MaxAnthropicCacheBreakpoints per request.
+type anthropicCacheControl struct {
+	Type string `json:"type"` // "ephemeral"
+}
+
+func ephemeralCacheControl() *anthropicCacheControl {
+	return &anthropicCacheControl{Type: "ephemeral"}
+}
+
 type anthropicRequest struct {
 	Model     string              `json:"model"`
 	MaxTokens int                 `json:"max_tokens"`
-	System    string              `json:"system,omitempty"`
+	// System is a string (legacy) or []anthropicContentBlock when prompt
+	// caching places a breakpoint on the system block. Anthropic accepts both.
+	System    interface{}         `json:"system,omitempty"`
 	Messages  []anthropicMessage  `json:"messages"`
 	Tools     []anthropicTool     `json:"tools,omitempty"`
 	Stream    bool                `json:"stream"`
@@ -40,19 +52,21 @@ type anthropicMessage struct {
 }
 
 type anthropicContentBlock struct {
-	Type       string          `json:"type"`
-	Text       string          `json:"text,omitempty"`
-	ID         string          `json:"id,omitempty"`
-	Name       string          `json:"name,omitempty"`
-	Input      json.RawMessage `json:"input,omitempty"`
-	ToolUseID  string          `json:"tool_use_id,omitempty"`
-	Content    string          `json:"content,omitempty"`
+	Type         string               `json:"type"`
+	Text         string               `json:"text,omitempty"`
+	ID           string               `json:"id,omitempty"`
+	Name         string               `json:"name,omitempty"`
+	Input        json.RawMessage      `json:"input,omitempty"`
+	ToolUseID    string               `json:"tool_use_id,omitempty"`
+	Content      string               `json:"content,omitempty"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
 type anthropicTool struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	InputSchema interface{} `json:"input_schema"`
+	Name         string               `json:"name"`
+	Description  string               `json:"description"`
+	InputSchema  interface{}          `json:"input_schema"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
 // ---- SSE event types -------------------------------------------------------
@@ -119,6 +133,7 @@ type NativeAnthropicProvider struct {
 	model     string
 	maxTokens int
 	client    *http.Client
+	promptCache types.PromptCacheOptions
 }
 
 func newNativeAnthropicProvider(apiKey, baseURL, model string) *NativeAnthropicProvider {
@@ -130,12 +145,20 @@ func newNativeAnthropicProvider(apiKey, baseURL, model string) *NativeAnthropicP
 		model = ClaudeSonnet4.String()
 	}
 	return &NativeAnthropicProvider{
-		apiKey:    apiKey,
-		baseURL:   baseURL,
-		model:     model,
-		maxTokens: anthropicMaxTokens,
-		client:    providers.GetPooledHTTPClient(),
+		apiKey:      apiKey,
+		baseURL:     baseURL,
+		model:       model,
+		maxTokens:   anthropicMaxTokens,
+		client:      providers.GetPooledHTTPClient(),
+		promptCache: types.DefaultPromptCacheOptions(),
 	}
+}
+
+// SetPromptCacheOptions implements types.PromptCacheConfigurer. The engine
+// calls this during NewAgentEngine (and SetConfig) to enable/disable prompt
+// cache breakpoint injection. Defaults (types.DefaultPromptCacheOptions) are on.
+func (p *NativeAnthropicProvider) SetPromptCacheOptions(opts types.PromptCacheOptions) {
+	p.promptCache = opts
 }
 
 func (p *NativeAnthropicProvider) GetModelName() string { return p.model }
@@ -468,7 +491,126 @@ func (p *NativeAnthropicProvider) buildRequest(messages []types.Message, tools [
 		Stream:    stream,
 	}
 
+	// B2 (review): inject cache_control breakpoints with a hard budget of
+	// MaxAnthropicCacheBreakpoints. When disabled the request body must stay
+	// byte-identical to pre-caching output.
+	if p.promptCache.Enabled {
+		req = p.applyCacheControl(req)
+	}
+
 	return json.Marshal(req)
+}
+
+// applyCacheControl injects cache_control breakpoints into a request using the
+// budget-based layout (review B2/R1), which never exceeds
+// MaxAnthropicCacheBreakpoints per request:
+//
+//  1. system block           — 1 breakpoint (if SystemBreakpoint && system != "")
+//  2. last tool              — 1 breakpoint (if ToolsBreakpoint && len(tools) > 0)
+//  3. history messages       — up to HistoryEveryN breakpoints (capped so total ≤ 4)
+//
+// Budgeting: history may only claim (4 - alreadyUsed) breakpoints. If history
+// would exceed its share, we degrade by dropping history breakpoints rather
+// than risk an HTTP 400.
+func (p *NativeAnthropicProvider) applyCacheControl(req anthropicRequest) anthropicRequest {
+	pc := p.promptCache
+	used := 0
+
+	// 1) System block breakpoint. system is a plain string at this point; wrap
+	// it in a content block array so a breakpoint can attach (Anthropic accepts
+	// either form).
+	if pc.SystemBreakpoint && req.System != nil && req.System != "" {
+		req.System = []anthropicContentBlock{{
+			Type:         "text",
+			Text:         req.System.(string),
+			CacheControl: ephemeralCacheControl(),
+		}}
+		used++
+	}
+
+	// 2) Last tool breakpoint. Tools render at position 0 and are the most
+	// stable segment, so a single breakpoint here is the highest-value anchor.
+	if pc.ToolsBreakpoint && len(req.Tools) > 0 {
+		req.Tools[len(req.Tools)-1].CacheControl = ephemeralCacheControl()
+		used++
+	}
+
+	// 3) History breakpoints. Budget = min(HistoryEveryN, 4-used). We scan
+	// assistant messages from the end and attach a breakpoint to the last block
+	// of the chosen ones. Only the most recent stable assistant blocks matter:
+	// a breakpoint on an older message lets the prefix up to it stay cached even
+	// as new tool turns append.
+	historyBudget := pc.HistoryEveryN
+	if remaining := types.MaxAnthropicCacheBreakpoints - used; historyBudget > remaining {
+		historyBudget = remaining
+	}
+	if historyBudget > 0 {
+		req.Messages = p.markHistoryBreakpoints(req.Messages, historyBudget, pc.MinCacheTokens)
+	}
+
+	return req
+}
+
+// markHistoryBreakpoints places up to budget breakpoints on assistant messages
+// (from the end backwards), each on the message's last content block. Messages
+// must already be in block-array form (mergeConsecutiveRoles guarantees this).
+// If the estimated history segment is smaller than MinCacheTokens, no
+// breakpoint is placed (the write would silently not cache).
+func (p *NativeAnthropicProvider) markHistoryBreakpoints(msgs []anthropicMessage, budget int, minTokens int) []anthropicMessage {
+	if budget <= 0 || len(msgs) == 0 {
+		return msgs
+	}
+	if minTokens > 0 {
+		if est := estimateHistoryTokens(msgs); est < minTokens {
+			return msgs
+		}
+	}
+
+	placed := 0
+	for i := len(msgs) - 1; i >= 0 && placed < budget; i-- {
+		if msgs[i].Role != "assistant" {
+			continue
+		}
+		blocks, ok := msgs[i].Content.([]anthropicContentBlock)
+		if !ok || len(blocks) == 0 {
+			continue
+		}
+		// Attach to the last block. tool_use / text blocks may carry a
+		// breakpoint; never attach to tool_result (it appears only on user
+		// messages anyway, but guard for safety).
+		last := &blocks[len(blocks)-1]
+		if last.Type == "tool_result" {
+			continue
+		}
+		if last.CacheControl != nil {
+			continue
+		}
+		last.CacheControl = ephemeralCacheControl()
+		msgs[i].Content = blocks
+		placed++
+	}
+	return msgs
+}
+
+// estimateHistoryTokens gives a cheap length-based estimate of the message
+// segment size (chars/4 ≈ tokens), used only to gate whether history
+// breakpoints are worth writing (min prefix threshold).
+func estimateHistoryTokens(msgs []anthropicMessage) int {
+	total := 0
+	for _, m := range msgs {
+		switch v := m.Content.(type) {
+		case string:
+			total += len(v)
+		case []anthropicContentBlock:
+			for _, b := range v {
+				total += len(b.Text) + len(b.Content)
+				if b.Input != nil {
+					total += len(b.Input)
+				}
+			}
+		}
+	}
+	return total / 4
 }
 
 // mergeConsecutiveRoles merges consecutive messages with the same role.

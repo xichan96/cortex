@@ -9,7 +9,6 @@ import (
 	"github.com/xichan96/cortex/agent/hooks"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/agent/utils"
-	"github.com/xichan96/cortex/pkg/logger"
 )
 
 // Agent agent engine interface
@@ -123,10 +122,10 @@ func NewAgentEngine(model types.LLMProvider, config *types.AgentConfig) *AgentEn
 		rateLimiter:   utils.NewTokenBucket(10, 10),
 	}
 
-	// Propagate logger to model if supported
-	if provider, ok := model.(interface{ SetLogger(*logger.Logger) }); ok {
-		provider.SetLogger(logger.GetLogger())
-	}
+	// Propagate logger + prompt caching to the provider before the engine is
+	// shared. dino never calls SetConfig, so construction-time propagation is
+	// the only path that guarantees prompt caching is actually enabled (R4).
+	ae.propagateConfigLocked()
 
 	return ae
 }

@@ -85,6 +85,11 @@ type AgentConfig struct {
 	DefaultToolResultMaxLen  int                                                               `json:"defaultToolResultMaxLen"`
 	ToolErrorMaxLen          int                                                               `json:"toolErrorMaxLen"`
 	ReasoningEffort          string                                                            `json:"reasoningEffort"`
+	// PromptCaching enables provider prompt caching (Anthropic cache_control
+	// breakpoints) and cache usage backfill. Default on: it is a pure cost
+	// optimization with no correctness impact. Set false for providers/proxies
+	// that choke on cache_control (R9 escape hatch).
+	PromptCaching bool `json:"promptCaching,omitempty"`
 }
 
 func (c *AgentConfig) EffectiveMaxCompletionTokens() int {
@@ -126,6 +131,7 @@ func NewAgentConfig() *AgentConfig {
 		DefaultToolResultMaxLen:  0,
 		ToolErrorMaxLen:          0,
 		ReasoningEffort:          "",
+		PromptCaching:            true,
 	}
 }
 
