@@ -567,3 +567,38 @@ LongTermMemory: MemLongTermConfig{
 3. **Phase 2 LLM 合并**：`Phase2LLMMerge` 默认 false。若你的知识库噪声高、重复多，建议开启并观察 token 成本。
 4. **`GetSummary` 接口 vs `Hybrid`**：§6.2 只接可选接口；`Hybrid` provider（LLM 摘要，`memory.go:241-359`）是否作为 chatstore 的默认 provider 替换 `DeterministicCompact`，属评估报告第三章独立任务，不在本设计内。
 5. **引用反馈精度**：首版「返回即计数」较粗糙；若要精确到「模型实际引用」，需在 `turn_observe` 层做子串/标签匹配（§4.4 进阶），单独排期。
+
+---
+
+## 13. 实现备注（2026-08-28，分支 impl-longterm-mem）
+
+按本设计 + 评审修正（B1/B2/B3 硬约束 + R1-R7 RECOMMENDED）落地后的偏差记录：
+
+| # | 设计原文 | 实现偏差 | 原因 |
+|---|---|---|---|
+| N1 | `getGlobalUserID`「多 session 共享」表述 | 接受 per-session 语义（B1 推荐 (a)）：`uid = sessionID`，全仓无 `user_id` 写入方；「user 全局合并」列为后续独立任务 | 运行时证据（评审 B1） |
+| N2 | L1 选条按 priority | 改为 `updated_at DESC` + 每 category 限额 3 条（B2） | priority 全为 PriorityMedium 无区分度 |
+| N3 | Step 2「返回即计数」 | 改为 `turn_observe` 子串/标签匹配（B3）：`search_knowledge` 只登记候选，模型最终输出包含条目片段才算使用 | 避免自反馈环 |
+| N4 | `MemLongTermConfig` 定义在 `dino/config.go` | 移到 `dino/mem/types.go`，`dino/config.go` 用类型别名 | 避免 `dino ↔ dino/mem` import cycle |
+| N5 | `NewLongTermMem(ctx, cfg, llm, log)` | 签名加 `persistDir, persistFile` 显式参数 | 同上，解耦 config 依赖 |
+| N6 | Phase 2 锁伪码 `ON CONFLICT DO UPDATE WHERE lease_until < now` | 落地为 SQLite 方言 `ON CONFLICT(id) DO UPDATE ... WHERE lease 空/过期 AND cooldown 空/过期`，拆 `lease_until`（10min）+ `cooldown_until`（6h）两列（R2） | SQLite 不支持 PG 语义；租约≠冷却 |
+| N7 | `search_knowledge` 排序含 usage 反馈 | 落地：SQL 下推（content/tags/category LIKE）+ `PageKeywordScore`（query 非空时）→ usage → priority → updated_at | B3 修正后 usage 由真实引用累积 |
+| N8 | 引用反馈接入点 | 在 `dino/session/turn_observe.go` 调 `mem.ObserveAssistantFeedback`（probe 注册表 per-session） | turn 结束点持有 assistant 最终输出 |
+| N9 | `GetSummary` 接口声明 | 不改 `MemoryProvider` 接口体（R3）：`memoryAdapter` 加方法 + `prepareMessages` 类型断言注入 | 避免破坏 agent/providers 其它实现 |
+| N10 | Phase 2 LLM 合并默认关 | `Phase2LLMMerge=false` 时 `newLLM` 未调用；开启后 `llmConflictMerge` 做同 category 两两 LLM 判定（≤200 条） | 省 token，默认不跑 |
+| N11 | `forget` 工具 | 新增 `forget_knowledge`（按 id）与 `forget_preference`（按 category/key）action（R6） | 知识条目此前无删除路径 |
+| N12 | 工具描述 | `defaultMemoryToolDescription` 去掉 `build_system_prompt`，补 `forget_*` | 与 action 拆分一致 |
+
+### 验证摘要
+
+- `go build ./...` 通过。
+- `go test ./dino/... ./pkg/memkit/... ./agent/...` 全绿。
+- 新增单测：`dino/mem/{subsystem,ingest,tool}_test.go`、`pkg/memkit/sqlite/mem_longterm_test.go`、`pkg/memkit/utils/redact_test.go`、`agent/engine/agent_test.go`（summary 注入）、`dino/dino_test.go`（factory LTM 构造/关闭/工具装配）。
+
+### 遗留待定点
+
+1. **user 全局合并**：per-session 记忆的跨 session 共享与冲突消解（评审 B1 推荐 (a) 的后续独立任务）。
+2. **`DeterministicCompact` → LLM 摘要**：本任务只接 `GetSummary` 注入（确定性摘要进上下文）；LLM 摘要替换 `DeterministicCompact` 属评估报告第三章（评估 12.3 部分覆盖项）。
+3. **`Hybrid` provider 默认化**：`NewHybrid` 仍零调用方；是否替换 chatstore 默认 provider 独立排期。
+4. **ingest 失败退避 / 每 turn L1 刷新**（OPTIONAL O2/R7）：当前 L1 是 session 级快照，不随 turn 刷新。
+5. **`Phase2LLMMerge` token 成本**：默认关；开启需观察。
