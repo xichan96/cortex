@@ -76,6 +76,14 @@ func toolCallData(tool string, toolInput interface{}, toolCallID, typeStr, obser
 // The channel is never closed before this returns, so a blocking send is safe.
 // A nil ctx is treated as a background ctx (no cancellation guard).
 func sendStreamResult(ctx context.Context, ch chan<- types.StreamResult, result types.StreamResult) bool {
+	// Terminal error results must never be dropped: the consumer relies on them
+	// to learn about cancellation/failure (e.g. subagents folding ctx cancel
+	// into a "cancelled" status). With a cancelled ctx the select below would
+	// randomly drop the send, so force-deliver error results.
+	if result.Error != nil {
+		ch <- result
+		return true
+	}
 	if ctx == nil {
 		ch <- result
 		return true
