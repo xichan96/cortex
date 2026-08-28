@@ -97,6 +97,7 @@
 - **决策**：接线（启用关键词/正则打分自动委派）还是删除（明确只保留显式委派）。
 - **工作量**：极小（接线）或小（删除）。**收益**：清理死代码 / 增加自动委派能力。
 - **依赖**：产品决策是否要自动委派。
+- **状态**：✅ 已定稿（2026-08-28，分支 nxt-autodelegate）：**删除**。`ShouldDelegate` 仅被无构造点的 `subagentExecutor.autoDelegate`/`SubagentHandler.ProcessInput` 调用；`DefaultConfig` 里 `TriggerOnKeyword:true` + `general` trigger 已配但从未被消费（非「配置未开」而是「无接线」）。产品路径只走显式委派 `delegate_to_agent`，对齐 codex「ExplicitRequestOnly，非启发式分类器」。已删 `ShouldDelegate`/`TriggerResult`/`SubagentHandler`/`SubagentEvent`/`SubagentEventEmitter`/`subagentExecutor`/`buildSubagentEngine` + 对应配置字段（`TriggerOnKeyword`/`Triggers`/`SubagentTrigger`）。如需自动委派，后续按 S5 重新设计（事件通知 + 显式开关），而非复活启发式打分。
 
 ### P4.2 `FatalToolError` 清单扩展评审（工具管线 F3）
 - **背景**：`FatalToolError` 目前只用于 schema 校验失败（`agent_execution.go:407`）。`EC_TOOL_AUTH_ERROR`/`EC_TOOL_INPUT_ERROR`/MCP 错误分类是否进 fatal 清单需单独评审。

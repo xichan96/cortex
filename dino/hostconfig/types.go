@@ -28,17 +28,8 @@ type MemorySettings struct {
 	CompressThreshold int `mapstructure:"compress_threshold"`
 }
 
-type SubagentTriggerSetting struct {
-	AgentName string   `mapstructure:"agent_name"`
-	Keywords  []string `mapstructure:"keywords"`
-	Patterns  []string `mapstructure:"patterns"`
-	Priority  int      `mapstructure:"priority"`
-}
-
 type SubagentSettings struct {
-	Enabled          bool                     `mapstructure:"enabled"`
-	TriggerOnKeyword bool                     `mapstructure:"trigger_on_keyword"`
-	Triggers         []SubagentTriggerSetting `mapstructure:"triggers"`
+	Enabled bool `mapstructure:"enabled"`
 }
 
 type EmailToolConfig struct {

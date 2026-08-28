@@ -136,22 +136,13 @@ func floatPtr(v float64) *float64 {
 }
 
 type SubagentConfig struct {
-	Enabled              bool              `yaml:"enabled"`
-	TriggerOnKeyword     bool              `yaml:"trigger_on_keyword"`
-	ReplayToParentMemory bool              `yaml:"replay_to_parent_memory"`
-	MaxHistoryMessages   int               `yaml:"max_history_messages"`
-	Triggers             []SubagentTrigger `yaml:"triggers"`
+	Enabled              bool `yaml:"enabled"`
+	ReplayToParentMemory bool `yaml:"replay_to_parent_memory"`
+	MaxHistoryMessages   int  `yaml:"max_history_messages"`
 
 	// —— 结果结构化/完成通知（设计 §5.4，S1 引入；B 阶段字段见 S3）——
 	// NotifyCompletion B 阶段：完成是否写 mailbox + 发事件，默认 true。
 	NotifyCompletion bool `yaml:"notify_completion"`
 	// CompletionMaxRunes 信封截断上限，默认 2000（≈1000 tokens）。
 	CompletionMaxRunes int `yaml:"completion_max_runes"`
-}
-
-type SubagentTrigger struct {
-	AgentName string   `yaml:"agent_name"`
-	Keywords  []string `yaml:"keywords"`
-	Patterns  []string `yaml:"patterns"`
-	Priority  int      `yaml:"priority"`
 }
