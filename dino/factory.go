@@ -511,6 +511,8 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	agentConfig.MaxBudgetTokens = f.config.Memory.MaxBudgetTokens
 	agentConfig.CompactAfterTurns = f.config.Memory.CompactAfterTurns
 	agentConfig.PromptCaching = f.config.PromptCaching.Enabled
+	agentConfig.ToolParallelismLimit = f.config.Tools.MaxToolParallelism
+	agentConfig.StreamBufferSize = f.config.Tools.StreamBufferSize
 	sid := sessionID
 	agentConfig.RemainPromptTokens = func() int {
 		if !f.config.Budget.Enabled || f.config.Budget.MaxTokens <= 0 {
@@ -564,12 +566,7 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 			needApproval[name] = true
 		}
 		logger.Info("[DinoFactory] Adding tool", slog.String("tool", name), slog.String("permission", string(action)))
-		wrapped := wrapWorkspacePathTools(t, f.config.WorkspaceRoot, sessionID, f.approvalStore)
-		if needApproval[name] {
-			wrapped = NewApprovalTool(wrapped, sessionID, f.approvalStore, needApproval)
-		}
-		wrapped = dinoTools.WrapLoopDetection(wrapped, sessionID, f.loopDetector, senderAdapter)
-		wrappedTools = append(wrappedTools, wrapped)
+		wrappedTools = append(wrappedTools, f.wrapSessionTool(t, sessionID, senderAdapter, needApproval))
 	}
 
 	if f.sessionToolsProvider != nil {
@@ -587,12 +584,7 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 				needApproval[name] = true
 			}
 			logger.Info("[DinoFactory] Adding tool", slog.String("tool", name), slog.String("permission", string(action)))
-			wrapped := wrapWorkspacePathTools(t, f.config.WorkspaceRoot, sessionID, f.approvalStore)
-			if needApproval[name] {
-				wrapped = NewApprovalTool(wrapped, sessionID, f.approvalStore, needApproval)
-			}
-			wrapped = dinoTools.WrapLoopDetection(wrapped, sessionID, f.loopDetector, senderAdapter)
-			wrappedTools = append(wrappedTools, wrapped)
+			wrappedTools = append(wrappedTools, f.wrapSessionTool(t, sessionID, senderAdapter, needApproval))
 		}
 	}
 
@@ -604,7 +596,11 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 				return agent.GetMemory()
 			})
 		}
-		wrapped := dinoTools.WrapLoopDetection(registerDelegate, sessionID, f.loopDetector, senderAdapter)
+		// Subagent delegate is never approval-gated; apply limiter + nonFatal so
+		// oversized results and errors behave like every other session tool.
+		wrapped := dinoTools.WrapToolResultLimiter(registerDelegate, f.config.Tools.ResultLimiterMaxBytes, f.config.Tools.ResultLimiterMaxStringBytes)
+		wrapped = dinoTools.WrapNonFatalTool(wrapped)
+		wrapped = dinoTools.WrapLoopDetection(wrapped, sessionID, f.loopDetector, senderAdapter)
 		wrappedTools = append(wrappedTools, wrapped)
 		logger.Info("[DinoFactory] Adding tool", slog.String("tool", registerDelegate.Name()))
 	}
@@ -763,6 +759,30 @@ func (f *dinoFactory) RestoreSessionSnapshot(ctx context.Context, sessionID stri
 		}
 	}
 	return session.ApplySnapshotToSession(ctx, s, snap)
+}
+
+// wrapSessionTool applies the full tool wrapper stack for a session tool, from
+// innermost to outermost: approval (path + explicit) -> result limiter ->
+// nonFatal -> loop detection.
+//
+// Ordering rationale:
+//  1. approval is innermost so a rejection surfaces as a real error (veto) and
+//     is NOT turned into a recoverable {ok:false} by nonFatal (BLOCKER-2);
+//  2. limiter bounds the execution result (approval input is never bounded);
+//     its oversized-result {ok:false} map is a normal result nonFatal returns;
+//  3. nonFatal converts execution errors into structured results fed back to
+//     the model, but passes through loop and approval-rejection errors;
+//  4. loopDetection is outermost so it observes every real call and its
+//     LoopDetectedError pierces nonFatal to stop the loop.
+func (f *dinoFactory) wrapSessionTool(t types.Tool, sessionID string, senderAdapter *toolEventSenderAdapter, needApproval map[string]bool) types.Tool {
+	wrapped := wrapWorkspacePathTools(t, f.config.WorkspaceRoot, sessionID, f.approvalStore)
+	if needApproval[t.Name()] {
+		wrapped = NewApprovalTool(wrapped, sessionID, f.approvalStore, needApproval)
+	}
+	wrapped = dinoTools.WrapToolResultLimiter(wrapped, f.config.Tools.ResultLimiterMaxBytes, f.config.Tools.ResultLimiterMaxStringBytes)
+	wrapped = dinoTools.WrapNonFatalTool(wrapped)
+	wrapped = dinoTools.WrapLoopDetection(wrapped, sessionID, f.loopDetector, senderAdapter)
+	return wrapped
 }
 
 func wrapWorkspacePathTools(t types.Tool, workspaceRoot, sessionID string, store *ApprovalStore) types.Tool {

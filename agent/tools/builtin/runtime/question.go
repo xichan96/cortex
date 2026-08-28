@@ -9,6 +9,18 @@ import (
 	"github.com/xichan96/cortex/pkg/errors"
 )
 
+// SentinelQuestionResult is the structured payload QuestionTool.Execute returns
+// (option A of the F7 design): instead of hard-erroring, it reports that the
+// question must be surfaced to the user and that the agent loop should not
+// continue waiting on a result it cannot produce. dino's runner is expected to
+// detect this shape and emit an EventTypeQuestion; until then the sentinel is
+// at least not a fatal error.
+type SentinelQuestionResult struct {
+	Ok       bool   `json:"ok"`
+	Question string `json:"question"`
+	AskUser  bool   `json:"ask_user"`
+}
+
 type QuestionTool struct{}
 
 func NewQuestionTool() types.Tool {
@@ -47,7 +59,15 @@ func (t *QuestionTool) Execute(ctx context.Context, input map[string]interface{}
 	if !ok || question == "" {
 		return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("question is required"))
 	}
-	return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(fmt.Errorf("question tool must be handled by the agent runner, not executed directly"))
+	// F7 option A: return a structured sentinel instead of hard-erroring. The
+	// runner is expected to surface this to the UI and pause; until a runner
+	// handles it, the sentinel is still preferable to an error because it does
+	// not terminate the iteration and carries the question for the model/UI.
+	return SentinelQuestionResult{
+		Ok:       true,
+		Question: question,
+		AskUser:  true,
+	}, nil
 }
 
 func (t *QuestionTool) Metadata() types.ToolMetadata {

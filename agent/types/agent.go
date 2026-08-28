@@ -90,6 +90,8 @@ type AgentConfig struct {
 	// optimization with no correctness impact. Set false for providers/proxies
 	// that choke on cache_control (R9 escape hatch).
 	PromptCaching bool `json:"promptCaching,omitempty"`
+	ToolParallelismLimit     int                                                               `json:"toolParallelismLimit,omitempty"` // 0=默认 max(4, GOMAXPROCS*2) 封顶 32；>0 用该值
+	StreamBufferSize         int                                                               `json:"streamBufferSize,omitempty"`     // 0=默认 50；>0 用该值
 }
 
 func (c *AgentConfig) EffectiveMaxCompletionTokens() int {
@@ -132,6 +134,8 @@ func NewAgentConfig() *AgentConfig {
 		ToolErrorMaxLen:          0,
 		ReasoningEffort:          "",
 		PromptCaching:            true,
+		ToolParallelismLimit:     0,
+		StreamBufferSize:         0,
 	}
 }
 
@@ -306,12 +310,14 @@ func (f *ToolCallbackFunc) OnToolError(toolName string, toolCallID string, err e
 	}
 }
 
-// TruncateString truncates a string to the specified length
+// TruncateString truncates a string to the specified length, keeping the head
+// (a UTF-8-safe convenience used for logging and short labels). For
+// tool-output truncation that preserves the middle, use TruncateMiddle.
 func TruncateString(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	return truncateUTF8Head(s, maxLen) + "..."
 }
 
 const ToolErrorMaxLen = 400

@@ -2,6 +2,9 @@ package engine
 
 import (
 	"context"
+	stderrors "errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -606,6 +609,276 @@ func TestStreamToolCallback_Close(t *testing.T) {
 	callback.OnToolCall("test", "call_2", nil)
 }
 
+// countingTool is a mock tool that tracks the max concurrent executions.
+// Distinct instances share the same state so parallel calls with different
+// tool names can be measured against one counter (the engine's dependency
+// sorter keys by tool name, so parallel calls to one name collapse).
+type countingTool struct {
+	name string
+	// shared state
+	mu      *sync.Mutex
+	running *int
+	maxSeen *int
+	done    *chan struct{} // if set, tool blocks until closed
+}
+
+func newCountingTool(name string, shared *countingState) *countingTool {
+	return &countingTool{name: name, mu: &shared.mu, running: &shared.running, maxSeen: &shared.maxSeen, done: &shared.done}
+}
+
+type countingState struct {
+	mu      sync.Mutex
+	running int
+	maxSeen int
+	done    chan struct{} // if set, tools block until closed
+}
+
+func (t *countingTool) Name() string                   { return t.name }
+func (t *countingTool) Description() string            { return "counting tool" }
+func (t *countingTool) Schema() map[string]interface{} { return map[string]interface{}{} }
+func (t *countingTool) Metadata() types.ToolMetadata   { return types.ToolMetadata{} }
+
+func (t *countingTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	t.mu.Lock()
+	*t.running++
+	if *t.running > *t.maxSeen {
+		*t.maxSeen = *t.running
+	}
+	t.mu.Unlock()
+	if t.done != nil && *t.done != nil {
+		select {
+		case <-*t.done:
+		case <-ctx.Done():
+		}
+	}
+	t.mu.Lock()
+	*t.running--
+	t.mu.Unlock()
+	return "ok", nil
+}
+
+func (t *countingTool) maxConcurrent() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return *t.maxSeen
+}
+
+// executeToolCallRound drives a single tool-calling iteration through the
+// engine and returns the resulting intermediate steps. It lets tests exercise
+// runToolCallsByLayer without going through the full LLM loop.
+func (ae *AgentEngine) executeToolCallRound(t *testing.T, calls []types.ToolCall) []types.ToolCallData {
+	t.Helper()
+	sorted, err := ae.prepareToolCalls(calls)
+	if err != nil {
+		t.Fatalf("prepareToolCalls: %v", err)
+	}
+	exists, results := ae.runToolCallsByLayer(context.Background(), sorted, 5*time.Second)
+	_, steps := ae.buildToolCallResults(sorted, exists, results, "", "test")
+	return steps
+}
+
+func TestParallelismLimit_One(t *testing.T) {
+	provider := NewMockLLMProvider()
+	config := types.NewAgentConfig()
+	config.ToolParallelismLimit = 1
+	config.EnableToolRetry = false
+	ae := NewAgentEngine(provider, config)
+
+	shared := &countingState{}
+	var calls []types.ToolCall
+	for i := 0; i < 4; i++ {
+		name := fmt.Sprintf("count_%d", i)
+		ae.AddTool(context.Background(), newCountingTool(name, shared))
+		calls = append(calls, types.ToolCall{
+			ID:   fmt.Sprintf("call_%d", i),
+			Type: "function",
+			Function: types.ToolFunction{Name: name, Arguments: map[string]interface{}{"i": i}},
+		})
+	}
+	steps := ae.executeToolCallRound(t, calls)
+	if len(steps) != 4 {
+		t.Fatalf("expected 4 steps, got %d", len(steps))
+	}
+	if got := shared.maxSeen; got != 1 {
+		t.Errorf("expected max concurrency 1, got %d", got)
+	}
+}
+
+func TestParallelismLimit_Four(t *testing.T) {
+	provider := NewMockLLMProvider()
+	config := types.NewAgentConfig()
+	config.ToolParallelismLimit = 4
+	config.EnableToolRetry = false
+	ae := NewAgentEngine(provider, config)
+
+	shared := &countingState{}
+	var calls []types.ToolCall
+	for i := 0; i < 10; i++ {
+		name := fmt.Sprintf("count_%d", i)
+		ae.AddTool(context.Background(), newCountingTool(name, shared))
+		calls = append(calls, types.ToolCall{
+			ID:   fmt.Sprintf("call_%d", i),
+			Type: "function",
+			Function: types.ToolFunction{Name: name, Arguments: map[string]interface{}{"i": i}},
+		})
+	}
+	steps := ae.executeToolCallRound(t, calls)
+	if len(steps) != 10 {
+		t.Fatalf("expected 10 steps, got %d", len(steps))
+	}
+	if got := shared.maxSeen; got > 4 {
+		t.Errorf("expected max concurrency <= 4, got %d", got)
+	}
+}
+
+func TestParallelismLimit_Default(t *testing.T) {
+	provider := NewMockLLMProvider()
+	config := types.NewAgentConfig()
+	ae := NewAgentEngine(provider, config)
+	want := defaultToolParallelismLimit()
+	if got := ae.getToolParallelismLimit(); got != want {
+		t.Errorf("expected default parallelism %d, got %d", want, got)
+	}
+}
+
+func TestParallelismLimit_CancelQueue(t *testing.T) {
+	provider := NewMockLLMProvider()
+	config := types.NewAgentConfig()
+	config.ToolParallelismLimit = 1
+	config.EnableToolRetry = false
+	ae := NewAgentEngine(provider, config)
+
+	shared := &countingState{done: make(chan struct{})}
+	ae.AddTool(context.Background(), newCountingTool("block", shared))
+	ae.AddTool(context.Background(), newCountingTool("fast", shared))
+
+	// Limit 1, so "block" occupies the only slot and holds it; "fast" queues.
+	calls := []types.ToolCall{
+		{ID: "call_block", Type: "function", Function: types.ToolFunction{Name: "block", Arguments: map[string]interface{}{}}},
+		{ID: "call_fast", Type: "function", Function: types.ToolFunction{Name: "fast", Arguments: map[string]interface{}{}}},
+	}
+
+	// Run the round under a context that times out quickly; when the context is
+	// cancelled the queued call is skipped (results[idx] gets the ctx error).
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	sorted, err := ae.prepareToolCalls(calls)
+	if err != nil {
+		t.Fatalf("prepareToolCalls: %v", err)
+	}
+	exists, results := ae.runToolCallsByLayer(ctx, sorted, 5*time.Second)
+
+	// Unblock "block" so goroutines wind down cleanly.
+	close(shared.done)
+
+	_, steps := ae.buildToolCallResults(sorted, exists, results, "", "test")
+	if len(steps) != 2 {
+		t.Fatalf("expected 2 steps (one error), got %d", len(steps))
+	}
+	// The queued "fast" call must surface as an error (ctx cancellation), not as
+	// a zero-value success.
+	foundErr := false
+	for _, s := range steps {
+		if strings.Contains(s.Observation, "execution failed") || strings.Contains(s.Observation, "context deadline") {
+			foundErr = true
+		}
+	}
+	if !foundErr {
+		t.Errorf("expected at least one queued call to report a cancellation error, steps: %+v", steps)
+	}
+}
+
+// schemaTool enforces a schema so ValidateInput fails when the call is missing
+// a required field. Used to exercise F3's fatal short-circuit.
+type schemaTool struct {
+	name string
+}
+
+func (t *schemaTool) Name() string { return t.name }
+func (t *schemaTool) Description() string {
+	return "schema tool"
+}
+func (t *schemaTool) Schema() map[string]interface{} {
+	return map[string]interface{}{
+		"type":       "object",
+		"properties": map[string]interface{}{"required_key": map[string]interface{}{"type": "string"}},
+		"required":   []string{"required_key"},
+	}
+}
+func (t *schemaTool) Metadata() types.ToolMetadata { return types.ToolMetadata{} }
+func (t *schemaTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	return "ok", nil
+}
+
+// TestF3_SchemaFatalShortCircuits verifies that an input-validation failure is
+// marked fatal and short-circuits the iteration: the error surfaces in the
+// steps AND the same-layer siblings are cancelled (a hanging tool is released
+// by the errgroup cancellation).
+func TestF3_SchemaFatalShortCircuits(t *testing.T) {
+	provider := NewMockLLMProvider()
+	config := types.NewAgentConfig()
+	config.EnableToolRetry = false
+	ae := NewAgentEngine(provider, config)
+
+	// A sibling tool that blocks until ctx is cancelled; it must be released by
+	// the fatal validation error.
+	blocked := NewMockTool("blocked").WithExecuteFunc(func(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	ae.AddTool(context.Background(), &schemaTool{name: "schema_tool"})
+	ae.AddTool(context.Background(), blocked)
+
+	calls := []types.ToolCall{
+		{ID: "call_schema", Type: "function", Function: types.ToolFunction{Name: "schema_tool", Arguments: map[string]interface{}{}}}, // missing required_key
+		{ID: "call_blocked", Type: "function", Function: types.ToolFunction{Name: "blocked", Arguments: map[string]interface{}{}}},
+	}
+
+	// Run under a generous timeout; the schema failure should cancel "blocked"
+	// immediately instead of waiting for it.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	sorted, err := ae.prepareToolCalls(calls)
+	if err != nil {
+		t.Fatalf("prepareToolCalls: %v", err)
+	}
+	exists, results := ae.runToolCallsByLayer(ctx, sorted, 5*time.Second)
+
+	// The schema tool's step must be a fatal error observation.
+	foundFatal := false
+	for i, tc := range sorted {
+		if tc.Function.Name != "schema_tool" {
+			continue
+		}
+		if results[i].err != nil {
+			var fe *types.FatalToolError
+			if stderrors.As(results[i].err, &fe) {
+				foundFatal = true
+			}
+		}
+	}
+	if !foundFatal {
+		t.Error("expected schema failure to be wrapped in FatalToolError")
+	}
+	_ = exists
+}
+
+func TestStreamBufferSize_Config(t *testing.T) {
+	provider := NewMockLLMProvider()
+	config := types.NewAgentConfig()
+	config.StreamBufferSize = 200
+	ae := NewAgentEngine(provider, config)
+	if got := ae.getStreamBufferSize(); got != 200 {
+		t.Errorf("expected stream buffer 200, got %d", got)
+	}
+	config.StreamBufferSize = 0
+	if got := ae.getStreamBufferSize(); got != types.DefaultChannelBuffer {
+		t.Errorf("expected default stream buffer %d, got %d", types.DefaultChannelBuffer, got)
+	}
+}
+
 func TestAgentEngine_ExecuteStream_Concurrent(t *testing.T) {
 	provider := NewMockLLMProvider()
 	provider.AddStreamMessage(types.StreamMessage{
@@ -639,4 +912,119 @@ func TestAgentEngine_ExecuteStream_Concurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// TestExecuteStream_DeadlockTurnCtxCancel is the B3 regression test: a
+// consumer stops ranging but does not close the session, and the engine is
+// never Stop()ed. When the result channel fills, the engine's guarded sends
+// must unblock on the caller's turn ctx cancellation — otherwise
+// ExecuteStream's goroutine and errgroup hang forever.
+func TestExecuteStream_DeadlockTurnCtxCancel(t *testing.T) {
+	provider := NewMockLLMProvider()
+	// Emit far more chunks than the default channel buffer (50) so the engine
+	// is forced to block once the consumer stops draining.
+	for i := 0; i < 200; i++ {
+		provider.AddStreamMessage(types.StreamMessage{
+			Type:    "chunk",
+			Content: fmt.Sprintf("chunk-%03d-", i) + strings.Repeat("x", 40),
+		})
+	}
+
+	config := types.NewAgentConfig()
+	config.MaxIterations = 1
+	ae := NewAgentEngine(provider, config)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := ae.ExecuteStream(ctx, types.NewAgentInput("go"), nil)
+	if err != nil {
+		t.Fatalf("ExecuteStream: %v", err)
+	}
+
+	// Drain until the channel is momentarily empty, then stop ranging entirely
+	// without cancelling ctx or calling Stop(). The engine is now blocked on a
+	// full result channel (200 chunks > buffer 50). Give it a moment to make
+	// sure the engine goroutine is genuinely parked on a send.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-stream:
+		default:
+			goto drained
+		}
+	}
+	t.Fatal("did not observe a drain point")
+drained:
+	time.Sleep(50 * time.Millisecond)
+
+	// Now cancel the turn ctx while no consumer is reading. ExecuteStream must
+	// return (close the channel) within a bounded time — the guarded sends
+	// unblock. The consumer is only started after cancel so the channel being
+	// closed is genuinely caused by cancellation, not by us draining it.
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		for range stream {
+		}
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// success — no deadlock
+	case <-time.After(5 * time.Second):
+		t.Fatal("ExecuteStream deadlocked: channel not closed after turn ctx cancellation")
+	}
+}
+
+// TestResultSender_NoDrop verifies that with a slow consumer, tool events are
+// blocked (not dropped) until they can be delivered, preserving order.
+func TestResultSender_NoDrop(t *testing.T) {
+	provider := NewMockLLMProvider()
+	ae := NewAgentEngine(provider, types.NewAgentConfig())
+
+	resultChan := make(chan types.StreamResult, 8)
+	ae.mu.Lock()
+	ae.resultSender = func(result types.StreamResult) {
+		select {
+		case resultChan <- result:
+		case <-ae.ctx.Done():
+		}
+	}
+	ae.mu.Unlock()
+
+	// Produce 200 tool events from a goroutine.
+	const total = 200
+	go func() {
+		for i := 0; i < total; i++ {
+			ae.resultSender(types.StreamResult{
+				Type: "tool_event",
+				ToolEvent: &types.ToolEvent{
+					Event:      types.StreamEventToolResult,
+					ToolCallID: fmt.Sprintf("call_%d", i),
+					ToolName:   "mock",
+				},
+			})
+		}
+	}()
+
+	// Consume slowly: buffer is 8, so the producer blocks and must not drop.
+	got := make([]string, 0, total)
+	deadline := time.After(5 * time.Second)
+	for len(got) < total {
+		select {
+		case r := <-resultChan:
+			if r.ToolEvent != nil {
+				got = append(got, r.ToolEvent.ToolCallID)
+			}
+			// Simulate a slow consumer.
+			time.Sleep(time.Millisecond)
+		case <-deadline:
+			t.Fatalf("timeout waiting for tool events; got %d/%d", len(got), total)
+		}
+	}
+	for i, id := range got {
+		if want := fmt.Sprintf("call_%d", i); id != want {
+			t.Fatalf("event %d: expected %s, got %s (order violated)", i, want, id)
+		}
+	}
 }

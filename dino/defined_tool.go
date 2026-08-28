@@ -14,6 +14,7 @@ import (
 
 	agentfs "github.com/xichan96/cortex/agent/tools/builtin/fs"
 	"github.com/xichan96/cortex/agent/types"
+	dinoTools "github.com/xichan96/cortex/dino/tools"
 	"github.com/xichan96/cortex/pkg/logger"
 )
 
@@ -303,20 +304,34 @@ func (s *ApprovalStore) RequestApproval(
 	}
 }
 
-func (s *ApprovalStore) Respond(requestID string, approved bool) {
+// approvalRespondTimeout bounds how long Respond blocks when the approval
+// channel is full (the previous response has not been consumed yet, e.g. a
+// double response). After the timeout the response is dropped rather than
+// hanging the caller (HTTP/MCP gateway goroutine) forever. A var (not const)
+// so tests can shorten it.
+var approvalRespondTimeout = 5 * time.Second
+
+// Respond delivers an approval decision to the pending RequestApproval waiter.
+// It returns true if the decision was delivered, false if the requestID is
+// unknown/cleaned up or the delivery timed out. Unlike the previous
+// select-default drop, it blocks (up to approvalRespondTimeout) so a response
+// is never silently lost while the waiter is still alive.
+func (s *ApprovalStore) Respond(requestID string, approved bool) bool {
 	s.mu.Lock()
 	ch := s.pending[requestID]
 	s.mu.Unlock()
 
 	if ch == nil {
-		return
+		return false // unknown / already cleaned up
 	}
 	select {
 	case ch <- approved:
-	default:
-		logger.Warn("[ApprovalStore] approval response dropped",
+		return true
+	case <-time.After(approvalRespondTimeout):
+		logger.Warn("[ApprovalStore] approval response timed out",
 			slog.String("request_id", requestID),
 			slog.Bool("approved", approved))
+		return false
 	}
 }
 
@@ -382,7 +397,9 @@ func (a *ApprovalTool) Execute(ctx context.Context, input map[string]interface{}
 	}
 
 	if !approved {
-		return nil, fmt.Errorf("tool '%s' was rejected by user", toolName)
+		// Unrecoverable user veto — must surface as a real error, never be
+		// swallowed by nonFatalTool and fed back to the model.
+		return nil, &ApprovalRejectedError{ToolName: toolName}
 	}
 
 	return a.inner.Execute(ctx, input)
@@ -508,7 +525,8 @@ func (e *ExternalPathApprovalTool) Execute(ctx context.Context, input map[string
 		return nil, fmt.Errorf("workspace path approval: %w", err)
 	}
 	if !approved {
-		return nil, fmt.Errorf("access to paths outside workspace was denied")
+		// Unrecoverable user veto — pass through, never recoverable.
+		return nil, &ApprovalRejectedError{ToolName: e.inner.Name()}
 	}
 	ctx2 := ctx
 	for _, abs := range outside {
@@ -551,3 +569,12 @@ const (
 	ErrApprovalTimeout      ApprovalError = "approval timeout"
 	ErrApprovalNotAvailable ApprovalError = "approval not available in this context"
 )
+
+// ApprovalRejectedError marks a user denial of a tool approval. It is an
+// unrecoverable user veto: feeding it back to the model as a recoverable
+// {ok:false} result would make the model retry the very tool the user just
+// refused, looping until the doom detector fires. Wrappers (nonFatalTool) must
+// pass it through as a real error so the engine surfaces the veto instead of
+// resuming the loop. Defined in dino/tools so both the approval wrappers here
+// and nonFatalTool (in dino/tools) can share it without an import cycle.
+type ApprovalRejectedError = dinoTools.ApprovalRejectedError

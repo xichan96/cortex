@@ -70,6 +70,24 @@ func toolCallData(tool string, toolInput interface{}, toolCallID, typeStr, obser
 	}
 }
 
+// sendStreamResult sends a result to the stream channel, unblocking when the
+// caller's turn ctx is cancelled so a stuck consumer (stopped range / slow UI)
+// cannot deadlock the engine. It reports whether the result was actually sent.
+// The channel is never closed before this returns, so a blocking send is safe.
+// A nil ctx is treated as a background ctx (no cancellation guard).
+func sendStreamResult(ctx context.Context, ch chan<- types.StreamResult, result types.StreamResult) bool {
+	if ctx == nil {
+		ch <- result
+		return true
+	}
+	select {
+	case ch <- result:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func toolObservationError(err error, toolName string, cached bool, maxLen int) string {
 	if maxLen <= 0 {
 		maxLen = types.ToolErrorMaxLen
@@ -270,10 +288,33 @@ func (ae *AgentEngine) buildToolCallResults(sortedToolCalls []types.ToolCall, ex
 		truncationLength := ae.getToolTruncationLength(name)
 		sanitized := types.SanitizeToolResult(r.result, truncationLength)
 		formatted := types.FormatToolResult(sanitized)
-		observation, _, _ := types.TruncateToolResult(formatted, truncationLength, writeDir)
+		header := ae.buildOutputHeader(toolCall, name, r, formatted)
+		observation, _ := types.TruncateToolResult(formatted, truncationLength, writeDir, header)
 		intermediateSteps = append(intermediateSteps, toolCallData(name, args, toolCall.ID, toolCall.Type, observation))
 	}
 	return toolCalls, intermediateSteps
+}
+
+// buildOutputHeader assembles the structured header for a tool observation.
+// ExitCode is probed from bash/command-style results (map with exit_code).
+func (ae *AgentEngine) buildOutputHeader(toolCall types.ToolCall, name string, r stepResult, formatted string) types.OutputHeader {
+	h := types.OutputHeader{
+		ChunkID:        toolCall.ID,
+		WallTime:       r.duration,
+		OriginalBytes:  len(formatted),
+		OriginalTokens: types.RoughTokenEstimate(formatted),
+	}
+	if lines := strings.Count(formatted, "\n"); lines > 0 {
+		h.TotalLines = lines + 1
+	}
+	if m, ok := r.result.(map[string]interface{}); ok {
+		if ec, ok := m["exit_code"]; ok {
+			if code, ok := ec.(int); ok {
+				h.ExitCode = &code
+			}
+		}
+	}
+	return h
 }
 
 func (ae *AgentEngine) getToolByName(name string) (types.Tool, bool) {
@@ -317,8 +358,16 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 	// Get hooks
 	hookRunner := hooks.NewRunner(ae.getHooks(), "", "")
 
+	// Global concurrency cap across all layers: parallel bash/MCP calls (same
+	// layer, no dependencies) are bounded, dependent calls in later layers wait
+	// for earlier layers to release their slots. This is a wall-time throttle
+	// only — correctness is unchanged (errgroup already waits for every call).
+	limit := ae.getToolParallelismLimit()
 	for _, layer := range layers {
 		g, gctx := errgroup.WithContext(ctx)
+		if limit > 0 {
+			g.SetLimit(limit)
+		}
 		for _, idx := range layer {
 			if !exists[idx] {
 				continue
@@ -342,12 +391,17 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 				hookRunner.BeforeToolCall(tool.Name(), args)
 
 				if err := schema.ValidateInput(tool.Schema(), args, tool.Name()); err != nil {
-					results[idx] = stepResult{err: err, cached: false, duration: 0}
+					// Input validation failure is fatal (F3): retrying the same
+					// arguments cannot succeed, and running the other parallel
+					// calls with the model's broken inputs is wasted work. Mark
+					// it fatal and cancel the same-layer siblings via the
+					// errgroup so this iteration unwinds quickly.
+					results[idx] = stepResult{err: &types.FatalToolError{Err: err, Reason: "tool input validation failed"}, cached: false, duration: 0}
 					if callback != nil {
 						callback.OnToolInputEnd(tool.Name(), toolCallID, args)
 						callback.OnToolError(tool.Name(), toolCallID, err)
 					}
-					return nil
+					return err
 				}
 				canonicalName := tool.Name()
 				// Check for no_cache flag in metadata
@@ -726,15 +780,20 @@ func (ae *AgentEngine) ExecuteStream(ctx context.Context, input types.AgentInput
 		return nil, errors.EC_AGENT_BUSY
 	}
 
-	resultChan := make(chan types.StreamResult, types.DefaultChannelBuffer)
+	resultChan := make(chan types.StreamResult, ae.getStreamBufferSize())
 
-	// Set result sender for tool events
+	// Set result sender for tool events. It must honor the caller's turn ctx
+	// (NOT ae.ctx, which is the engine-lifetime ctx and is never cancelled by
+	// ExecuteStream): when the channel is full the send blocks so tool events
+	// are never silently dropped, and it unblocks when the turn is cancelled so
+	// a stuck consumer (stopped range / slow UI) cannot deadlock the engine.
+	turnCtx := ctx
 	ae.mu.Lock()
 	ae.resultSender = func(result types.StreamResult) {
 		select {
 		case resultChan <- result:
-		default:
-			// Channel full, skip event
+		case <-turnCtx.Done():
+		case <-ae.ctx.Done():
 		}
 	}
 	ae.mu.Unlock()
@@ -781,19 +840,19 @@ func (ae *AgentEngine) ExecuteStream(ctx context.Context, input types.AgentInput
 		// Call OnBeforeStart hook
 		if err := hookRunner.BeforeStart(&input); err != nil {
 			logger.LogError("ExecuteStream", err, slog.String("phase", "on_before_start"))
-			resultChan <- types.StreamResult{
+			sendStreamResult(ctx, resultChan, types.StreamResult{
 				Type:  "error",
 				Error: errors.NewError(errors.EC_HOOK_FAILED.Code, "hook OnBeforeStart failed").Wrap(err),
-			}
+			})
 			return
 		}
 
 		if err := ae.waitRateLimit(ctx); err != nil {
 			logger.LogError("ExecuteStream", err, slog.String("phase", "rate_limit"))
-			resultChan <- types.StreamResult{
+			sendStreamResult(ctx, resultChan, types.StreamResult{
 				Type:  "error",
 				Error: errors.NewError(errors.EC_SYSTEM_OVERLOAD.Code, "rate limit exceeded").Wrap(err),
-			}
+			})
 			return
 		}
 
@@ -801,10 +860,10 @@ func (ae *AgentEngine) ExecuteStream(ctx context.Context, input types.AgentInput
 			if r := recover(); r != nil {
 				logger.LogError("ExecuteStream", fmt.Errorf("panic recovered: %v", r))
 				hookRunner.OnError(fmt.Errorf("panic: %v", r))
-				resultChan <- types.StreamResult{
+				sendStreamResult(ctx, resultChan, types.StreamResult{
 					Type:  "error",
 					Error: errors.NewError(errors.EC_STREAM_PANIC.Code, "panic in stream execution").Wrap(fmt.Errorf("%v", r)),
-				}
+				})
 			}
 		}()
 
@@ -812,11 +871,11 @@ func (ae *AgentEngine) ExecuteStream(ctx context.Context, input types.AgentInput
 		messages, err := ae.prepareMessages(ctx, input, previousRequests)
 		if err != nil {
 			logger.LogError("ExecuteStream", err, slog.String("phase", "prepare_messages"))
-			resultChan <- types.StreamResult{
+			sendStreamResult(ctx, resultChan, types.StreamResult{
 				Type:      "error",
 				Error:     errors.NewError(errors.EC_PREPARE_MESSAGES_FAILED.Code, "failed to prepare messages").Wrap(err),
 				StopCause: types.StopCauseFromChatError(err),
-			}
+			})
 			return
 		}
 
@@ -1128,11 +1187,11 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 		select {
 		case <-ctx.Done():
 			hookRunner.OnError(ctx.Err())
-			resultChan <- types.StreamResult{
+			sendStreamResult(ctx, resultChan, types.StreamResult{
 				Type:      "error",
 				Error:     ctx.Err(),
 				StopCause: types.StopCauseFromChatError(ctx.Err()),
-			}
+			})
 			return
 		default:
 		}
@@ -1145,11 +1204,11 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 		if err != nil {
 			logger.LogError("executeStreamWithIterations", err, slog.Int("iteration", iteration+1))
 			hookRunner.OnError(err)
-			resultChan <- types.StreamResult{
+			sendStreamResult(ctx, resultChan, types.StreamResult{
 				Type:      "error",
 				Error:     errors.NewError(errors.EC_STREAM_ITERATION_FAILED.Code, fmt.Sprintf("iteration %d failed", iteration+1)).Wrap(err),
 				StopCause: types.StopCauseFromChatError(err),
-			}
+			})
 			return
 		}
 		lastHasMore = hasMore
@@ -1228,10 +1287,10 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 	// Call OnAfterEnd hook
 	hookRunner.AfterEnd(finalResult)
 
-	resultChan <- types.StreamResult{
+	sendStreamResult(ctx, resultChan, types.StreamResult{
 		Type:   "end",
 		Result: finalResult,
-	}
+	})
 }
 
 // executeStreamIteration executes a single streaming iteration
@@ -1285,14 +1344,18 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 		switch msg.Type {
 		case "chunk":
 			outputBuilder.WriteString(msg.Content)
-			resultChan <- types.StreamResult{
+			if !sendStreamResult(ctx, resultChan, types.StreamResult{
 				Type:    "chunk",
 				Content: msg.Content,
+			}) {
+				return nil, false, ctx.Err()
 			}
 		case "reasoning":
-			resultChan <- types.StreamResult{
+			if !sendStreamResult(ctx, resultChan, types.StreamResult{
 				Type:    "reasoning",
 				Content: msg.Reasoning,
+			}) {
+				return nil, false, ctx.Err()
 			}
 		case "tool_calls":
 			for _, tc := range msg.ToolCalls {
