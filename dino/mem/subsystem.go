@@ -32,7 +32,6 @@ type LongTermMem struct {
 	mgr         memkit.Manager
 	log         *slog.Logger
 	newLLM      func(ctx context.Context) (types.LLMProvider, error)
-	llmReady    bool
 
 	mu     sync.Mutex // Start/Stop 幂等
 	cancel context.CancelFunc
@@ -71,7 +70,6 @@ func NewLongTermMem(ctx context.Context, cfg *MemLongTermConfig, llm types.LLMPr
 		}
 		return llm, nil
 	}
-	l.llmReady = llm != nil
 
 	return l, nil
 }
@@ -293,8 +291,6 @@ func (l *LongTermMem) BuildLayeredPrompt(ctx context.Context, uid string) string
 }
 
 // ---- Phase 2 全局合并 ----
-
-const phase2CursorSuffix = "_phase2_watermark"
 
 // runPhase2Loop 独立 goroutine：每 IngestInterval 尝试一次全局合并。
 func runPhase2Loop(ctx context.Context, log *slog.Logger, mgr memkit.Manager, newLLM func(context.Context) (types.LLMProvider, error), cfg *MemLongTermConfig) {
