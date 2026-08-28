@@ -95,11 +95,20 @@ type anthropicContentBlockDeltaData struct {
 	Delta anthropicDelta `json:"delta"`
 }
 
+// anthropicOutputTokensDetails is the read-only decomposition of
+// output_tokens. `thinking_tokens` counts output tokens spent on internal
+// reasoning (thinking blocks + delimiters) and is always ≤ output_tokens.
+type anthropicOutputTokensDetails struct {
+	ThinkingTokens int `json:"thinking_tokens"`
+}
+
 type anthropicMessageDeltaData struct {
 	Type  string         `json:"type"`
 	Delta anthropicDelta `json:"delta"`
 	Usage struct {
-		OutputTokens int `json:"output_tokens"`
+		OutputTokens         int                          `json:"output_tokens"`
+		ReasoningTokens      int                          `json:"reasoning_tokens"` // OpenAI-compat alias some gateways emit
+		OutputTokensDetails  anthropicOutputTokensDetails `json:"output_tokens_details"`
 	} `json:"usage"`
 }
 
@@ -107,10 +116,12 @@ type anthropicMessageStartData struct {
 	Type    string `json:"type"`
 	Message struct {
 		Usage struct {
-			InputTokens             int `json:"input_tokens"`
-			OutputTokens            int `json:"output_tokens"`
-			CacheReadInputTokens    int `json:"cache_read_input_tokens"`
-			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+			InputTokens             int                          `json:"input_tokens"`
+			OutputTokens            int                          `json:"output_tokens"`
+			CacheReadInputTokens    int                          `json:"cache_read_input_tokens"`
+			CacheCreationInputTokens int                         `json:"cache_creation_input_tokens"`
+			ReasoningTokens         int                          `json:"reasoning_tokens"` // OpenAI-compat alias some gateways emit
+			OutputTokensDetails     anthropicOutputTokensDetails `json:"output_tokens_details"`
 		} `json:"usage"`
 	} `json:"message"`
 }
@@ -251,6 +262,11 @@ func (p *NativeAnthropicProvider) readStream(body io.ReadCloser, out chan<- type
 	// B1: Anthropic `input_tokens` is the *uncached remainder* only. The total
 	// prompt size is input_tokens + cache_read_input_tokens + cache_creation_input_tokens.
 	var cacheReadTokens, cacheCreationTokens int
+	// Reasoning (thinking) tokens are reported separately from output_tokens
+	// (as a subset breakdown, not an additive term). message_delta.usage is a
+	// *cumulative* snapshot, so we track the reasoning count for the request
+	// here and emit it when the final usage is built.
+	var reasoningTokens int
 
 	var currentEvent string
 
@@ -288,6 +304,10 @@ func (p *NativeAnthropicProvider) readStream(body io.ReadCloser, out chan<- type
 				inputTokens = ev.Message.Usage.InputTokens
 				cacheReadTokens = ev.Message.Usage.CacheReadInputTokens
 				cacheCreationTokens = ev.Message.Usage.CacheCreationInputTokens
+				reasoningTokens = ev.Message.Usage.ReasoningTokens
+				if rt := ev.Message.Usage.OutputTokensDetails.ThinkingTokens; rt > reasoningTokens {
+					reasoningTokens = rt
+				}
 			}
 
 		case "content_block_start":
@@ -359,6 +379,18 @@ func (p *NativeAnthropicProvider) readStream(body io.ReadCloser, out chan<- type
 				usage.TotalTokens = usage.PromptTokens + ev.Usage.OutputTokens
 				usage.CachedTokens = cacheReadTokens
 				usage.CacheCreationTokens = cacheCreationTokens
+				// Reasoning tokens are a *subset* of output_tokens, so
+				// CompletionTokens/TotalTokens keep billing semantics. Prefer the
+				// cumulative snapshot in message_delta when present (it covers the
+				// full request, unlike the OpenAI-compat alias which gateways may
+				// only populate on message_start).
+				if rt := ev.Usage.ReasoningTokens; rt > reasoningTokens {
+					reasoningTokens = rt
+				}
+				if rt := ev.Usage.OutputTokensDetails.ThinkingTokens; rt > reasoningTokens {
+					reasoningTokens = rt
+				}
+				usage.ReasoningTokens = reasoningTokens
 			}
 
 		case "message_stop":

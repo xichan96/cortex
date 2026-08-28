@@ -175,6 +175,7 @@ func (e *LangChainAgentEngine) ExecuteStreamSimple(ctx context.Context, input ty
 				e.totalUsage.TotalTokens += msg.Usage.TotalTokens
 				e.totalUsage.CachedTokens += msg.Usage.CachedTokens
 				e.totalUsage.CacheCreationTokens += msg.Usage.CacheCreationTokens
+				e.totalUsage.ReasoningTokens += msg.Usage.ReasoningTokens
 				e.mu.Unlock()
 			}
 			select {

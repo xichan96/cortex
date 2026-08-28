@@ -706,6 +706,7 @@ func (ae *AgentEngine) Execute(ctx context.Context, input types.AgentInput, prev
 		totalUsage.TotalTokens += result.Usage.TotalTokens
 		totalUsage.CachedTokens += result.Usage.CachedTokens
 		totalUsage.CacheCreationTokens += result.Usage.CacheCreationTokens
+		totalUsage.ReasoningTokens += result.Usage.ReasoningTokens
 		finalResult = result
 		finalResult.Usage = totalUsage
 		allIntermediateSteps = append(allIntermediateSteps, result.IntermediateSteps...)

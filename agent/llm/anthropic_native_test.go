@@ -65,6 +65,87 @@ func TestReadStreamBackfillsCacheUsage(t *testing.T) {
 	}
 }
 
+// TestReadStreamBackfillsReasoningTokens (P1.1) verifies reasoning_tokens is
+// mapped into types.Usage.ReasoningTokens. It uses the native Anthropic wire
+// shape — output_tokens_details.thinking_tokens as a subset breakdown, plus
+// the OpenAI-compat reasoning_tokens alias some gateways emit — and asserts:
+//   - ReasoningTokens is backfilled
+//   - CompletionTokens/TotalTokens stay on output_tokens (reasoning is a billed
+//     subset, not an additive term)
+//   - message_delta usage is cumulative: the delta snapshot overwrites, it is
+//     not added to the message_start seed (no double count)
+func TestReadStreamBackfillsReasoningTokens(t *testing.T) {
+	sse := "event: message_start\n" +
+		"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":50,\"output_tokens\":0,\"reasoning_tokens\":100,\"output_tokens_details\":{\"thinking_tokens\":80}}}}\n\n" +
+		"event: content_block_delta\n" +
+		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"text\":\"think\"}}\n\n" +
+		"event: content_block_delta\n" +
+		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n" +
+		"event: message_delta\n" +
+		"data: {\"type\":\"message_delta\",\"delta\":{},\"usage\":{\"output_tokens\":20,\"reasoning_tokens\":150,\"output_tokens_details\":{\"thinking_tokens\":150}}}\n\n" +
+		"event: message_stop\n" +
+		"data: {\"type\":\"message_stop\"}\n\n"
+
+	p := &NativeAnthropicProvider{}
+	out := make(chan types.StreamMessage, 16)
+	p.readStream(mockSSEBody(sse), out)
+
+	var final *types.Usage
+	for msg := range out {
+		if msg.Type == "end" {
+			final = msg.Usage
+		}
+	}
+	if final == nil {
+		t.Fatal("expected end event with usage")
+	}
+	// message_delta carries the cumulative snapshot (150); the message_start
+	// seed (100 / 80) must not be added on top of it.
+	if final.ReasoningTokens != 150 {
+		t.Errorf("ReasoningTokens = %d, want 150 (cumulative delta snapshot)", final.ReasoningTokens)
+	}
+	// Reasoning is a subset of output_tokens: CompletionTokens/TotalTokens
+	// keep output_tokens semantics, not output+reasoning.
+	if final.CompletionTokens != 20 {
+		t.Errorf("CompletionTokens = %d, want 20 (output_tokens only)", final.CompletionTokens)
+	}
+	if final.TotalTokens != 70 {
+		t.Errorf("TotalTokens = %d, want 70 (input 50 + output 20)", final.TotalTokens)
+	}
+}
+
+// TestReadStreamReasoningTokensFromMessageStart covers the case where the
+// reasoning count is only present on message_start (some gateways populate only
+// the OpenAI-compat alias there and omit it from message_delta).
+func TestReadStreamReasoningTokensFromMessageStart(t *testing.T) {
+	sse := "event: message_start\n" +
+		"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":50,\"output_tokens\":0,\"reasoning_tokens\":120}}}\n\n" +
+		"event: message_delta\n" +
+		"data: {\"type\":\"message_delta\",\"delta\":{},\"usage\":{\"output_tokens\":30}}\n\n" +
+		"event: message_stop\n" +
+		"data: {\"type\":\"message_stop\"}\n\n"
+
+	p := &NativeAnthropicProvider{}
+	out := make(chan types.StreamMessage, 16)
+	p.readStream(mockSSEBody(sse), out)
+
+	var final *types.Usage
+	for msg := range out {
+		if msg.Type == "end" {
+			final = msg.Usage
+		}
+	}
+	if final == nil {
+		t.Fatal("expected end event with usage")
+	}
+	if final.ReasoningTokens != 120 {
+		t.Errorf("ReasoningTokens = %d, want 120 (from message_start)", final.ReasoningTokens)
+	}
+	if final.CompletionTokens != 30 {
+		t.Errorf("CompletionTokens = %d, want 30", final.CompletionTokens)
+	}
+}
+
 // TestReadStreamNoCacheFields ensures absence of cache fields degrades to zero
 // and PromptTokens stays the plain input_tokens total.
 func TestReadStreamNoCacheFields(t *testing.T) {
