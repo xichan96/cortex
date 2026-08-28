@@ -7,6 +7,7 @@ import (
 	"github.com/xichan96/cortex/agent/llm"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/dino/agent"
+	"github.com/xichan96/cortex/dino/mem"
 )
 
 type Config struct {
@@ -31,6 +32,7 @@ type Config struct {
 	Provider              ProviderConfig         `yaml:"provider"`
 	PlannerMode           PlannerModeConfig      `yaml:"planner_mode"`
 	Memory                MemoryConfig           `yaml:"memory"`
+	LongTermMemory        MemLongTermConfig      `yaml:"long_term_memory"`
 	Subagent              agent.SubagentConfig   `yaml:"subagent"`
 	MCP                   MCPConfig              `yaml:"mcp"`
 }
@@ -47,6 +49,10 @@ type MemoryConfig struct {
 	PersistEnabled     bool   `yaml:"persist_enabled"`
 	Type               string `yaml:"type"` // "memory" or "sqlite"
 }
+
+// MemLongTermConfig 长期记忆配置段。定义在 dino/mem 包（避免 import cycle），
+// 这里按原样引用。
+type MemLongTermConfig = mem.MemLongTermConfig
 
 type PlannerModeConfig struct {
 	Enabled     bool   `yaml:"enabled"`
@@ -200,6 +206,21 @@ func DefaultConfig() *Config {
 			PersistDirectory:   "./dino_sessions",
 			PersistEnabled:     false,
 			Type:               "memory",
+		},
+		LongTermMemory: MemLongTermConfig{
+			Enabled:             false,
+			ToolName:            "memory",
+			WriteKnowledgeTag:   "memory_tool_write",
+			ExposeSearchIndexes: false,
+			IngestInterval:      2 * time.Minute,
+			IngestBatchMax:      50,
+			IngestMinNew:        2,
+			EnableContentFilter: true,
+			PromptMaxTokens:     2500,
+			Phase2Merge:         true,
+			Phase2LLMMerge:      false,
+			MaxUnusedDays:       30,
+			UseSameLLMForIngest: true,
 		},
 		Subagent: agent.SubagentConfig{
 			Enabled:              true,

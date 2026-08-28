@@ -22,6 +22,7 @@ import (
 	agentutils "github.com/xichan96/cortex/agent/utils"
 	dinoAgent "github.com/xichan96/cortex/dino/agent"
 	"github.com/xichan96/cortex/dino/chatstore"
+	dinoMem "github.com/xichan96/cortex/dino/mem"
 	"github.com/xichan96/cortex/dino/permission"
 	"github.com/xichan96/cortex/dino/session"
 	dinoTools "github.com/xichan96/cortex/dino/tools"
@@ -305,6 +306,7 @@ type dinoFactory struct {
 	streamSender         StreamEventSender
 	subagentManager      *dinoAgent.SubagentManager
 	mcpManager           *dinoTools.MCPManager
+	longTermMem          *dinoMem.LongTermMem // 长期记忆子系统句柄（nil = 未启用）
 	sessionToolsProvider func(sessionID string) []types.Tool
 	hooks                hooks.Hooks
 }
@@ -465,6 +467,20 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 			}
 		}
 	}
+	if cfg.LongTermMemory.Enabled {
+		ltm, err := dinoMem.NewLongTermMem(context.Background(), &cfg.LongTermMemory, llmProvider, logger.GetLogger().Slog(),
+			cfg.Memory.PersistDirectory, cfg.Memory.PersistFileName)
+		if err != nil {
+			logger.Warn("[DinoFactory] long-term memory disabled", slog.String("error", err.Error()))
+		} else {
+			f.longTermMem = ltm
+			f.longTermMem.Start()
+			logger.Info("[DinoFactory] long-term memory enabled",
+				slog.String("persist_dir", cfg.Memory.PersistDirectory),
+				slog.String("persist_file", cfg.Memory.PersistFileName))
+		}
+	}
+
 	for _, opt := range opts {
 		opt(f)
 	}
@@ -533,6 +549,15 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	}
 
 	sessionTools := f.tools.GetAll()
+
+	// 长期记忆工具：与 f.longTermMem.Manager() 复用同一进程内单例，不会开第二个连接。
+	if f.longTermMem != nil {
+		ltmTools := f.longTermMem.MemoryToolsForSession(sessionID,
+			dinoMem.WithToolNameOverride("memory"))
+		sessionTools = append(sessionTools, ltmTools...)
+		logger.Info("[DinoFactory] Added long-term memory tools", slog.Int("count", len(ltmTools)))
+	}
+
 	logger.Info("[DinoFactory] Total tools in registry", slog.Int("count", len(sessionTools)))
 	var ruleset permission.Ruleset
 	if len(f.config.Permission) > 0 {
@@ -789,6 +814,11 @@ func (f *dinoFactory) Shutdown(ctx context.Context) error {
 
 		if f.mcpManager != nil {
 			f.mcpManager.Close()
+		}
+
+		if f.longTermMem != nil {
+			f.longTermMem.Stop()
+			f.longTermMem = nil
 		}
 
 		done <- nil
