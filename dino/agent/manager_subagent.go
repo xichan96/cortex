@@ -26,6 +26,137 @@ type SubagentManager struct {
 	// goroutine 在父 session 关闭后继续烧 token。S3 spawn_agent 落地时把子代理 ctx
 	// 的 cancel 注册进这里，CloseSession 遍历 cancel。
 	sessionCancels map[string]map[string]context.CancelFunc
+
+	// notifier 完成通知（mailbox.Put + 旁路事件）。S3 spawn 完成时调用。
+	notifier *CompletionNotifier
+	// spawnSem spawn 并发 semaphore（MaxConcurrentSpawns，满则 Spawn 阻塞排队）。
+	spawnSem chan struct{}
+}
+
+// SpawnHandle 由 Spawn 立刻返回，后台 goroutine 异步执行。
+// Done 在完成且已回发（notifier.Notify 返回）后关闭。
+type SpawnHandle struct {
+	TaskID    string
+	AgentPath AgentPath
+	Done      <-chan struct{}
+}
+
+// SpawnOptions 覆盖 spawn 默认参数（subagent-s3s4 §5.1）。
+type SpawnOptions struct {
+	TimeoutMS int64 // 覆盖 watchdog（默认 SpawnTimeout / 3min）
+	Model     string // 模型覆盖，"" = 继承（S3 仅支持继承，非空时 Spawn 拒绝）
+	TaskName  string // 可选 run 名（roadmap list_agents 用）
+}
+
+// Spawn 发起 fire-and-forget 子代理（subagent-s3s4 §5.1）。
+// ctx 为父 turn ctx（取消传播）：父 ctx cancel → 子代理 ctx 取消。
+// 后台 goroutine 执行 subagent.Execute，完成后经 notifier 回发 mailbox + 事件，
+// 再 close(Done)（保证 Done 语义 = "已完成且已回发"）。
+func (sm *SubagentManager) Spawn(
+	ctx context.Context,
+	parentSessionID string,
+	req *Request,
+	parent AgentPath,
+	mailbox *Mailbox,
+	opts SpawnOptions,
+) (*SpawnHandle, error) {
+	if sm == nil || sm.manager == nil {
+		return nil, nil
+	}
+
+	if opts.Model != "" {
+		// S3 仅支持继承父 provider（设计 §12 风险 9 / OPTIONAL-2：schema 不暴露 model）。
+		return nil, fmt.Errorf("spawn_agent model override not supported in this stage")
+	}
+
+	sm.mu.RLock()
+	notifier := sm.notifier
+	spawnSem := sm.spawnSem
+	sm.mu.RUnlock()
+
+	timeout := DefaultSpawnTimeout
+	if sm.config != nil && sm.config.SpawnTimeout > 0 {
+		timeout = sm.config.SpawnTimeout
+	}
+	if opts.TimeoutMS > 0 {
+		timeout = time.Duration(opts.TimeoutMS) * time.Millisecond
+	}
+
+	taskID := uuid.NewString()
+	taskCtx, cancel := context.WithTimeout(ctx, timeout)
+
+	sm.registerSubagentCancel(parentSessionID, taskID, cancel)
+
+	sa, err := sm.manager.GetSubagent(req.AgentName)
+	if err != nil {
+		sm.unregisterSubagentCancel(parentSessionID, taskID)
+		cancel()
+		return nil, err
+	}
+
+	done := make(chan struct{})
+	go func() {
+		// close(done) 必须无条件执行（含 semaphore 排队被 ctx 取消的提前退出），
+		// 否则调用方 SpawnHandle.Done 永不关闭 → wait_agent 挂死。
+		defer close(done)
+		defer sm.unregisterSubagentCancel(parentSessionID, taskID)
+		defer cancel()
+
+		// 并发 semaphore：Spawn 本身不阻塞（保持 fire-and-forget，父 turn 不被排队拖死）；
+		// 令牌由 goroutine 持有到执行完毕，真正限制并发运行的子代理数。
+		// 父 ctx cancel 时排队中的 goroutine 立即退出（select ctx.Done）。
+		if spawnSem != nil {
+			select {
+			case spawnSem <- struct{}{}:
+				defer func() { <-spawnSem }()
+			case <-ctx.Done():
+				// 提前退出：不投递（父已放弃），仅保证 Done 关闭。
+				return
+			}
+		}
+
+		result, err := sa.Execute(taskCtx, req)
+		env := DelegateResultFromResult(req.AgentName, result, err)
+		env.TaskID = taskID
+		env.AgentPath = parent.Join(req.AgentName).String()
+		env.ParentPath = parent.String()
+
+		if notifier != nil {
+			notifier.Notify(parentSessionID, taskID, env)
+		} else if mailbox != nil {
+			// 无 notifier 时兜底直投 mailbox（测试/未接线场景）。
+			_ = mailbox.Put(taskID, env)
+		}
+	}()
+
+	return &SpawnHandle{
+		TaskID:    taskID,
+		AgentPath: parent.Join(req.AgentName),
+		Done:      done,
+	}, nil
+}
+
+// SetNotifier 注入完成通知器（factory 接线用）。
+func (sm *SubagentManager) SetNotifier(n *CompletionNotifier) {
+	if sm == nil {
+		return
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.notifier = n
+}
+
+// SetMaxConcurrentSpawns 配置 spawn 并发上限（factory 接线用）。
+func (sm *SubagentManager) SetMaxConcurrentSpawns(n int) {
+	if sm == nil {
+		return
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if n <= 0 {
+		n = DefaultMaxConcurrentSpawns
+	}
+	sm.spawnSem = make(chan struct{}, n)
 }
 
 type SubagentManagerFactory interface {

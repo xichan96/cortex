@@ -130,6 +130,30 @@ func TestDelegateResult_Truncated_Error(t *testing.T) {
 	}
 }
 
+// TestDelegateResult_Truncated_UsesAgentPath：信封带 AgentPath/ParentPath 时
+// Truncated 文本用它们（评审 RECOMMENDED-4：Sender/Task name 与委派树脱硬编码）。
+func TestDelegateResult_Truncated_UsesAgentPath(t *testing.T) {
+	env := &DelegateResult{
+		Agent:      "general",
+		Status:     DelegateStatusCompleted,
+		Output:     "done",
+		AgentPath:  "/root/general",
+		ParentPath: "/root",
+	}
+	out := env.Truncated(0)
+	if !strings.Contains(out, "Task name: /root") {
+		t.Errorf("expected Task name from ParentPath: %s", out)
+	}
+	if !strings.Contains(out, "Sender: /root/general") {
+		t.Errorf("expected Sender from AgentPath: %s", out)
+	}
+	// 无路径字段时回退旧形态（S1 兼容）。
+	legacy := (&DelegateResult{Agent: "general", Status: DelegateStatusCompleted, Output: "x"}).Truncated(0)
+	if !strings.Contains(legacy, "Sender: /root/general") {
+		t.Errorf("expected legacy Sender fallback: %s", legacy)
+	}
+}
+
 // TestNewTaskID_Unique：两次委派 task_id 不同（设计 §9.1 #10）。
 func TestNewTaskID_Unique(t *testing.T) {
 	a, b := uuid.NewString(), uuid.NewString()

@@ -243,11 +243,14 @@ func DefaultConfig() *Config {
 			UseSameLLMForIngest: true,
 		},
 		Subagent: agent.SubagentConfig{
-			Enabled:            true,
-			MaxHistoryMessages: 48,
-			NotifyCompletion:   true,
-			CompletionMaxRunes: agent.DefaultDelegateTruncatedRunes,
-			DelegateReturnMode: agent.DelegateReturnModeEnvelope,
+			Enabled:              true,
+			MaxHistoryMessages:   48,
+			NotifyCompletion:     true,
+			CompletionMaxRunes:   agent.DefaultDelegateTruncatedRunes,
+			DelegateReturnMode:   agent.DelegateReturnModeEnvelope,
+			MaxConcurrentSpawns:  agent.DefaultMaxConcurrentSpawns,
+			SpawnTimeout:         agent.DefaultSpawnTimeout,
+			WakeOnCompletion:     false, // S4 灰度开关：默认关，显式开启才启用 B2 唤醒（评审 RECOMMENDED-1）
 		},
 		MCP: MCPConfig{
 			Enabled: false,
