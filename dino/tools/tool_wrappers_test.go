@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"testing"
@@ -9,6 +10,72 @@ import (
 	"github.com/xichan96/cortex/agent/types"
 	agentutils "github.com/xichan96/cortex/agent/utils"
 )
+
+// errTool is a MockTool variant whose Execute always returns the configured error.
+type errTool struct {
+	MockTool
+	err error
+}
+
+func (e *errTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	return nil, e.err
+}
+
+// TestNonFatal_FatalPassthrough verifies every fatal error class (FatalToolError,
+// ApprovalRejectedError, LoopDetectedError) is passed through as a real error
+// instead of being fed back to the model as {ok:false}. (F3/P4.2)
+func TestNonFatal_FatalPassthrough(t *testing.T) {
+	fatals := []error{
+		&types.FatalToolError{Err: errors.New("bad input"), Reason: "validation"},
+		&ApprovalRejectedError{ToolName: "bash"},
+		&LoopDetectedError{ToolName: "bash", Suggestion: "change strategy"},
+		// A fatal error buried under a %w wrap must still be caught.
+		fmt.Errorf("outer: %w", &types.FatalToolError{Reason: "wrapped"}),
+	}
+	for _, fe := range fatals {
+		tool := WrapNonFatalTool(&errTool{MockTool: MockTool{name: "t"}, err: fe})
+		res, err := tool.Execute(context.Background(), nil)
+		if err == nil {
+			t.Fatalf("fatal error %v should be passed through, got result %v", fe, res)
+		}
+		if !types.IsFatalToolError(err) {
+			t.Fatalf("expected passthrough to preserve fatal classification for %v, got %T", fe, err)
+		}
+	}
+}
+
+// TestNonFatal_RecoverableFeedsBack verifies recoverable errors are converted to
+// {ok:false} results fed back to the model.
+func TestNonFatal_RecoverableFeedsBack(t *testing.T) {
+	recoverable := []error{
+		errors.New("MCP call failed: connection refused"),
+		errors.New("tool execution timeout"),
+		errors.New("file not found"),
+	}
+	for _, e := range recoverable {
+		tool := WrapNonFatalTool(&errTool{MockTool: MockTool{name: "t"}, err: e})
+		res, err := tool.Execute(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("recoverable error %v should feed back as result, got err %v", e, err)
+		}
+		m, ok := res.(map[string]interface{})
+		if !ok || m["ok"] != false {
+			t.Fatalf("expected {ok:false} result for %v, got %v", e, res)
+		}
+	}
+}
+
+// TestNonFatal_CtxCancelPassesThrough verifies a cancelled ctx still surfaces as
+// a real error (not swallowed into {ok:false}).
+func TestNonFatal_CtxCancelPassesThrough(t *testing.T) {
+	tool := WrapNonFatalTool(&errTool{MockTool: MockTool{name: "t"}, err: errors.New("boom")})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := tool.Execute(ctx, nil)
+	if err == nil {
+		t.Fatal("cancelled ctx should surface as a real error")
+	}
+}
 
 // MockTool implements types.Tool for testing
 type MockTool struct {

@@ -393,6 +393,12 @@ func (a *ApprovalTool) Execute(ctx context.Context, input map[string]interface{}
 	approved, err := a.store.RequestApproval(ctx, a.sessionID, toolName, argsJSON)
 
 	if err != nil {
+		// The approval channel itself failed (timeout / sender not available /
+		// ctx cancelled). This is NOT a user veto — the user never said no. The
+		// engine may have cancelled us (ctx.Err) or the approval flow is
+		// unavailable; surface it as a plain error so nonFatalTool feeds it back
+		// and the model can re-try or switch tools. A wrapped approval error must
+		// never be misread as a rejection. (P4.2)
 		return nil, fmt.Errorf("approval request failed for tool '%s': %w", toolName, err)
 	}
 

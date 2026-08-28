@@ -90,8 +90,10 @@ func (d *neverLoopDetector) Detect(ctx context.Context, sessionID string, action
 func (d *neverLoopDetector) Record(sessionID string, action agentutils.LoopDetectAction) {}
 func (d *neverLoopDetector) RecordWithResult(sessionID string, action agentutils.LoopDetectAction, resultHash string) {
 }
-func (d *neverLoopDetector) Reset(sessionID string)                                {}
-func (d *neverLoopDetector) GetStats(sessionID string) agentutils.LoopDetectStats { return agentutils.LoopDetectStats{} }
+func (d *neverLoopDetector) Reset(sessionID string) {}
+func (d *neverLoopDetector) GetStats(sessionID string) agentutils.LoopDetectStats {
+	return agentutils.LoopDetectStats{}
+}
 
 // TestNonFatal_ApprovalRejectedPassthrough is the BLOCKER-2 regression test:
 // a user rejection of an approval must NOT be converted into a recoverable
@@ -149,6 +151,36 @@ func TestApprovalTool_RejectionIsApprovalRejectedError(t *testing.T) {
 	var apErr *tools.ApprovalRejectedError
 	if !errors.As(err, &apErr) {
 		t.Fatalf("expected ApprovalRejectedError, got %T: %v", err, err)
+	}
+}
+
+// TestApprovalTool_ChannelErrorIsNotVeto (P4.2) verifies that a failure of the
+// approval channel itself (sender unavailable / timeout / ctx cancel) is NOT a
+// user veto: it surfaces as a plain (recoverable) error, so nonFatalTool feeds
+// it back to the model instead of treating it as an unrecoverable rejection.
+func TestApprovalTool_ChannelErrorIsNotVeto(t *testing.T) {
+	store := NewApprovalStore(0) // no sender → RequestApproval returns ErrApprovalNotAvailable
+
+	inner := &mockTool{name: "bash"}
+	approvalTool := NewApprovalTool(inner, "sess", store, map[string]bool{"bash": true})
+
+	_, err := approvalTool.Execute(context.Background(), map[string]interface{}{"command": "ls"})
+	if err == nil {
+		t.Fatal("expected an error when approval channel is unavailable")
+	}
+	if types.IsFatalToolError(err) {
+		t.Fatalf("approval channel failure must NOT be classified fatal (it is not a user veto): %v", err)
+	}
+
+	// The same error fed through nonFatal must be recoverable ({ok:false}),
+	// never a passthrough.
+	nonFatal := tools.WrapNonFatalTool(approvalTool)
+	res, err := nonFatal.Execute(context.Background(), map[string]interface{}{"command": "ls"})
+	if err != nil {
+		t.Fatalf("approval channel failure should feed back as recoverable, got err: %v", err)
+	}
+	if m, ok := res.(map[string]interface{}); !ok || m["ok"] != false {
+		t.Errorf("expected {ok:false} recoverable result, got %#v", res)
 	}
 }
 
