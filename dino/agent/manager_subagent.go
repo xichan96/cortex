@@ -24,6 +24,13 @@ type SubagentManager struct {
 	tools    []types.Tool
 	mu       sync.RWMutex
 	compiled map[string][]*regexp.Regexp
+
+	// —— S3/B1 铺路（评审 B2 BLOCKER，S1 阶段无 spawn 所以只有接口 + 钩子）——
+	// sessionCancels 按 sessionID 分包：map[sessionID]map[taskID]context.CancelFunc。
+	// CloseSession 通知 manager 释放该 session 派生的所有子代理 cancel，杜绝孤儿
+	// goroutine 在父 session 关闭后继续烧 token。S3 spawn_agent 落地时把子代理 ctx
+	// 的 cancel 注册进这里，CloseSession 遍历 cancel。
+	sessionCancels map[string]map[string]context.CancelFunc
 }
 
 type SubagentManagerFactory interface {
@@ -53,11 +60,12 @@ func NewSubagentManager(config *SubagentConfig, factory SubagentManagerFactory) 
 	}
 
 	return &SubagentManager{
-		config:   config,
-		manager:  NewManager(factory, config.MaxHistoryMessages),
-		llmProv:  factory.GetLLMProvider(),
-		tools:    factory.GetTools(),
-		compiled: compiled,
+		config:         config,
+		manager:        NewManager(factory, config.MaxHistoryMessages),
+		llmProv:        factory.GetLLMProvider(),
+		sessionCancels: make(map[string]map[string]context.CancelFunc),
+		tools:          factory.GetTools(),
+		compiled:       compiled,
 	}
 }
 
@@ -151,6 +159,68 @@ func (sm *SubagentManager) Execute(ctx context.Context, agentName, input string)
 func (sm *SubagentManager) Close() {
 	if sm != nil && sm.manager != nil {
 		sm.manager.Close()
+	}
+	// S3/B1 铺路（评审 B2）：Close 全量 cancel 所有 session 的子代理。
+	sm.cancelSessionAll("")
+}
+
+// CloseSession 释放指定 session 派生的所有子代理 cancel（评审 B2 BLOCKER）。
+// dino factory 的 CloseSession 必须调用它（见 dino/factory.go 接线），否则 spawn
+// 的子代理 goroutine 会脱离父 session 生命周期、只能靠 watchdog 收尸。
+// S1 阶段无 spawn（delegate 仍同步执行），此处只有分桶/释放接口，S3 落地填充。
+func (sm *SubagentManager) CloseSession(sessionID string) {
+	sm.cancelSessionAll(sessionID)
+}
+
+// registerSubagentCancel 注册一次子代理执行的 cancel（S3 spawn_agent 用）。
+func (sm *SubagentManager) registerSubagentCancel(sessionID, taskID string, cancel context.CancelFunc) {
+	if sm == nil || sessionID == "" || taskID == "" || cancel == nil {
+		return
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if sm.sessionCancels == nil {
+		sm.sessionCancels = make(map[string]map[string]context.CancelFunc)
+	}
+	bucket := sm.sessionCancels[sessionID]
+	if bucket == nil {
+		bucket = make(map[string]context.CancelFunc)
+		sm.sessionCancels[sessionID] = bucket
+	}
+	bucket[taskID] = cancel
+}
+
+// unregisterSubagentCancel 移除已完成的子代理 cancel 注册（S3 spawn_agent 完成时调）。
+func (sm *SubagentManager) unregisterSubagentCancel(sessionID, taskID string) {
+	if sm == nil {
+		return
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if bucket := sm.sessionCancels[sessionID]; bucket != nil {
+		delete(bucket, taskID)
+		if len(bucket) == 0 {
+			delete(sm.sessionCancels, sessionID)
+		}
+	}
+}
+
+// cancelSessionAll cancel 指定 session（或全部，sessionID==""）的所有子代理。
+func (sm *SubagentManager) cancelSessionAll(sessionID string) {
+	if sm == nil {
+		return
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	for sid, bucket := range sm.sessionCancels {
+		if sessionID != "" && sid != sessionID {
+			continue
+		}
+		for taskID, cancel := range bucket {
+			cancel()
+			delete(bucket, taskID)
+		}
+		delete(sm.sessionCancels, sid)
 	}
 }
 

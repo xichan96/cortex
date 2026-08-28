@@ -589,3 +589,47 @@ func (m *parentToolCallLLM) GetModelMetadata() types.ModelMetadata {
 // ==================== 导入清理 ====================
 
 var _ = errors.New // 保留 errors 导入（后续错误断言用）
+
+// TestSubagentManager_CloseSessionCancel：S3/B1 铺路（评审 B2 BLOCKER）——
+// session 分包 cancel map + CloseSession 释放该 session 的所有子代理 cancel。
+func TestSubagentManager_CloseSessionCancel(t *testing.T) {
+	sm := newTestSubagentManager(t, newSubagentMockLLMProvider([]string{"x"}))
+
+	ctxA, cancelA := context.WithCancel(context.Background())
+	ctxB, cancelB := context.WithCancel(context.Background())
+	sm.registerSubagentCancel("sess-1", "task-1", cancelA)
+	sm.registerSubagentCancel("sess-1", "task-2", func() { cancelB() })
+	sm.registerSubagentCancel("sess-2", "task-3", context.CancelFunc(func() {}))
+
+	// 关 sess-1：task-1/task-2 的 ctx 应被 cancel，sess-2 不受影响。
+	sm.CloseSession("sess-1")
+	if ctxA.Err() == nil {
+		t.Error("sess-1/task-1 ctx should be cancelled after CloseSession")
+	}
+	if ctxB.Err() == nil {
+		t.Error("sess-1/task-2 ctx should be cancelled after CloseSession")
+	}
+
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	if _, ok := sm.sessionCancels["sess-1"]; ok {
+		t.Error("sess-1 bucket should be dropped after CloseSession")
+	}
+	if _, ok := sm.sessionCancels["sess-2"]; !ok {
+		t.Error("sess-2 bucket should be untouched")
+	}
+}
+
+// TestSubagentManager_CloseCancelsAll：Close 全量 cancel（含跨 session）。
+func TestSubagentManager_CloseCancelsAll(t *testing.T) {
+	sm := newTestSubagentManager(t, newSubagentMockLLMProvider([]string{"x"}))
+	ctxA, cancelA := context.WithCancel(context.Background())
+	ctxB, cancelB := context.WithCancel(context.Background())
+	sm.registerSubagentCancel("sess-1", "t1", cancelA)
+	sm.registerSubagentCancel("sess-2", "t2", cancelB)
+
+	sm.Close()
+	if ctxA.Err() == nil || ctxB.Err() == nil {
+		t.Error("Close should cancel all sessions' subagents")
+	}
+}
