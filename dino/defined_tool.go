@@ -303,20 +303,34 @@ func (s *ApprovalStore) RequestApproval(
 	}
 }
 
-func (s *ApprovalStore) Respond(requestID string, approved bool) {
+// approvalRespondTimeout bounds how long Respond blocks when the approval
+// channel is full (the previous response has not been consumed yet, e.g. a
+// double response). After the timeout the response is dropped rather than
+// hanging the caller (HTTP/MCP gateway goroutine) forever. A var (not const)
+// so tests can shorten it.
+var approvalRespondTimeout = 5 * time.Second
+
+// Respond delivers an approval decision to the pending RequestApproval waiter.
+// It returns true if the decision was delivered, false if the requestID is
+// unknown/cleaned up or the delivery timed out. Unlike the previous
+// select-default drop, it blocks (up to approvalRespondTimeout) so a response
+// is never silently lost while the waiter is still alive.
+func (s *ApprovalStore) Respond(requestID string, approved bool) bool {
 	s.mu.Lock()
 	ch := s.pending[requestID]
 	s.mu.Unlock()
 
 	if ch == nil {
-		return
+		return false // unknown / already cleaned up
 	}
 	select {
 	case ch <- approved:
-	default:
-		logger.Warn("[ApprovalStore] approval response dropped",
+		return true
+	case <-time.After(approvalRespondTimeout):
+		logger.Warn("[ApprovalStore] approval response timed out",
 			slog.String("request_id", requestID),
 			slog.Bool("approved", approved))
+		return false
 	}
 }
 

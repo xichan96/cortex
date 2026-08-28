@@ -3315,3 +3315,151 @@ func TestLoopResult(t *testing.T) {
 		t.Errorf("Expected 0.9, got %f", result.Similarity)
 	}
 }
+
+// recordingApprovalSender records approval requests so tests can correlate
+// requestIDs.
+type recordingApprovalSender struct {
+	mu       sync.Mutex
+	requests []struct {
+		sessionID string
+		requestID string
+		toolName  string
+		args      string
+	}
+}
+
+func (s *recordingApprovalSender) SendToolApprovalRequest(sessionID, requestID, toolName, arguments string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.requests = append(s.requests, struct {
+		sessionID string
+		requestID string
+		toolName  string
+		args      string
+	}{sessionID, requestID, toolName, arguments})
+}
+
+func (s *recordingApprovalSender) SendToolApprovalResponse(sessionID, requestID, toolName string, approved bool) {}
+
+func (s *recordingApprovalSender) firstRequestID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.requests) == 0 {
+		return ""
+	}
+	return s.requests[0].requestID
+}
+
+func TestRespond_UnknownID(t *testing.T) {
+	store := NewApprovalStore(5 * time.Second)
+	if got := store.Respond("does-not-exist", true); got {
+		t.Error("expected false for unknown request id")
+	}
+}
+
+func TestRequestApproval_ThenRespond(t *testing.T) {
+	store := NewApprovalStore(5 * time.Second)
+	sender := &recordingApprovalSender{}
+	store.SetSender(sender)
+
+	done := make(chan bool, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		approved, err := store.RequestApproval(context.Background(), "sess", "bash", `{"command":"ls"}`)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		done <- approved
+	}()
+
+	// Wait for the request to register.
+	var requestID string
+	deadline := time.Now().Add(2 * time.Second)
+	for requestID == "" {
+		requestID = sender.firstRequestID()
+		if requestID == "" {
+			if time.Now().After(deadline) {
+				t.Fatal("approval request was not registered")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+
+	if !store.Respond(requestID, true) {
+		t.Fatal("Respond should deliver")
+	}
+	select {
+	case approved := <-done:
+		if !approved {
+			t.Error("expected approved == true")
+		}
+	case err := <-errCh:
+		t.Fatalf("RequestApproval errored: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("RequestApproval did not return after Respond")
+	}
+}
+
+func TestRespond_BlocksThenSucceeds(t *testing.T) {
+	store := NewApprovalStore(5 * time.Second)
+
+	store.mu.Lock()
+	store.pending["manual-id"] = make(chan bool, 1)
+	// Pre-fill the channel: a previous response that has not been consumed
+	// (RequestApproval's waiter is slow / not yet in its select). Channel full.
+	store.pending["manual-id"] <- true
+	store.mu.Unlock()
+
+	// Second response: channel full, no consumer. Must block, not drop.
+	responded := make(chan bool, 1)
+	go func() {
+		responded <- store.Respond("manual-id", false)
+	}()
+
+	select {
+	case r := <-responded:
+		t.Fatalf("Respond returned %v while channel full and no consumer; expected it to block", r)
+	case <-time.After(100 * time.Millisecond):
+		// good — it is blocking
+	}
+
+	// Now consume the stale value; Respond should deliver and return true.
+	store.mu.Lock()
+	got := <-store.pending["manual-id"]
+	store.mu.Unlock()
+	if !got {
+		t.Error("expected first delivered value true")
+	}
+
+	select {
+	case r := <-responded:
+		if !r {
+			t.Error("expected Respond true after consumer drained channel")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Respond did not unblock after consumer drained channel")
+	}
+}
+
+func TestRespond_Timeout(t *testing.T) {
+	old := approvalRespondTimeout
+	approvalRespondTimeout = 150 * time.Millisecond
+	defer func() { approvalRespondTimeout = old }()
+
+	store := NewApprovalStore(5 * time.Second)
+	store.mu.Lock()
+	store.pending["stuck"] = make(chan bool, 1)
+	store.mu.Unlock()
+
+	// Fill the channel and do not consume.
+	store.pending["stuck"] <- true
+
+	start := time.Now()
+	if got := store.Respond("stuck", false); got {
+		t.Error("expected false on timeout")
+	}
+	if elapsed := time.Since(start); elapsed < 100*time.Millisecond {
+		t.Errorf("Respond returned too fast (%v); expected to block until timeout", elapsed)
+	}
+}
