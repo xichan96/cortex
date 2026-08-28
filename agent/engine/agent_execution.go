@@ -18,6 +18,84 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// chunkMerge defaults for the F6 second-stage chunk coalescing.
+const (
+	// chunkMergeFlushInterval is how long a chunk is held in the merge buffer
+	// before being flushed as one merged chunk. Streaming feels synchronous for
+	// the consumer while cutting event volume on high-throughput streams.
+	chunkMergeFlushInterval = 50 * time.Millisecond
+	// chunkMergeMaxBytes bounds the pending merged chunk. Reached, the buffer
+	// flushes immediately instead of growing unboundedly (128KB ~ 32k tokens).
+	chunkMergeMaxBytes = 128 * 1024
+)
+
+// chunkMerger coalesces consecutive "chunk" stream results into one larger
+// "chunk", flushing on a time interval, on a size cap, or on an explicit
+// Flush. It is single-goroutine by construction (owned by one
+// executeStreamIteration), so it needs no locking or background timer.
+//
+// Time-based flushing is self-paced: each Add checks how long the current
+// merge has been building and flushes when the interval elapses. On a
+// real-time LLM stream the fragments arrive spread over time, so this bounds
+// how late the first fragment of a merge can arrive (≈ the interval) exactly
+// like a timer would — with zero goroutines and no lock. On a synthetic
+// stream that floods instantly, the size cap takes over.
+//
+// The merged stream result is sent through the same guarded send path as
+// ordinary chunk results (sendStreamResult with the caller's turn ctx), so
+// cancellation semantics are unchanged: a full channel blocks, and ctx
+// cancellation aborts the flush — nothing is leaked or silently dropped.
+type chunkMerger struct {
+	flushInterval time.Duration
+	sender        func(types.StreamResult) bool
+
+	sb         strings.Builder
+	lastFlush  time.Time
+}
+
+// newChunkMerger creates a merger that flushes every flushInterval and sends
+// flushed chunks through sender.
+func newChunkMerger(flushInterval time.Duration, sender func(types.StreamResult) bool) *chunkMerger {
+	return &chunkMerger{
+		flushInterval: flushInterval,
+		sender:        sender,
+		lastFlush:     time.Now(),
+	}
+}
+
+// Add appends a chunk fragment, flushing first when the pending merge has
+// grown past the byte cap or been building longer than the flush interval.
+// It reports whether the stream may continue (false when a flush send failed,
+// i.e. the turn ctx was cancelled).
+func (m *chunkMerger) Add(content string) bool {
+	if m.sb.Len() > 0 {
+		overBytes := m.sb.Len()+len(content) > chunkMergeMaxBytes
+		overTime := time.Since(m.lastFlush) >= m.flushInterval
+		if overBytes || overTime {
+			if !m.Flush() {
+				return false
+			}
+		}
+	}
+	m.sb.WriteString(content)
+	if m.sb.Len() >= chunkMergeMaxBytes {
+		return m.Flush()
+	}
+	return true
+}
+
+// Flush sends the pending merged chunk, if any, and returns whether the send
+// succeeded (false when the turn ctx was cancelled mid-flush).
+func (m *chunkMerger) Flush() bool {
+	if m.sb.Len() == 0 {
+		return true
+	}
+	ok := m.sender(types.StreamResult{Type: "chunk", Content: m.sb.String()})
+	m.sb.Reset()
+	m.lastFlush = time.Now()
+	return ok
+}
+
 func (ae *AgentEngine) getConfig() *types.AgentConfig {
 	ae.mu.RLock()
 	defer ae.mu.RUnlock()
@@ -1359,6 +1437,35 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 	var outputBuilder strings.Builder
 	outputBuilder.Grow(2048)
 
+	// F6 second-stage chunk coalescing. Only "chunk" fragments are buffered;
+	// reasoning/tool_event/end/error bypass the buffer and are delivered
+	// immediately. A flush interval <0 disables merging (each fragment sent
+	// as-is, preserving the previous behavior).
+	flushInterval := chunkMergeFlushInterval
+	if c := ae.getConfig(); c != nil && c.ChunkMergeFlushInterval != 0 {
+		flushInterval = c.ChunkMergeFlushInterval
+	}
+	var merged *chunkMerger
+	if flushInterval >= 0 {
+		merged = newChunkMerger(flushInterval, func(r types.StreamResult) bool {
+			return sendStreamResult(ctx, resultChan, r)
+		})
+	}
+	// Flush buffered text on every exit path so no fragment is dropped. A
+	// cancelled turn makes the guarded send abort (returns false) — the caller
+	// then delivers the terminal error, so the fragment is simply not sent.
+	if merged != nil {
+		defer func() { merged.Flush() }()
+	}
+	// flushText flushes buffered text; reports false when the turn was
+	// cancelled mid-flush (the caller should abort the iteration).
+	flushText := func() bool {
+		if merged == nil {
+			return true
+		}
+		return merged.Flush()
+	}
+
 	for msg := range stream {
 		if msg.Usage != nil {
 			result.Usage = *msg.Usage
@@ -1366,7 +1473,14 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 		switch msg.Type {
 		case "chunk":
 			outputBuilder.WriteString(msg.Content)
-			if !sendStreamResult(ctx, resultChan, types.StreamResult{
+			// Buffer the fragment into the merge window instead of sending one
+			// StreamResult per token; the merged chunk preserves order and the
+			// consumer sees far fewer events on high-throughput streams.
+			if merged != nil {
+				if !merged.Add(msg.Content) {
+					return nil, false, ctx.Err()
+				}
+			} else if !sendStreamResult(ctx, resultChan, types.StreamResult{
 				Type:    "chunk",
 				Content: msg.Content,
 			}) {
@@ -1404,6 +1518,13 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 	result.Output = outputBuilder.String()
 
 	if len(result.ToolCalls) > 0 {
+		// Flush buffered text BEFORE tool execution: tool events are emitted by
+		// runToolCallsByLayer and must arrive strictly after the assistant text
+		// that precedes them. Without this, the deferred flush would deliver
+		// text chunks after tool_events, reordering the stream.
+		if !flushText() {
+			return nil, false, ctx.Err()
+		}
 		logger.LogExecution("executeStreamIteration", iteration, "Processing tool calls",
 			slog.Int("tool_count", len(result.ToolCalls)))
 
