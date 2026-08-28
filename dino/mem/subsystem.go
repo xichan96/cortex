@@ -257,11 +257,14 @@ func (l *LongTermMem) BuildLayeredPrompt(ctx context.Context, uid string) string
 		}
 		sort.Strings(cats)
 
-		addedHeader := false
 		for _, cat := range cats {
-			if !addLine("### " + cat) {
-				continue
-			}
+			// 原子添加：先拼好 header + items，预算足够才整体写入，
+			// 避免出现「有 header 无 item」的孤儿段。
+			var block []string
+			blockTokens := 0
+			header := "### " + cat
+			blockTokens += utils.EstimateTokens(header)
+			block = append(block, header)
 			n := 0
 			for _, it := range byCat[cat] {
 				if n >= perCatCap {
@@ -274,14 +277,22 @@ func (l *LongTermMem) BuildLayeredPrompt(ctx context.Context, uid string) string
 				if len(body) > maxKnowBodyLen {
 					body = body[:maxKnowBodyLen] + "..."
 				}
-				if !addLine("- " + body) {
+				line := "- " + body
+				if tokens+blockTokens+utils.EstimateTokens(line) > maxTokens {
 					break
 				}
+				block = append(block, line)
+				blockTokens += utils.EstimateTokens(line)
 				n++
 			}
-			addedHeader = true
+			if len(block) <= 1 {
+				continue // 没有实际 item，不输出孤儿 header
+			}
+			for _, line := range block {
+				parts = append(parts, line)
+				tokens += utils.EstimateTokens(line)
+			}
 		}
-		_ = addedHeader
 	}
 
 	if len(parts) == 0 {
