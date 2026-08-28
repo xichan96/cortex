@@ -706,3 +706,35 @@ type PromptCachingConfig struct {
 3. **`ReasoningTokens` 回填**：顺带实现（Claude thinking 的 `thinking_tokens` 在 SSE `thinking_delta` 有 token 计数），或留给后续。
 4. **compaction 前缀保留（Step 4）**：是否排期？影响长会话（>100 消息）缓存命中率的上限。
 5. **OpenAI 兼容 provider 是否也做 `cached_tokens` 观测回填**：本方案已含（Step 1），仅观测、不注入标记。
+
+---
+
+## 12. 实现备注（2026-08-28，分支 impl-prompt-caching）
+
+实现按评审修正 B1/B2/B3 + R1/R2/R4/R10 落地，以下是相对原设计 §3/§4/§5 的偏差记录：
+
+### 12.1 usage 回填（Step 1）
+- 按 **B1** 修正：`PromptTokens = input_tokens + cache_read_input_tokens + cache_creation_input_tokens`（总输入），`CachedTokens`/`CacheCreationTokens` 为输入内部分拆；`TotalTokens = PromptTokens + CompletionTokens`。§4.2 原表「input_tokens 已含缓存」的断言被推翻。
+- R3 补全累加点：`agent_execution.go`（Execute 循环 + stream 迭代 + stream 最终 totalUsage）、`langchain_engine.go` 三处、`agent.go:143` `GetTotalUsage` 经 `Usage` 的 json tag 自动随 snapshot 序列化（`snapshot.go:64` 无需改代码）。
+- OpenAI 兼容回填（§4.5 + O4）：`extractUsage` 的 `token_usage` 分支（此前直接 return 会跳过 cached 解析）与 direct-keys 分支均解析 `prompt_tokens_details.cached_tokens` / `cached_tokens`。
+
+### 12.2 breakpoint 布局（Step 2）——按 B2 预算式重写
+- 原设计「system + 每 tool + 每 N 条 assistant」被 B2 否决（4-breakpoint 硬上限）。实现为 **预算式 ≤4**：
+  - system 1 个（system 非空时，转 `[]anthropicContentBlock` 数组挂 `cache_control`）；
+  - tools 段只挂**最后一个 tool** 1 个；
+  - 历史段最多 `HistoryEveryN`（默认 **2**，非原设计的间隔 5）个，且总数 ≤ `types.MaxAnthropicCacheBreakpoints = 4`；超限时历史段**降级丢弃**而非报错。
+- 历史 breakpoint 挂在**从尾往头数**的 assistant 消息最后一块（block 数组形态，`mergeConsecutiveRoles` 之后注入），`tool_result` 块永远不挂。
+- 客户端硬编码 4 上限常量 + 超限测试（20 tools + 30 消息 → ≤4）。
+- `MinCacheTokens` 默认 **4096**（R2：Opus/Sonnet 4.6+ 需 2048-4096，1024 会静默不缓存）。历史段估计 token < 阈值时不挂历史 breakpoint。
+
+### 12.3 类型归属（B3）与配置接线（R4/R10）
+- `PromptCacheOptions`/`PromptCacheConfigurer`/`MaxAnthropicCacheBreakpoints` 统一放 `agent/types/prompt_cache.go`；`NativeAnthropicProvider` 实现该接口。engine 只断言 `types.PromptCacheConfigurer`，无 `engine → agent/llm` 依赖。
+- R4：dino `factory.go` 从不调用 `SetConfig`，因此 engine 在 **`NewAgentEngine` 构造时**（`propagateConfigLocked`）就向 provider 透传 `AgentConfig.PromptCaching`；`SetConfig` 同样调用。
+- R10：`dino.Config.PromptCaching` 用**可空子字段**（`*bool`/`*int`），部分 YAML 覆盖不零化其他开关；`PromptCacheConfigurer` 增加 `PromptCacheOptions()` getter，engine 合并时**只改 Enabled**、保留 provider 已配置的子项（dino factory 构造时 `ConfigurePromptCache` 已设置子项）。
+- factory 在 `NewDinoFactory` 创建 provider 后即 `ConfigurePromptCache`，使共享 provider 被 session 引擎与 subagent 引擎共同继承。
+
+### 12.4 遗留（未实现，见 §11 / 评审 R6）
+- **compaction 前缀保留（Step 4）**：不实现。`trimHistoryToTokenBudget` 与 `dino/chatstore` summary 的头部位置未动；长会话（>100 消息）缓存命中率上限由 compaction 决定。排期另议。
+- **`ReasoningTokens` 回填**（O1）：未实现，仍为 0。
+- **增量请求**（§2.4）：明确不做，HTTP 轮询 + 前缀稳定 + breakpoint 已获缓存收益。
+- 集成测试（真实 API，§6.3）：未跑，留 TODO。
