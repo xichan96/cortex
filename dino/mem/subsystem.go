@@ -155,13 +155,14 @@ func (l *LongTermMem) IngestNow(ctx context.Context) error {
 // 内部复用 SharedSQLiteManager 单例，不会开第二个连接。
 func (l *LongTermMem) MemoryToolsForSession(sessionID string, opts ...MemoryToolOption) []types.Tool {
 	o := MemoryToolOptions{
-		SessionID:         sessionID,
-		PersistDir:        l.persistDir,
-		SQLiteFile:        l.persistFile,
-		Log:               l.log,
-		ToolName:          l.cfg.ToolName,
-		WriteKnowledgeTag: l.cfg.WriteKnowledgeTag,
-		Description:       l.cfg.ToolDescription,
+		SessionID:           sessionID,
+		PersistDir:          l.persistDir,
+		SQLiteFile:          l.persistFile,
+		Log:                 l.log,
+		ToolName:            l.cfg.ToolName,
+		WriteKnowledgeTag:   l.cfg.WriteKnowledgeTag,
+		Description:         l.cfg.ToolDescription,
+		ExposeSearchIndexes: l.cfg.ExposeSearchIndexes,
 	}
 	for _, f := range opts {
 		f(&o)
