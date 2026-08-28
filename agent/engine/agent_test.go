@@ -119,6 +119,10 @@ func (p *cacheConfigurableProvider) SetPromptCacheOptions(opts types.PromptCache
 	p.opts = opts
 }
 
+func (p *cacheConfigurableProvider) PromptCacheOptions() types.PromptCacheOptions {
+	return p.opts
+}
+
 // TestNewAgentEngine_PropagatesPromptCacheConfig (R4) verifies that the engine
 // applies PromptCaching to a PromptCacheConfigurer provider at construction —
 // dino/factory.go never calls SetConfig, so this is the only guaranteed path.
@@ -139,6 +143,38 @@ func TestNewAgentEngine_PropagatesPromptCacheConfig(t *testing.T) {
 	NewAgentEngine(provider2, cfg2)
 	if provider2.opts.Enabled {
 		t.Error("expected prompt cache disabled when AgentConfig.PromptCaching=false")
+	}
+}
+
+// TestNewAgentEngine_PreservesPromptCacheSubfields verifies the engine merges
+// only the Enabled flag onto pre-existing provider options (dino sets
+// sub-field overrides at factory construction).
+func TestNewAgentEngine_PreservesPromptCacheSubfields(t *testing.T) {
+	inner := NewMockLLMProvider()
+	provider := &cacheConfigurableProvider{LLMProvider: inner}
+	provider.opts = types.PromptCacheOptions{
+		Enabled:          true,
+		SystemBreakpoint: false,
+		ToolsBreakpoint:  false,
+		HistoryEveryN:    1,
+		MinCacheTokens:   2048,
+	}
+
+	config := types.NewAgentConfig()
+	config.PromptCaching = false
+	NewAgentEngine(provider, config)
+
+	if provider.opts.Enabled {
+		t.Error("Enabled should be overridden to false")
+	}
+	if provider.opts.SystemBreakpoint {
+		t.Error("SystemBreakpoint sub-field should be preserved (false)")
+	}
+	if provider.opts.HistoryEveryN != 1 {
+		t.Errorf("HistoryEveryN sub-field should be preserved, got %d", provider.opts.HistoryEveryN)
+	}
+	if provider.opts.MinCacheTokens != 2048 {
+		t.Errorf("MinCacheTokens sub-field should be preserved, got %d", provider.opts.MinCacheTokens)
 	}
 }
 

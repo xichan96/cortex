@@ -145,8 +145,10 @@ func (ae *AgentEngine) propagateConfigLocked() {
 	}
 
 	// Propagate prompt caching to providers that implement the configurer.
+	// We merge only the Enabled flag onto the provider's existing options so
+	// sub-field overrides (e.g. dino's PromptCachingConfig) are preserved.
 	if pc, ok := ae.model.(types.PromptCacheConfigurer); ok {
-		opts := types.DefaultPromptCacheOptions()
+		opts := pc.PromptCacheOptions()
 		opts.Enabled = ae.config != nil && ae.config.PromptCaching
 		pc.SetPromptCacheOptions(opts)
 	}

@@ -161,6 +161,11 @@ func (p *NativeAnthropicProvider) SetPromptCacheOptions(opts types.PromptCacheOp
 	p.promptCache = opts
 }
 
+// PromptCacheOptions implements types.PromptCacheConfigurer.
+func (p *NativeAnthropicProvider) PromptCacheOptions() types.PromptCacheOptions {
+	return p.promptCache
+}
+
 func (p *NativeAnthropicProvider) GetModelName() string { return p.model }
 func (p *NativeAnthropicProvider) GetModelMetadata() types.ModelMetadata {
 	return types.ModelMetadata{Name: p.model, Version: anthropicVersion, MaxTokens: p.maxTokens}

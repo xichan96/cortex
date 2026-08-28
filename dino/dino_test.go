@@ -1336,6 +1336,89 @@ func TestStreamEvent(t *testing.T) {
 	}
 }
 
+// TestPromptCacheOptions_Mapping verifies dino PromptCachingConfig maps onto
+// types.PromptCacheOptions starting from provider defaults (Step 3).
+func TestPromptCacheOptions_Mapping(t *testing.T) {
+	cfg := DefaultConfig()
+	opts := cfg.PromptCacheOptions()
+	if !opts.Enabled {
+		t.Error("default should be enabled")
+	}
+	if opts.HistoryEveryN != types.DefaultHistoryBreakpointBudget {
+		t.Errorf("default HistoryEveryN = %d, want %d", opts.HistoryEveryN, types.DefaultHistoryBreakpointBudget)
+	}
+	if opts.MinCacheTokens != 4096 {
+		t.Errorf("default MinCacheTokens = %d, want 4096 (R2)", opts.MinCacheTokens)
+	}
+
+	// Partial override: only disable.
+	cfg.PromptCaching.Enabled = false
+	opts = cfg.PromptCacheOptions()
+	if opts.Enabled {
+		t.Error("disabled should propagate")
+	}
+	if opts.SystemBreakpoint != true || opts.ToolsBreakpoint != true || opts.HistoryEveryN != 2 {
+		t.Errorf("unset sub-fields should keep defaults, got %+v", opts)
+	}
+
+	// Full override.
+	historyN := 1
+	minTok := 2048
+	cfg2 := DefaultConfig()
+	cfg2.PromptCaching.HistoryEveryN = &historyN
+	cfg2.PromptCaching.MinCacheTokens = &minTok
+	sysOff := false
+	cfg2.PromptCaching.SystemBreakpoint = &sysOff
+	opts2 := cfg2.PromptCacheOptions()
+	if opts2.HistoryEveryN != 1 || opts2.MinCacheTokens != 2048 || opts2.SystemBreakpoint {
+		t.Errorf("sub-field overrides not applied: %+v", opts2)
+	}
+}
+
+// TestFactoryConfiguresPromptCacheProvider (Step 3) verifies the factory
+// applies dino prompt-cache config to a provider that implements
+// types.PromptCacheConfigurer.
+func TestFactoryConfiguresPromptCacheProvider(t *testing.T) {
+	cfg := getTestConfig()
+	cfg.Provider.Type = "mock"
+
+	var configured types.PromptCacheOptions
+	RegisterLLMProvider("pc-test", func(cfg *Config) (types.LLMProvider, error) {
+		return &pcRecorderProvider{
+			LLMProvider: newMockLLMProvider([]string{"x"}),
+			apply: func(opts types.PromptCacheOptions) {
+				configured = opts
+			},
+		}, nil
+	})
+	cfg.Provider.Type = "pc-test"
+
+	_, err := NewDinoFactory(cfg)
+	if err != nil {
+		t.Fatalf("NewDinoFactory: %v", err)
+	}
+	if !configured.Enabled {
+		t.Error("factory should configure prompt cache enabled by default")
+	}
+}
+
+type pcRecorderProvider struct {
+	types.LLMProvider
+	apply func(types.PromptCacheOptions)
+	opts  types.PromptCacheOptions
+}
+
+func (p *pcRecorderProvider) SetPromptCacheOptions(opts types.PromptCacheOptions) {
+	p.opts = opts
+	if p.apply != nil {
+		p.apply(opts)
+	}
+}
+
+func (p *pcRecorderProvider) PromptCacheOptions() types.PromptCacheOptions {
+	return p.opts
+}
+
 func TestConfig_Default(t *testing.T) {
 	cfg := getTestConfig()
 

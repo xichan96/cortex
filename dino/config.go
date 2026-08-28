@@ -31,6 +31,7 @@ type Config struct {
 	Provider              ProviderConfig         `yaml:"provider"`
 	PlannerMode           PlannerModeConfig      `yaml:"planner_mode"`
 	Memory                MemoryConfig           `yaml:"memory"`
+	PromptCaching         PromptCachingConfig    `yaml:"prompt_caching"`
 	Subagent              agent.SubagentConfig   `yaml:"subagent"`
 	MCP                   MCPConfig              `yaml:"mcp"`
 }
@@ -46,6 +47,18 @@ type MemoryConfig struct {
 	PersistFileName    string `yaml:"persist_file_name"`
 	PersistEnabled     bool   `yaml:"persist_enabled"`
 	Type               string `yaml:"type"` // "memory" or "sqlite"
+}
+
+// PromptCachingConfig controls provider prompt caching. nil sub-fields mean
+// "use the provider default" (see types.DefaultPromptCacheOptions). This lets
+// a partial YAML block (e.g. only `enabled: false`) override just that field
+// instead of silently zeroing the other toggles.
+type PromptCachingConfig struct {
+	Enabled          bool  `yaml:"enabled"`             // default true (pure cost optimization)
+	SystemBreakpoint *bool `yaml:"system_breakpoint,omitempty"`
+	ToolsBreakpoint  *bool `yaml:"tools_breakpoint,omitempty"`
+	HistoryEveryN    *int  `yaml:"history_every_n,omitempty"` // history breakpoint budget (≤ remaining of 4); 0 = none
+	MinCacheTokens   *int  `yaml:"min_cache_tokens,omitempty"`
 }
 
 type PlannerModeConfig struct {
@@ -201,6 +214,9 @@ func DefaultConfig() *Config {
 			PersistEnabled:     false,
 			Type:               "memory",
 		},
+		PromptCaching: PromptCachingConfig{
+			Enabled: true,
+		},
 		Subagent: agent.SubagentConfig{
 			Enabled:              true,
 			TriggerOnKeyword:     true,
@@ -271,6 +287,39 @@ func createLLMProvider(cfg *Config) (types.LLMProvider, error) {
 		return nil, ErrProviderNotFound
 	}
 	return factory(cfg)
+}
+
+// PromptCacheOptions maps dino's PromptCachingConfig onto the shared
+// types.PromptCacheOptions, starting from provider defaults so partial YAML
+// overrides don't zero unrelated toggles.
+func (c *Config) PromptCacheOptions() types.PromptCacheOptions {
+	opts := types.DefaultPromptCacheOptions()
+	if c == nil {
+		return opts
+	}
+	opts.Enabled = c.PromptCaching.Enabled
+	if c.PromptCaching.SystemBreakpoint != nil {
+		opts.SystemBreakpoint = *c.PromptCaching.SystemBreakpoint
+	}
+	if c.PromptCaching.ToolsBreakpoint != nil {
+		opts.ToolsBreakpoint = *c.PromptCaching.ToolsBreakpoint
+	}
+	if c.PromptCaching.HistoryEveryN != nil {
+		opts.HistoryEveryN = *c.PromptCaching.HistoryEveryN
+	}
+	if c.PromptCaching.MinCacheTokens != nil {
+		opts.MinCacheTokens = *c.PromptCaching.MinCacheTokens
+	}
+	return opts
+}
+
+// ConfigurePromptCache applies prompt caching to a provider that supports it.
+// It is a no-op for providers that don't implement types.PromptCacheConfigurer
+// (OpenAI/DeepSeek/Volce — no cache_control protocol).
+func ConfigurePromptCache(provider types.LLMProvider, opts types.PromptCacheOptions) {
+	if pc, ok := provider.(types.PromptCacheConfigurer); ok {
+		pc.SetPromptCacheOptions(opts)
+	}
 }
 
 type ProviderError string

@@ -392,6 +392,11 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 		return nil, fmt.Errorf("failed to create LLM provider: %w", err)
 	}
 
+	// Apply prompt caching at the shared provider level so every engine
+	// (session + subagents) inherits it. The engine also re-applies it at
+	// NewAgentEngine via types.AgentConfig.PromptCaching.
+	ConfigurePromptCache(llmProvider, cfg.PromptCacheOptions())
+
 	toolRegistry := dinoTools.NewRegistry()
 	if err := loadBuiltinTools(toolRegistry, cfg.WorkspaceRoot); err != nil {
 		return nil, fmt.Errorf("load builtin tools: %w", err)
@@ -505,6 +510,7 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	agentConfig.TopP = f.config.TopP
 	agentConfig.MaxBudgetTokens = f.config.Memory.MaxBudgetTokens
 	agentConfig.CompactAfterTurns = f.config.Memory.CompactAfterTurns
+	agentConfig.PromptCaching = f.config.PromptCaching.Enabled
 	sid := sessionID
 	agentConfig.RemainPromptTokens = func() int {
 		if !f.config.Budget.Enabled || f.config.Budget.MaxTokens <= 0 {
