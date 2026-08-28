@@ -186,3 +186,96 @@ ltmTools := f.longTermMem.MemoryToolsForSession(sessionID,
 ### 2.4 Phase 2 复用点
 
 `runPhase2Merge`（`subsystem.go:335`）已经：认领全局锁（`TryClaimPhase2`，`phase2.go:30`）→ 剪枝（`PruneUnused`）→ `mergeDuplicateKnowledge` →（可选）`llmConflictMerge` → 记冷却（`MarkPhase2Cooldown`）。**全部按 user 遍历**，跨 session 合并自动成立。唯一新增：在拿锁后插入迁移钩子（§4.3），保证旧数据先归拢再合并。
+
+---
+
+## 3. 检索范围：per-session → 跨 user 全局
+
+### 3.1 检索入口的 uid 来源（全部收敛到一处）
+
+| 检索路径 | 现状调用 | 改造后 |
+|---|---|---|
+| 工具 `search_knowledge` | `tool.go:241` `SearchKnowledge(ctx, t.sessionID, ...)` | `SearchKnowledge(ctx, t.userID 或回退 sessionID, ...)` |
+| 工具 `list_preferences` | `tool.go:236` `GetUserPreferences(ctx, uid)` | 同上 |
+| 工具 `get_preference` | `tool.go:232` `GetUserPreference(ctx, uid, cat, key)` | 同上 |
+| 工具 `search_indexes` | `tool.go:249` `SearchIndexes(ctx, uid, ...)` | 同上 |
+| 工具 `memory_stats` | `tool.go:253` `GetStats(ctx, uid)` | 同上 |
+| L1 注入 | `factory.go:527` `BuildLayeredPrompt(ctx, sessionID)` | `BuildLayeredPrompt(ctx, userID)`（`userID==""` 时回退 sessionID） |
+
+**关键**：memkit 的 `Search`（`sqlite_knowledge.go:128`）/`GetByUser`（`sqlite_preference.go:76`）的过滤条件 `WHERE user_id = ?` **不用改**——参数从 sessionID 换成 userID 即跨 session 全局检索。这是本设计的核心杠杆：**只改调用方的 uid 参数，不改存储层**。
+
+### 3.2 uid 参数如何在各层传递（避免散落）
+
+1. **工具层**：`sqliteMemoryTool.userID` 字段（§1.7）。`MemoryToolsForSession` 增加 `WithUserID` option，未开启合并时 `userID=""` 保持 sessionID 语义。
+2. **子系统层**：`BuildLayeredPrompt(ctx, uid)` 签名不变，调用方传 userID。
+3. **ingest 层**：`getGlobalUserID` 不动——它已读 `metadata.user_id`，`SetSessionUser` 写入后自动返回 userID。
+
+### 3.3 检索隔离边界（必须保留的 per-session 语义）
+
+- **引用反馈 probe 按 session**：`usage_feedback.go:38` `recordSearchResults(t.sessionID, items)`、`:71` `ObserveAssistantFeedback(ctx, sessionID, text)`——probe 是「turn 内搜了哪些」，**不能**换成 userID，否则 A session 的搜索会把引用记到 B session 的 probe 上。`RecordKnowledgeUse(id)` 按全局 id 计数，不受影响。
+- **cursor 按 session**：`memory_ingest_cursor`（`ingest_meta.go`）主键 `session_id`，**保持**——ingest 增量扫描天然按 session 推进，与 user 无关。
+
+---
+
+## 4. 兼容与迁移
+
+### 4.1 向后兼容矩阵
+
+| 场景 | `UserMergeEnabled=false`（默认） | `UserMergeEnabled=true` |
+|---|---|---|
+| 已有 session（无 `metadata.user_id`） | 行为与现状完全一致：`getGlobalUserID` 回退 sessionID，读写都 per-session | 创建时 `SetSessionUser` 写入归属；旧 session 若未重建，`getGlobalUserID` 仍回退 sessionID，直到迁移归拢 |
+| 已有知识条目（`user_id=sessionID`） | 不动 | Phase 2 迁移归拢到归属 user（§4.3） |
+| 新 session | 无归属写入，per-session | 写归属，读写 user 全局 |
+| L1 / 工具 | sessionID 语义（`userID=""` 回退） | userID 语义 |
+
+### 4.2 旧 session 仍能读到自己的记忆（关键约束）
+
+迁移**归拢而非删除**：把 `user_id=sessionID` 的条目改写到该 session 的归属 `metadata.user_id`。同一 user 的所有旧 session 归到同一 user_id，因此：
+
+- 旧 session A 继续用 `userID`（= 原 sessionID 的归属）检索 → 能读到 A 自己原条目（已归拢），**也**能读到 B 归拢来的共享条目——这正是 user 全局合并的意图。
+- 未开启合并的进程/旧二进制：读到的是 `user_id=sessionID` 的残留（未被迁移的 session）——**默认关时无迁移，无残留**。
+
+### 4.3 迁移：`MigrateLegacySessionKnowledge`（`pkg/memkit/sqlite/migrate_user.go`，新文件）
+
+```go
+// MigrateLegacySessionKnowledge 把「以 sessionID 为 user_id 的旧条目」归拢到
+// 该 session 的 metadata.user_id。幂等：已归拢（user_id 不再是任何 sessionID）
+// 的条目不重复处理。
+//
+// 目标 user 取自每个 session 自己的归属（metadata.user_id），非一刀切 default，
+// 保证多租户下迁移正确。
+func MigrateLegacySessionKnowledge(ctx context.Context, db *sql.DB) (int, error)
+```
+
+逻辑：
+1. `SELECT DISTINCT user_id FROM knowledge` 找出所有「可能是 sessionID 的 uid」。
+2. 对每个候选 uid：`SELECT value FROM metadata WHERE session_id = ? AND key = 'user_id'` 查归属；查不到（无归属）跳过——**该 session 数据保持原样**，等它被 `SetSessionUser` 创建后下次迁移处理。
+3. 有归属 `u` 且 `u != uid`：`UPDATE knowledge SET user_id = u WHERE user_id = uid`；`UPDATE preferences SET user_id = u WHERE user_id = uid`。
+4. **目标 user 归并后的内容级去重**：`UPDATE` 后同 user 下可能产生 normalized-content 重复——交给随后的 `mergeDuplicateKnowledge`（§2.4 顺序保证）用现有 `Add` 去重逻辑收敛。
+5. `context` / `indexes` / `page_index` 的 `user_id` 不迁移——它们分别是 session 级临时上下文（`context` 表 `session_id` 主键）与文档索引，不参与用户长期记忆归并。**边界在 §9 待定点 2 说明。**
+
+`context` 表注意：`sqlite.go:97-111` 的 `context` 表有 `user_id` 列但主键是 `session_id`，是 session 级；迁移只动 `knowledge`/`preferences`。
+
+### 4.4 迁移触发点（挂进 Phase 2）
+
+`runPhase2Merge`（`subsystem.go:335`）拿锁后、`mergeDuplicateKnowledge` 之前插入：
+
+```go
+if cfg.UserMergeEnabled {
+    n, err := memsqlite.MigrateLegacySessionKnowledge(ctx, db)
+    if err != nil {
+        return err // 或记日志继续；建议记日志继续（剪枝/合并下一 tick 重试）
+    }
+    if n > 0 {
+        log.Info("memory_phase2: migrated legacy session knowledge", "count", n)
+    }
+}
+```
+
+**为什么放 Phase 2**：迁移有全表写 + 去重，需要全局锁互斥（多进程），Phase 2 的 `TryClaimPhase2` 正好提供；且迁移后立刻跑 `mergeDuplicateKnowledge` 收敛重复，一个 tick 内完成「归拢 + 去重」。
+
+### 4.5 迁移幂等与失败路径
+
+- **幂等**：第二步的归属查询天然幂等——归拢过的 uid 已不再是 `knowledge.user_id` 候选（除非该 session 又写入了新条目；此时它「旧条目已归拢、新条目直接写 user_id」，下次迁移只搬新条目）。重复执行不产生重复行。
+- **失败路径**：`MigrateLegacySessionKnowledge` 内用单个 `UPDATE`（原子）逐 session 处理；任一失败返回错误，Phase 2 记日志，下一 tick（或 6h 冷却后）重试。**半途中断**：已成功的 session 归拢保留，未处理的下次继续——无中间态损坏。
+- **无归属 session**：跳过（§4.3-2）。这意味着「开启合并前已存在、但从未重建、也没被 `SetSessionUser` 写过的 session」其数据**永远留在 per-session 态**，直到该 session 被创建一次。这是可接受的折中——迁移不猜用户身份。
