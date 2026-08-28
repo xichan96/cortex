@@ -516,6 +516,13 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	if len(f.cortexSkills) > 0 {
 		systemPrompt += agentskills.BuildSystemPromptInjectionWithTriggers(f.cortexSkills)
 	}
+	// 长期记忆 L1 分层披露：session 级快照，CreateSession 时计算一次，
+	// 不随 turn 刷新（评审 R7）。uid = sessionID（per-session 语义，评审 B1）。
+	if f.longTermMem != nil {
+		if l1 := f.longTermMem.BuildLayeredPrompt(ctx, sessionID); l1 != "" {
+			systemPrompt += "\n\n" + l1
+		}
+	}
 	agentConfig.SystemMessage = systemPrompt
 	agentConfig.MaxIterations = f.config.MaxIterations
 	agentConfig.Timeout = f.config.Timeout
