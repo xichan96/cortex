@@ -12,6 +12,23 @@ import (
 	agentutils "github.com/xichan96/cortex/agent/utils"
 )
 
+// ApprovalRejectedError marks a user denial of a tool approval. It is an
+// unrecoverable user veto: feeding it back to the model as a recoverable
+// {ok:false} result would make the model retry the very tool the user just
+// refused, looping until the doom detector fires. Wrappers (nonFatalTool) must
+// pass it through as a real error so the engine surfaces the veto instead of
+// resuming the loop. (BLOCKER-2)
+type ApprovalRejectedError struct {
+	ToolName string
+}
+
+func (e *ApprovalRejectedError) Error() string {
+	if e.ToolName != "" {
+		return fmt.Sprintf("tool '%s' was rejected by user", e.ToolName)
+	}
+	return "tool approval was rejected by user"
+}
+
 // nonFatalTool prevents tool execution errors from terminating the agent loop.
 // Instead, it returns the error as part of the tool result so the LLM can see it and correct.
 type nonFatalTool struct {
@@ -42,6 +59,15 @@ func (t *nonFatalTool) Execute(ctx context.Context, input map[string]interface{}
 	// For loop detected error, we want to return it as a real error to stop the loop
 	var loopErr *LoopDetectedError
 	if errors.As(err, &loopErr) {
+		return nil, err
+	}
+
+	// A rejected approval is an unrecoverable user veto. Feeding it back to the
+	// model as {ok:false} would make the model retry the same tool, re-prompt
+	// the user, and loop until the doom detector fires. Pass it through so the
+	// engine surfaces the veto. (BLOCKER-2)
+	var approvalErr *ApprovalRejectedError
+	if errors.As(err, &approvalErr) {
 		return nil, err
 	}
 

@@ -14,6 +14,7 @@ import (
 
 	agentfs "github.com/xichan96/cortex/agent/tools/builtin/fs"
 	"github.com/xichan96/cortex/agent/types"
+	dinoTools "github.com/xichan96/cortex/dino/tools"
 	"github.com/xichan96/cortex/pkg/logger"
 )
 
@@ -396,7 +397,9 @@ func (a *ApprovalTool) Execute(ctx context.Context, input map[string]interface{}
 	}
 
 	if !approved {
-		return nil, fmt.Errorf("tool '%s' was rejected by user", toolName)
+		// Unrecoverable user veto — must surface as a real error, never be
+		// swallowed by nonFatalTool and fed back to the model.
+		return nil, &ApprovalRejectedError{ToolName: toolName}
 	}
 
 	return a.inner.Execute(ctx, input)
@@ -522,7 +525,8 @@ func (e *ExternalPathApprovalTool) Execute(ctx context.Context, input map[string
 		return nil, fmt.Errorf("workspace path approval: %w", err)
 	}
 	if !approved {
-		return nil, fmt.Errorf("access to paths outside workspace was denied")
+		// Unrecoverable user veto — pass through, never recoverable.
+		return nil, &ApprovalRejectedError{ToolName: e.inner.Name()}
 	}
 	ctx2 := ctx
 	for _, abs := range outside {
@@ -565,3 +569,12 @@ const (
 	ErrApprovalTimeout      ApprovalError = "approval timeout"
 	ErrApprovalNotAvailable ApprovalError = "approval not available in this context"
 )
+
+// ApprovalRejectedError marks a user denial of a tool approval. It is an
+// unrecoverable user veto: feeding it back to the model as a recoverable
+// {ok:false} result would make the model retry the very tool the user just
+// refused, looping until the doom detector fires. Wrappers (nonFatalTool) must
+// pass it through as a real error so the engine surfaces the veto instead of
+// resuming the loop. Defined in dino/tools so both the approval wrappers here
+// and nonFatalTool (in dino/tools) can share it without an import cycle.
+type ApprovalRejectedError = dinoTools.ApprovalRejectedError
