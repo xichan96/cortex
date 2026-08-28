@@ -80,7 +80,6 @@ func NewBudget(cfg *BudgetConfig) Budget {
 type memoryAdapter struct {
 	provider chatstore.Provider
 }
-
 type memProvSaver struct {
 	p chatstore.Provider
 }
@@ -167,7 +166,14 @@ func (m *memoryAdapter) Clear(ctx context.Context) error {
 // GetSummary 转发到 chatstore.Provider.GetSummary（压缩摘要注入）。
 // 不加到 MemoryProvider 接口体（避免破坏 agent/providers 其它实现），
 // 由 engine 在 prepareMessages 用类型断言探测（评审 R3）。
+//
+// 评审 B1 单一注入源：Hybrid 活跃（EnableLLMCompress 且底层被 Hybrid 包裹）时，
+// 摘要由 Hybrid.GetMessages 尾部注入，此处返回空禁用 engine 头部注入，避免双注入。
+// 非 Hybrid 底层（新路径之外的内存/SQLite provider）仍走头部注入。
 func (m *memoryAdapter) GetSummary(ctx context.Context) (string, error) {
+	if h, ok := m.provider.(*chatstore.Hybrid); ok && h.TailSummaryEnabled() {
+		return "", nil
+	}
 	return m.provider.GetSummary(ctx)
 }
 
@@ -195,6 +201,10 @@ func (m *memoryAdapter) StoredMessageCount(ctx context.Context) (int, error) {
 }
 
 func (m *memoryAdapter) CompressMemory(ctx context.Context, llm types.LLMProvider, maxMessages int) error {
+	// llm 已由 engine 传入（agent_execution.go ae.model）；Hybrid 在 factory 构造时已
+	// 注入 LLMSummaryAdapter，无需在此二次传递（避免双源）。maxMessages（keepWindow）
+	// 留作尾部预算上限的提示——本版沿用 provider 内部 Config + LLMSummaryAdapter 输入
+	// 条数上限（评审 R3），不强耦合。
 	return m.provider.Compress(ctx)
 }
 
@@ -658,6 +668,15 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 			SQLiteFile:              f.config.Memory.PersistFileName,
 		}
 
+		// 评审 B2/§5.3：EnableLLMCompress 时压缩统一由 Hybrid/engine 驱动，关底层
+		// provider 的自触发（InMemory.compressAsync / SQLite.compressAsync），避免
+		// DeterministicCompact 与 Hybrid.Compress 竞争写 metadata/删行。
+		// 注意 memConfig 是共享指针：Hybrid.AddMessage 的自触发同样被关闭 → 压缩只走
+		// engine 路径（A5 选项二，评审 R4）。
+		if f.config.Memory.EnableLLMCompress {
+			memConfig.EnableMemoryCompress = false
+		}
+
 		var memProvider chatstore.Provider
 		var err error
 
@@ -671,6 +690,17 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 			}
 		} else {
 			memProvider = chatstore.NewInMemory(sessionID, memConfig)
+		}
+
+		if f.config.Memory.EnableLLMCompress {
+			var lsm chatstore.LLMProvider
+			if f.llmProvider != nil {
+				lsm = chatstore.NewLLMSummaryAdapter(f.llmProvider)
+			}
+			memProvider = chatstore.NewHybrid(sessionID, memProvider, lsm, memConfig)
+			logger.Info("[DinoFactory] Hybrid memory wrapper enabled",
+				slog.String("session_id", sessionID),
+				slog.Bool("llm_summary", lsm != nil))
 		}
 
 		agent.SetMemory(ctx, &memoryAdapter{provider: memProvider})

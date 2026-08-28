@@ -40,6 +40,7 @@ type Config struct {
 
 type MemoryConfig struct {
 	EnableCompress     bool   `yaml:"enable_compress"`
+	EnableLLMCompress  bool   `yaml:"enable_llm_compress"` // 压缩是否走 LLM 摘要（Hybrid 包裹）；false 退回 DeterministicCompact。与 EnableCompress（是否压缩）语义正交
 	MaxHistoryMessages int    `yaml:"max_history_messages"`
 	MaxBudgetTokens    int    `yaml:"max_budget_tokens"`
 	CompactAfterTurns  int    `yaml:"compact_after_turns"`
@@ -215,6 +216,7 @@ func DefaultConfig() *Config {
 		},
 		Memory: MemoryConfig{
 			EnableCompress:     true,
+			EnableLLMCompress:  true,
 			MaxHistoryMessages: 100,
 			MaxBudgetTokens:    0,
 			CompactAfterTurns:  0,

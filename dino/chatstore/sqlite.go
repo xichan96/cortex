@@ -223,7 +223,7 @@ func (s *SQLite) AddMessage(ctx context.Context, msg Message) error {
 	}
 
 	s.stats.MessageCount++
-	s.stats.TotalTokens += estimateTokens(msg.Content)
+	s.stats.TotalTokens += EstimateTokens(msg.Content)
 
 	if s.config.EnableMemoryCompress && s.stats.MessageCount > s.config.MemoryCompressThreshold {
 		if s.comparing.CompareAndSwap(false, true) {

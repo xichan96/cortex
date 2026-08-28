@@ -23,9 +23,12 @@ type MemoryIngestConfig struct {
 }
 
 type MemorySettings struct {
-	MaxBudgetTokens   int `mapstructure:"max_budget_tokens"`
-	CompactAfterTurns int `mapstructure:"compact_after_turns"`
-	CompressThreshold int `mapstructure:"compress_threshold"`
+	MaxBudgetTokens   int    `mapstructure:"max_budget_tokens"`
+	CompactAfterTurns int    `mapstructure:"compact_after_turns"`
+	CompressThreshold int    `mapstructure:"compress_threshold"`
+	// EnableLLMCompress 显式开关：nil=未设置（沿用 dino 默认 true）；true/false=覆盖。
+	// 用指针区分「未设置」与「显式 false」（默认是 true，零值 bool 无法表达）。
+	EnableLLMCompress *bool `mapstructure:"enable_llm_compress"`
 }
 
 type SubagentSettings struct {
