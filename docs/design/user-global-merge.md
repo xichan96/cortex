@@ -422,3 +422,25 @@ LongTermMemory: MemLongTermConfig{
 3. **归属可否变更**：`SetSessionUser` 用 `INSERT OR IGNORE` 固化归属。若用户需要「同 session 切换 user」（如账号切换），需要新的覆盖策略——建议不支持，session 创建即固定归属，账号切换开新 session。
 4. **迁移时机**：迁移挂 Phase 2（6h 冷却内最多跑一次成功）。若用户希望开启后立刻迁移，可提供 `IngestNow` 之外的 `MigrateNow(ctx)` 手动触发入口。
 5. **`DefaultUserID` 是否含 workspace 维度**：单进程多项目（各自独立代码库）共用一个 user 会让记忆串项目。若需要按项目隔离，`DefaultUserID` 应设为 `"<workspace>"` 或 `"<project>"`——由部署方决定。
+
+---
+
+## 10. 设计完成状态（2026-08-29）
+
+**状态**：设计稿完成，未改任何业务代码（仅 docs/design/ 下新增本文件）。可进入实现，按 §7 四步推进。
+
+**改动清单**（实现时）：
+- 新增 `dino/mem/user.go`（`ResolveUserID`）、`pkg/memkit/sqlite/migrate_user.go`（`MigrateLegacySessionKnowledge`）
+- 修改 `dino/mem/{types,subsystem,tool}.go`、`dino/session/session.go`、`dino/factory.go`、`dino/config.go`、`pkg/memkit/sqlite/sqlite_knowledge.go`（Step 4）
+
+**关键决策**：
+- uid 从 sessionID 换 userID 只改调用方（L1/工具/ingest 读 metadata 自动生效），**memkit 存储层零改动**
+- 归属载体复用 `metadata` 表写 `user_id` 键；合并复用 memkit 现有 per-user 去重/覆盖/Phase 2
+- `UserMergeEnabled` 默认 false，兼容性零破坏
+
+**留给用户的待定点**：
+1. `WithUserID` 是否需在 `Client.CreateSession` 暴露（现所有调用方不传）
+2. `context` 表是否跨 session 归并（建议不并入）
+3. 归属是否支持变更（建议 session 创建即固化）
+4. 迁移是否需要 `MigrateNow` 手动触发（现挂 Phase 2）
+5. `DefaultUserID` 是否含 workspace 维度（防多项目串记忆）
