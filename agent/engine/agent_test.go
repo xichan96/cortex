@@ -523,8 +523,8 @@ func TestAgentEngine_Execute_AccumulatesCacheUsage(t *testing.T) {
 		Role:    "assistant",
 		Content: "let me look",
 		ToolCalls: []types.ToolCall{{
-			ID:   "call_1",
-			Type: "function",
+			ID:       "call_1",
+			Type:     "function",
 			Function: types.ToolFunction{Name: "test_tool", Arguments: map[string]interface{}{}},
 		}},
 		Usage: types.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15, CachedTokens: 100, CacheCreationTokens: 50},
@@ -753,8 +753,8 @@ func TestParallelismLimit_One(t *testing.T) {
 		name := fmt.Sprintf("count_%d", i)
 		ae.AddTool(context.Background(), newCountingTool(name, shared))
 		calls = append(calls, types.ToolCall{
-			ID:   fmt.Sprintf("call_%d", i),
-			Type: "function",
+			ID:       fmt.Sprintf("call_%d", i),
+			Type:     "function",
 			Function: types.ToolFunction{Name: name, Arguments: map[string]interface{}{"i": i}},
 		})
 	}
@@ -780,8 +780,8 @@ func TestParallelismLimit_Four(t *testing.T) {
 		name := fmt.Sprintf("count_%d", i)
 		ae.AddTool(context.Background(), newCountingTool(name, shared))
 		calls = append(calls, types.ToolCall{
-			ID:   fmt.Sprintf("call_%d", i),
-			Type: "function",
+			ID:       fmt.Sprintf("call_%d", i),
+			Type:     "function",
 			Function: types.ToolFunction{Name: name, Arguments: map[string]interface{}{"i": i}},
 		})
 	}
@@ -1088,6 +1088,102 @@ func TestResultSender_NoDrop(t *testing.T) {
 	for i, id := range got {
 		if want := fmt.Sprintf("call_%d", i); id != want {
 			t.Fatalf("event %d: expected %s, got %s (order violated)", i, want, id)
+		}
+	}
+}
+
+// fatalReturningTool returns the configured error from Execute (used to exercise
+// the engine's fatal short-circuit for errors coming out of tool execution, not
+// just schema validation).
+type fatalReturningTool struct {
+	MockTool
+	err error
+}
+
+func (t *fatalReturningTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	return nil, t.err
+}
+
+// TestFatal_ExecutionErrorShortCircuits verifies that a fatal error returned from
+// a tool's Execute (e.g. a user veto / loop surfaced by the dino wrappers) short-
+// circuits the errgroup: a same-layer sibling blocking on ctx is released, and
+// the fatal step records the error observation. (P4.2)
+func TestFatal_ExecutionErrorShortCircuits(t *testing.T) {
+	provider := NewMockLLMProvider()
+	config := types.NewAgentConfig()
+	config.EnableToolRetry = false
+	ae := NewAgentEngine(provider, config)
+
+	blocked := NewMockTool("blocked").WithExecuteFunc(func(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	ae.AddTool(context.Background(), &fatalReturningTool{MockTool: *NewMockTool("veto_tool"), err: &types.FatalToolError{Reason: "user veto"}})
+	ae.AddTool(context.Background(), blocked)
+
+	calls := []types.ToolCall{
+		{ID: "call_veto", Type: "function", Function: types.ToolFunction{Name: "veto_tool", Arguments: map[string]interface{}{}}},
+		{ID: "call_blocked", Type: "function", Function: types.ToolFunction{Name: "blocked", Arguments: map[string]interface{}{}}},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	sorted, err := ae.prepareToolCalls(calls)
+	if err != nil {
+		t.Fatalf("prepareToolCalls: %v", err)
+	}
+	exists, results := ae.runToolCallsByLayer(ctx, sorted, 5*time.Second)
+
+	foundFatal := false
+	for i, tc := range sorted {
+		if tc.Function.Name != "veto_tool" {
+			continue
+		}
+		if results[i].err != nil && types.IsFatalToolError(results[i].err) {
+			foundFatal = true
+		}
+	}
+	if !foundFatal {
+		t.Error("expected veto error to be recorded as fatal")
+	}
+	_ = exists
+}
+
+// TestRecoverable_ErrorDoesNotShortCircuit verifies a recoverable execution error
+// does NOT cancel sibling tools: the parallel call still completes normally.
+// (P4.2)
+func TestRecoverable_ErrorDoesNotShortCircuit(t *testing.T) {
+	provider := NewMockLLMProvider()
+	config := types.NewAgentConfig()
+	config.EnableToolRetry = false
+	ae := NewAgentEngine(provider, config)
+
+	okTool := NewMockTool("ok_tool").WithExecuteFunc(func(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+		// If the errgroup were cancelled by the sibling error, this would return
+		// ctx.Err(); a normal completion proves no short-circuit.
+		return "ok result", nil
+	})
+	ae.AddTool(context.Background(), &fatalReturningTool{MockTool: *NewMockTool("mcp_tool"), err: fmt.Errorf("MCP call failed: connection refused")})
+	ae.AddTool(context.Background(), okTool)
+
+	calls := []types.ToolCall{
+		{ID: "call_mcp", Type: "function", Function: types.ToolFunction{Name: "mcp_tool", Arguments: map[string]interface{}{}}},
+		{ID: "call_ok", Type: "function", Function: types.ToolFunction{Name: "ok_tool", Arguments: map[string]interface{}{}}},
+	}
+
+	sorted, err := ae.prepareToolCalls(calls)
+	if err != nil {
+		t.Fatalf("prepareToolCalls: %v", err)
+	}
+	_, results := ae.runToolCallsByLayer(context.Background(), sorted, 5*time.Second)
+
+	for i, tc := range sorted {
+		if tc.Function.Name != "ok_tool" {
+			continue
+		}
+		if results[i].err != nil {
+			t.Fatalf("recoverable error should not cancel sibling tool, got err: %v", results[i].err)
 		}
 	}
 }

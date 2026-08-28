@@ -3,6 +3,8 @@ package types
 import (
 	"context"
 	"fmt"
+
+	stderrors "errors"
 )
 
 // FatalToolError marks a tool error that is NOT recoverable by feeding it back
@@ -28,6 +30,44 @@ func (e *FatalToolError) Error() string {
 }
 
 func (e *FatalToolError) Unwrap() error { return e.Err }
+
+// FatalToolErrorKind implements agent/types.FatalToolErrorKind.
+func (e *FatalToolError) FatalToolErrorKind() {}
+
+// FatalToolErrorKind is implemented by every error type the tool pipeline treats
+// as FATAL (F3/P4.2): an error that cannot be fixed by retrying the same input,
+// so it must surface to the engine and unwind the iteration instead of being fed
+// back to the model as a recoverable {ok:false} result. Engine code recognizes
+// fatal errors via FatalToolErrorKindOf/IsFatalToolError without importing dino;
+// dino/tools errors (ApprovalRejectedError, LoopDetectedError) implement it so a
+// user veto or a loop also short-circuits the errgroup like a schema failure.
+//
+// Errors that are NOT fatal but still carry error codes (EC_TOOL_INPUT_ERROR,
+// EC_TOOL_AUTH_ERROR, MCP 11xxx, EC_TOOL_EXECUTION_TIMEOUT, …) are recoverable:
+// the model can change arguments or retry later, so they are fed back.
+type FatalToolErrorKind interface {
+	error
+	FatalToolErrorKind()
+}
+
+var _ FatalToolErrorKind = (*FatalToolError)(nil)
+
+// FatalToolErrorKindOf classifies an error as fatal (FatalToolErrorKind) or
+// recoverable (nil). It unwraps %w-wrapped errors.
+func FatalToolErrorKindOf(err error) FatalToolErrorKind {
+	var fatal FatalToolErrorKind
+	if stderrors.As(err, &fatal) {
+		return fatal
+	}
+	return nil
+}
+
+// IsFatalToolError reports whether err is a fatal tool error. The schema
+// validation failure at agent_execution.go:407 is already wrapped in
+// FatalToolError; dino-side veto/loop errors implement FatalToolErrorKind.
+func IsFatalToolError(err error) bool {
+	return FatalToolErrorKindOf(err) != nil
+}
 
 // Tool defines tool interface
 type Tool interface {

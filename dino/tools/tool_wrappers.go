@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -18,6 +17,10 @@ import (
 // refused, looping until the doom detector fires. Wrappers (nonFatalTool) must
 // pass it through as a real error so the engine surfaces the veto instead of
 // resuming the loop. (BLOCKER-2)
+//
+// Implements FatalToolErrorKind so the engine treats a veto like any other fatal
+// error: it surfaces in the observation AND short-circuits the errgroup instead
+// of merely being recorded. (P4.2)
 type ApprovalRejectedError struct {
 	ToolName string
 }
@@ -28,6 +31,9 @@ func (e *ApprovalRejectedError) Error() string {
 	}
 	return "tool approval was rejected by user"
 }
+
+// FatalToolErrorKind implements agent/types.FatalToolErrorKind.
+func (e *ApprovalRejectedError) FatalToolErrorKind() {}
 
 // nonFatalTool prevents tool execution errors from terminating the agent loop.
 // Instead, it returns the error as part of the tool result so the LLM can see it and correct.
@@ -56,25 +62,14 @@ func (t *nonFatalTool) Execute(ctx context.Context, input map[string]interface{}
 		return nil, ctx.Err()
 	}
 
-	// For loop detected error, we want to return it as a real error to stop the loop
-	var loopErr *LoopDetectedError
-	if errors.As(err, &loopErr) {
-		return nil, err
-	}
-
-	// A rejected approval is an unrecoverable user veto. Feeding it back to the
-	// model as {ok:false} would make the model retry the same tool, re-prompt
-	// the user, and loop until the doom detector fires. Pass it through so the
-	// engine surfaces the veto. (BLOCKER-2)
-	var approvalErr *ApprovalRejectedError
-	if errors.As(err, &approvalErr) {
-		return nil, err
-	}
-
-	// Fatal tool errors (schema/input failures, tool-not-found) cannot be fixed
-	// by retrying the same input — pass through so the engine can act (F3).
-	var fatalErr *types.FatalToolError
-	if errors.As(err, &fatalErr) {
+	// Fatal errors cannot be fixed by retrying the same input, so pass them
+	// through as real errors instead of feeding them back to the model:
+	//   - FatalToolError (schema/input failures, F3);
+	//   - ApprovalRejectedError (user veto, BLOCKER-2);
+	//   - LoopDetectedError (same input already loops, F2/F3).
+	// types.IsFatalToolError unwraps %w chains, so wrapped variants are caught
+	// too. (P4.2)
+	if types.IsFatalToolError(err) {
 		return nil, err
 	}
 
@@ -199,6 +194,11 @@ type LoopDetectedError struct {
 func (e *LoopDetectedError) Error() string {
 	return fmt.Sprintf("Loop detected with tool %s. %s", e.ToolName, e.Suggestion)
 }
+
+// FatalToolErrorKind implements agent/types.FatalToolErrorKind: a loop is not
+// recoverable by retrying the same call, so it must unwind the iteration rather
+// than being fed back to the model. (P4.2)
+func (e *LoopDetectedError) FatalToolErrorKind() {}
 
 type loopDetectingTool struct {
 	inner     types.Tool

@@ -114,6 +114,18 @@ func toolObservationError(err error, toolName string, cached bool, maxLen int) s
 	return fmt.Sprintf("Tool '%s' execution failed%s: %s", toolName, suffix, detail)
 }
 
+// isFatalToolError reports whether err is a fatal tool error (F3): unrecoverable
+// by retrying the same input, so it must surface to the engine and unwind the
+// iteration rather than being fed back to the model as a recoverable {ok:false}
+// result. nonFatalTool (dino/tools/tool_wrappers.go) mirrors this check; the
+// engine uses it to short-circuit the errgroup and to refuse to swallow a fatal
+// error coming from the tool cache. FatalToolErrorKindOf unwraps %w chains, so
+// the veto/loop errors from dino (which implement FatalToolErrorKind) are caught
+// here too. (P4.2)
+func isFatalToolError(err error) bool {
+	return types.IsFatalToolError(err)
+}
+
 type stepResult struct {
 	result   interface{}
 	err      error
@@ -432,6 +444,17 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 							callback.OnToolInputEnd(tool.Name(), toolCallID, args)
 							callback.OnToolResult(tool.Name(), toolCallID, toolResult)
 						}
+						// A cached fatal error (e.g. a rejected approval cached by an
+						// earlier nonFatal wrap) must not be swallowed as a cached
+						// "error result": nonFatalTool would convert it to {ok:false}
+						// and the model would retry the vetoed tool. Unwind like the
+						// fresh-execution fatal path. (P4.2)
+						if err != nil && isFatalToolError(err) {
+							if callback != nil {
+								callback.OnToolError(tool.Name(), toolCallID, err)
+							}
+							return err
+						}
 						return nil
 					}
 				}
@@ -462,6 +485,19 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 						return nil
 					}
 					lastErr = err
+					// Fatal errors (schema, user veto, loop) are not retryable and
+					// must short-circuit the iteration: retrying the same input
+					// cannot succeed and running the remaining same-layer calls is
+					// wasted work. Cancelling the errgroup releases the sibling
+					// goroutines. (F3/P4.2)
+					if isFatalToolError(err) {
+						results[idx] = stepResult{err: err, cached: false, duration: time.Since(start)}
+						if callback != nil {
+							callback.OnToolError(tool.Name(), toolCallID, err)
+						}
+						hookRunner.AfterToolCall(tool.Name(), nil, err)
+						return err
+					}
 					if attempt < attempts-1 && errors.IsRetryable(err) {
 						timer := time.NewTimer(retryDelay)
 						defer timer.Stop()
@@ -939,7 +975,9 @@ func (ae *AgentEngine) prepareMessages(ctx context.Context, input types.AgentInp
 	// system 之后、history 之前。评审 R3：不改 MemoryProvider 接口体，
 	// 用类型断言探测；L1 记忆在前、摘要在后（Anthropic 合并时顺序稳定）。
 	if ae.memory != nil {
-		if gs, ok := ae.memory.(interface{ GetSummary(context.Context) (string, error) }); ok {
+		if gs, ok := ae.memory.(interface {
+			GetSummary(context.Context) (string, error)
+		}); ok {
 			if summary, sErr := gs.GetSummary(ctx); sErr == nil && summary != "" {
 				messages = append(messages, types.Message{
 					Role:    "system",
