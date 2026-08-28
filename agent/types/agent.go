@@ -92,6 +92,11 @@ type AgentConfig struct {
 	PromptCaching bool `json:"promptCaching,omitempty"`
 	ToolParallelismLimit     int                                                               `json:"toolParallelismLimit,omitempty"` // 0=默认 max(4, GOMAXPROCS*2) 封顶 32；>0 用该值
 	StreamBufferSize         int                                                               `json:"streamBufferSize,omitempty"`     // 0=默认 50；>0 用该值
+	// ChunkMergeFlushInterval batches consecutive stream "chunk" results and
+	// flushes them as one merged chunk. 0=default 50ms. Disable merging by
+	// setting a value <0 (each fragment is sent immediately). Merging never
+	// affects end/error/tool_event delivery — those bypass the buffer.
+	ChunkMergeFlushInterval time.Duration                                                    `json:"chunkMergeFlushInterval,omitempty"` // 0=默认 50ms；<0 禁用合并；>0 用该值
 }
 
 func (c *AgentConfig) EffectiveMaxCompletionTokens() int {
@@ -136,6 +141,7 @@ func NewAgentConfig() *AgentConfig {
 		PromptCaching:            true,
 		ToolParallelismLimit:     0,
 		StreamBufferSize:         0,
+		ChunkMergeFlushInterval:  0,
 	}
 }
 
