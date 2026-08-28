@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/xichan96/cortex/agent/engine"
+	"github.com/xichan96/cortex/agent/hooks"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/dino/permission"
 )
@@ -129,6 +130,22 @@ func (s *subagentImpl) Execute(ctx context.Context, req *Request) (*Result, erro
 	eng := engine.NewAgentEngine(s.llmProvider, cfg)
 	eng.AddTools(ctx, filteredTools)
 
+	// 迭代计数：ExecuteStream 只在 end 事件携带 AgentResult，用 OnAfterIteration 钩子
+	// 数真实迭代轮数（设计 §6.1 Iterations 来源）。
+	iterations := 0
+	eng.SetHooks(ctx, hooks.NewHooksFunc(
+		nil, nil, nil, nil,
+		nil, nil,
+		func(ctx context.Context, hc *hooks.HookContext, iteration int, result *types.AgentResult) error {
+			// OnAfterIteration 每轮都调（含无工具调用的收尾轮），取最大轮数。
+			if iteration+1 > iterations {
+				iterations = iteration + 1
+			}
+			return nil
+		},
+		nil, nil,
+	))
+
 	stream, err := eng.ExecuteStream(ctx, buildAgentInput(req), nil)
 	if err != nil {
 		return nil, err
@@ -136,7 +153,6 @@ func (s *subagentImpl) Execute(ctx context.Context, req *Request) (*Result, erro
 
 	var output strings.Builder
 	var lastUsage types.Usage
-	iterations := 0
 	filesChanged := make([]string, 0)
 	seenFiles := make(map[string]struct{})
 	for result := range stream {
@@ -169,7 +185,6 @@ func (s *subagentImpl) Execute(ctx context.Context, req *Request) (*Result, erro
 			output.Reset()
 			output.WriteString(result.Result.Output)
 			lastUsage = result.Result.Usage
-			iterations++
 		}
 	}
 	if lastUsage.TotalTokens == 0 && lastUsage.PromptTokens == 0 && lastUsage.CompletionTokens == 0 {
