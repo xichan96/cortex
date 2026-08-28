@@ -53,6 +53,10 @@ func (t *tenantManager) SearchKnowledge(ctx context.Context, _ string, query str
 	return t.inner.SearchKnowledge(ctx, t.uid, query, limit)
 }
 
+func (t *tenantManager) RecordKnowledgeUse(ctx context.Context, id string) error {
+	return t.inner.Knowledge().RecordKnowledgeUse(ctx, id)
+}
+
 func (t *tenantManager) BuildIndex(ctx context.Context, _, sourceID, title, content string) (*IndexTree, error) {
 	return t.inner.BuildIndex(ctx, t.uid, sourceID, title, content)
 }
@@ -105,6 +109,7 @@ type Manager interface {
 	AddKnowledge(ctx context.Context, userID, content string, tags ...string) error
 	AddKnowledgeWithCategory(ctx context.Context, userID, content, category string, tags ...string) error
 	SearchKnowledge(ctx context.Context, userID, query string, limit int) ([]MemoryItem, error)
+	RecordKnowledgeUse(ctx context.Context, id string) error
 
 	BuildIndex(ctx context.Context, userID, sourceID, title, content string) (*IndexTree, error)
 	SearchIndexes(ctx context.Context, userID, query string, limit int) (*IndexSearchResult, error)
@@ -342,6 +347,11 @@ func (m *manager) SearchKnowledge(ctx context.Context, userID, query string, lim
 		return nil, err
 	}
 	return result.Items, nil
+}
+
+// RecordKnowledgeUse 记录一条知识被实际引用（转发到 KnowledgeStore）。
+func (m *manager) RecordKnowledgeUse(ctx context.Context, id string) error {
+	return m.know.RecordKnowledgeUse(ctx, id)
 }
 
 func (m *manager) BuildIndex(ctx context.Context, userID, sourceID, title, content string) (*IndexTree, error) {

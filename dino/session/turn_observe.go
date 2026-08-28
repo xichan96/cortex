@@ -3,10 +3,12 @@ package session
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/dino/mem"
 )
 
 const defaultErrFlushWait = 120 * time.Millisecond
@@ -130,6 +132,16 @@ func ObserveOneUserTurn(ctx context.Context, s *Session, in types.AgentInput) (*
 		return nil, false, TurnCanceledError{Err: ctx.Err()}
 	case <-s.Context().Done():
 		return nil, false, TurnSessionClosedError{Err: s.Context().Err()}
+	}
+
+	mu.Lock()
+	assistantText := obs.AssistantText
+	mu.Unlock()
+
+	// 引用反馈（B3）：turn 结束后，若模型最终输出包含本次 turn 内 search_knowledge
+	// 返回条目的内容片段，才计数为一次实际使用。
+	if strings.TrimSpace(assistantText) != "" {
+		mem.ObserveAssistantFeedback(ctx, s.id, assistantText)
 	}
 
 	mu.Lock()

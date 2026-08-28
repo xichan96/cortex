@@ -167,6 +167,13 @@ func (s *SQLiteStore) migrate() error {
 			count INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (session_id, rule_name)
 		)`,
+		`CREATE TABLE IF NOT EXISTS memory_phase2_lock (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			holder TEXT,
+			lease_until DATETIME,
+			cooldown_until DATETIME,
+			updated_at DATETIME
+		)`,
 	}
 
 	for _, m := range migrations {
@@ -177,5 +184,44 @@ func (s *SQLiteStore) migrate() error {
 
 	_, _ = s.db.Exec(`ALTER TABLE index_nodes ADD COLUMN prefix_summary TEXT DEFAULT ''`)
 
+	// 检索反馈列：usage_count / last_usage（评审 R4：ALTER ADD COLUMN 非幂等，
+	// 用 PRAGMA table_info 检查列存在再 ALTER）。
+	if !columnExists(s.db, "knowledge", "usage_count") {
+		if _, err := s.db.Exec(`ALTER TABLE knowledge ADD COLUMN usage_count INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+	if !columnExists(s.db, "knowledge", "last_usage") {
+		if _, err := s.db.Exec(`ALTER TABLE knowledge ADD COLUMN last_usage DATETIME`); err != nil {
+			return err
+		}
+	}
+
 	return nil
+}
+
+// columnExists 检查表中是否存在某列（SQLite PRAGMA table_info）。
+func columnExists(db *sql.DB, table, col string) bool {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			ctype   string
+			notNull int
+			dflt    sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+			continue
+		}
+		if name == col {
+			return true
+		}
+	}
+	return false
 }

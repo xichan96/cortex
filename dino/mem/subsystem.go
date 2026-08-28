@@ -12,6 +12,7 @@ import (
 
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/memkit"
+	memsqlite "github.com/xichan96/cortex/pkg/memkit/sqlite"
 	"github.com/xichan96/cortex/pkg/memkit/utils"
 )
 
@@ -63,6 +64,7 @@ func NewLongTermMem(ctx context.Context, cfg *MemLongTermConfig, llm types.LLMPr
 		mgr:         mgr,
 		log:         log,
 	}
+	setProbePaths(persistDir, persistFile)
 	l.newLLM = func(ctx context.Context) (types.LLMProvider, error) {
 		if llm == nil {
 			return nil, fmt.Errorf("long-term memory: llm provider not available")
@@ -291,13 +293,7 @@ func (l *LongTermMem) BuildLayeredPrompt(ctx context.Context, uid string) string
 
 // ---- Phase 2 全局合并 ----
 
-const (
-	phase2LockID       = 1
-	phase2Lease        = 10 * time.Minute  // 租约：认领后最长持有时间（心跳续期）
-	phase2Cooldown     = 6 * time.Hour     // 成功冷却：成功后 6h 内不再跑
-	phase2PruneBatch   = 200
-	phase2CursorSuffix = "_phase2_watermark"
-)
+const phase2CursorSuffix = "_phase2_watermark"
 
 // runPhase2Loop 独立 goroutine：每 IngestInterval 尝试一次全局合并。
 func runPhase2Loop(ctx context.Context, log *slog.Logger, mgr memkit.Manager, newLLM func(context.Context) (types.LLMProvider, error), cfg *MemLongTermConfig) {
@@ -325,14 +321,16 @@ func runPhase2Loop(ctx context.Context, log *slog.Logger, mgr memkit.Manager, ne
 	}
 }
 
-// runPhase2Merge 执行一次全局合并：认领全局锁 → 合并/剪枝 → 写回 → 记录冷却。
+// runPhase2Merge 执行一次全局合并：认领全局锁 → 剪枝 → 合并/去重 → 记录冷却。
+// 锁原语与剪枝在 pkg/memkit/sqlite（TryClaimPhase2 / PruneUnused），SQLite 方言，
+// 租约与冷却分离（评审 R2）。
 func runPhase2Merge(ctx context.Context, log *slog.Logger, mgr memkit.Manager, newLLM func(context.Context) (types.LLMProvider, error), cfg *MemLongTermConfig) error {
 	db, err := mgrDB(ctx, mgr)
 	if err != nil {
 		return err
 	}
 	holder := fmt.Sprintf("%d", time.Now().UnixNano())
-	claimed, err := tryClaimPhase2(ctx, db, holder, phase2Lease, phase2Cooldown)
+	claimed, err := memsqlite.TryClaimPhase2(ctx, db, holder, memsqlite.Phase2Lease, memsqlite.Phase2Cooldown)
 	if err != nil {
 		return err
 	}
@@ -340,12 +338,11 @@ func runPhase2Merge(ctx context.Context, log *slog.Logger, mgr memkit.Manager, n
 		return nil
 	}
 	defer func() {
-		_, _ = db.ExecContext(ctx, `UPDATE memory_phase2_lock SET holder = NULL, lease_until = NULL, updated_at = ? WHERE id = ? AND holder = ?`,
-			time.Now(), phase2LockID, holder)
+		_ = memsqlite.ReleasePhase2(ctx, db, holder)
 	}()
 
 	if cfg.MaxUnusedDays > 0 {
-		if err := pruneUnused(ctx, db, cfg.MaxUnusedDays); err != nil {
+		if err := memsqlite.PruneUnused(ctx, db, cfg.MaxUnusedDays); err != nil {
 			return err
 		}
 	}
@@ -355,10 +352,7 @@ func runPhase2Merge(ctx context.Context, log *slog.Logger, mgr memkit.Manager, n
 	}
 
 	// 成功 → 更新冷却，其它实例在 cooldown_until 前不抢。
-	_, err = db.ExecContext(ctx,
-		`UPDATE memory_phase2_lock SET cooldown_until = ? WHERE id = ? AND holder = ?`,
-		time.Now().Add(phase2Cooldown), phase2LockID, holder)
-	return err
+	return memsqlite.MarkPhase2Cooldown(ctx, db, holder, memsqlite.Phase2Cooldown)
 }
 
 // mgrDB 从 Manager 取底层 *sql.DB。
@@ -373,57 +367,6 @@ func mgrKnowledgeDB(ctx context.Context, mgr memkit.Manager) *sql.DB {
 	ks := mgr.Knowledge()
 	if k, ok := ks.(interface{ DB() *sql.DB }); ok {
 		return k.DB()
-	}
-	return nil
-}
-
-// tryClaimPhase2 以 SQLite 方言认领全局锁。
-// 语义（评审 R2）：拆 lease_until（短租约）+ cooldown_until（6h 成功冷却）两列，
-// 用 `INSERT ... ON CONFLICT(id) DO UPDATE ... WHERE` 条件更新实现「仅当无持有者 /
-// 租约过期 / 冷却已过时可抢」。
-func tryClaimPhase2(ctx context.Context, db *sql.DB, holder string, lease, cooldown time.Duration) (bool, error) {
-	now := time.Now()
-	res, err := db.ExecContext(ctx, `
-		INSERT INTO memory_phase2_lock (id, holder, lease_until, cooldown_until, updated_at)
-		VALUES (?, ?, ?, NULL, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			holder = excluded.holder,
-			lease_until = excluded.lease_until,
-			updated_at = excluded.updated_at
-		WHERE COALESCE(lease_until, 0) = 0
-		   OR lease_until < ?
-		   OR COALESCE(cooldown_until, 0) = 0
-		   OR cooldown_until < ?`,
-		phase2LockID, holder, now.Add(lease), now,
-		now, now)
-	if err != nil {
-		return false, err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	return n > 0, nil
-}
-
-// pruneUnused 删除 max_unused_days 内未被引用且无使用计数的 knowledge 条目。
-// 对照 codex max_unused_days：usage_count > 0 的条目永不自动删除（被引用即豁免）。
-func pruneUnused(ctx context.Context, db *sql.DB, maxUnusedDays int) error {
-	cutoff := time.Now().Add(-time.Duration(maxUnusedDays) * 24 * time.Hour)
-	if _, err := db.ExecContext(ctx,
-		`DELETE FROM knowledge
-		 WHERE COALESCE(usage_count, 0) = 0
-		   AND (last_usage IS NULL)
-		   AND updated_at < ?`,
-		cutoff); err != nil {
-		return err
-	}
-	// preferences 同理按 updated_at 剪枝（保留上限由 MaxPreferences 控制）。
-	if _, err := db.ExecContext(ctx,
-		`DELETE FROM preferences
-		 WHERE updated_at < ?`,
-		cutoff); err != nil {
-		return err
 	}
 	return nil
 }

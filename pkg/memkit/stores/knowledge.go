@@ -361,6 +361,28 @@ func (s *InMemoryKnowledgeStore) GetStats(ctx context.Context, userID string) (i
 	return len(ids), nil
 }
 
+// RecordKnowledgeUse 记录一条知识被引用（内存实现：跟踪 usage 次数，
+// 用于排序与剪枝豁免的语义一致性）。
+func (s *InMemoryKnowledgeStore) RecordKnowledgeUse(ctx context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, ok := s.entries[id]
+	if !ok {
+		return nil
+	}
+	usage := 0
+	if v, ok := entry.Metadata["usage_count"].(float64); ok {
+		usage = int(v)
+	}
+	usage++
+	if entry.Metadata == nil {
+		entry.Metadata = make(map[string]interface{})
+	}
+	entry.Metadata["usage_count"] = usage
+	return nil
+}
+
 func (s *InMemoryKnowledgeStore) rebuildIndexes(entry *KnowledgeEntry) {
 	userKey := fmt.Sprintf("user:%s", entry.UserID)
 	s.indexes[userKey] = append(s.indexes[userKey], entry.ID)

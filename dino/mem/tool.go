@@ -239,6 +239,9 @@ func (t *sqliteMemoryTool) Execute(ctx context.Context, input map[string]interfa
 		lim := capLimit(intArg(input, "limit", 20), 20, maxKnowledgeSearchLimit)
 		var items []memkit.MemoryItem
 		items, err = t.mgr.SearchKnowledge(ctx, uid, strArg(input, "query"), lim)
+		// 引用反馈候选登记：仅登记「返回给模型的条目」，不在这里计数
+		// （B3：计数发生在 turn 结束后模型实际引用时）。
+		recordSearchResults(t.sessionID, items)
 		out = items
 	case "search_indexes":
 		lim := capLimit(intArg(input, "limit", 10), 10, maxIndexSearchLimit)
