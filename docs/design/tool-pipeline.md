@@ -526,3 +526,26 @@ ae.resultSender = func(result types.StreamResult) {
 5. **F6 合并阶段**：第一版只做「阻塞」，chunk 合并（§6.1）作为第二阶段。是否现在就要？
 6. **F5 返回值**：`Respond` 返回 `bool` 但 `DinoFactory.RespondToolApproval`（`factory.go:705`）签名不动——网关是否需要拿到「送达/超时」信号？需要的话改接口签名（破坏性）。
 7. **F3 / F7 排期**：单列的两项是否进入本季度，还是先落四件套（F2/F4/F5/F6）+ F1？
+
+---
+
+## 13. 实现备注（2026-08-28，落地时相对设计的偏离记录）
+
+按评审 BLOCKER/B-RECOMMENDED 修正后的实际落地决策，全部实现于分支 `impl-tool-pipeline`：
+
+- **F4**：改用 `errgroup.SetLimit`（vendor 内 `x/sync` 有 `errgroup` 无 `semaphore`）实现全局并发上限，效果等同 semaphore 排队。`AgentConfig.ToolParallelismLimit`（0=默认 `max(4, GOMAXPROCS*2)` 封顶 32）+ dino `Tools.MaxToolParallelism`（yaml `max_tool_parallelism`）。**注意**：引擎依赖排序以工具名为 key，同名工具的并行调用会折叠——测试因此用不同名工具。
+- **F5**：`ApprovalStore.Respond` 阻塞 + `approvalRespondTimeout=5s` 超时，返回 `bool`（未知 id / 超时 → false）。`DinoFactory.RespondToolApproval` 签名保持（返回值被忽略）。
+- **F6**：`resultSender` 闭包捕获**调用方 turn ctx**（`ExecuteStream` 入参），满时阻塞发送；`ae.ctx` 仍作为第二道保险监听。**所有**直接 `resultChan <-` 路径改走 `sendStreamResult(ctx, ...)`（nil ctx 安全），chunk/reasoning 发送失败即中止迭代。`resultChan` 用 `getStreamBufferSize()`（`StreamBufferSize` 可配）。
+- **F1**：`TruncateToolResult` 签名改为 `(content, maxLen, writeDir, header OutputHeader) (display, TruncationMeta)`——原第三个返回值 `filePath` 从未被消费，折叠进 `TruncationMeta`。`TruncateMiddle` 50/50 + marker，UTF-8 安全；`truncateText`（toolresult.go）与 `TruncateString`（agent.go）都改为 UTF-8 安全。落盘阈值 `len(content) > maxLen*8`，落盘时正文不进上下文，仅 header + 保存提示（PATH 优先级最高）。采纳 R-1（正文预算下限 maxLen/4，header 让位）+ R-2（真凶是 `s[:maxLen]` UTF-8 不安全）。`output_chars` 字段在最终 header 中渲染，且 guide 行「Output:」永不丢失（`trimHeaderPreserveGuide`）。
+- **F2**：抽 `wrapSessionTool` helper，三处接线 `approval → limiter → nonFatal → loopDetection`。**B1**：收益定位改写为「limiter 结果上限生效 + 错误结构化 `{ok:false}` 呈现」（不再声称修复迭代终止）。**B2**：`ApprovalRejectedError` 定义在 **`dino/tools`**（避免 `dino/tools`↔`dino` 循环依赖，`dino` 侧用类型别名），`nonFatalTool` 对其 `errors.As` 透传；`ApprovalTool`/`ExternalPathApprovalTool` 拒绝时返回该类型。
+- **F3**（落地）：`types.FatalToolError`（带 `Unwrap`）；`nonFatalTool` 透传；引擎 schema 校验失败 wrap 为 fatal 并从 errgroup 返回，取消同层并行调用。审批拒绝为最高优先 fatal 类（来自 B2）。
+- **F7**（部分落地）：`QuestionTool.Execute` 返回 `SentinelQuestionResult{ok:true, question, ask_user:true}` 而非硬错误，避免 build/plan 模式下「放开权限但必报硬错」。**未做**：runner 侧检测该 sentinel → 发 `EventTypeQuestion` + 用户回答回流通道（产品决策点，见 §12.7）。
+- **R-7**：`ApprovalStore.Respond` 改造对当前仓库无调用方（`RespondToolApproval` 无外部调用），为健壮性改进，无害。
+- **R-8**：`session.emit` 5s 超时丢弃未改（保留为 session 层兜底），engine 层不再丢事件。
+
+### 遗留待定点
+1. `FatalToolError` 目前只用于 schema 校验；`EC_TOOL_AUTH_ERROR` / `EC_TOOL_INPUT_ERROR` / MCP 错误分类是否也该进 fatal 清单需单独评审。
+2. F7 的「用户回答回流」无通道，产品近期若要用 question 需另立设计。
+3. F6 的 chunk 合并（§6.1 第二阶段）未做，第一版仅阻塞保真。
+4. limiter 默认 120KB/60KB 未下调（§12.3）；`dino/session` 层 `emit` 超时丢弃仍未带可观测计数。
+5. `go test ./...` 中 `scheduler` 包因 vendor 缺 `github.com/stretchr/objx`（网络拉取失败）无法编译，与本次改动无关（base commit 同样失败）。
