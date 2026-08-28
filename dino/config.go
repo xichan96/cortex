@@ -221,6 +221,8 @@ func DefaultConfig() *Config {
 			Enabled:              true,
 			TriggerOnKeyword:     true,
 			MaxHistoryMessages:   48,
+			NotifyCompletion:     true,
+			CompletionMaxRunes:   agent.DefaultDelegateTruncatedRunes,
 			Triggers: []agent.SubagentTrigger{
 				{
 					AgentName: "general",

@@ -680,6 +680,11 @@ func (f *dinoFactory) CloseSession(sessionID string) {
 		sess.Close()
 		delete(f.sessions, sessionID)
 	}
+	// S3/B1 铺路（评审 B2 BLOCKER）：释放该 session 派生的所有子代理 cancel。
+	// S1 阶段无 spawn，此钩子是接口预留；S3 spawn_agent 落地后生效。
+	if f.subagentManager != nil {
+		f.subagentManager.CloseSession(sessionID)
+	}
 }
 
 func (f *dinoFactory) CloseAll() {

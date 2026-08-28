@@ -47,13 +47,12 @@ func (m *subagentMockLLMProvider) Chat(ctx context.Context, messages []types.Mes
 }
 
 func (m *subagentMockLLMProvider) ChatStream(ctx context.Context, messages []types.Message) (<-chan types.StreamMessage, error) {
-	ch := make(chan types.StreamMessage, 1)
-	ch <- types.StreamMessage{
-		Type:    "chunk",
-		Content: m.responses[0],
-	}
-	close(ch)
-	return ch, nil
+	return m.ChatWithToolsStream(ctx, messages, nil)
+}
+
+// usage 返回每次调用固定的 mock token 用量（供结构化采集断言）。
+func (m *subagentMockLLMProvider) usage() types.Usage {
+	return types.Usage{PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30}
 }
 
 func (m *subagentMockLLMProvider) ChatWithTools(ctx context.Context, messages []types.Message, tools []types.Tool) (types.Message, error) {
@@ -61,7 +60,27 @@ func (m *subagentMockLLMProvider) ChatWithTools(ctx context.Context, messages []
 }
 
 func (m *subagentMockLLMProvider) ChatWithToolsStream(ctx context.Context, messages []types.Message, tools []types.Tool) (<-chan types.StreamMessage, error) {
-	return m.ChatStream(ctx, messages)
+	m.mu.Lock()
+	m.callCount++
+	content := m.responses[0]
+	m.mu.Unlock()
+
+	ch := make(chan types.StreamMessage, 1)
+	u := m.usage()
+	ch <- types.StreamMessage{
+		Type:    "chunk",
+		Content: content,
+		Usage:   &u,
+	}
+	close(ch)
+	return ch, nil
+}
+
+// callCountSafe 返回累计调用次数（测试断言用，加锁读）。
+func (m *subagentMockLLMProvider) callCountSafe() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.callCount
 }
 
 func (m *subagentMockLLMProvider) GetModelName() string {
@@ -72,9 +91,14 @@ func (m *subagentMockLLMProvider) GetModelMetadata() types.ModelMetadata {
 	return types.ModelMetadata{Name: "mock-model"}
 }
 
-type subagentMockFactory struct{}
+type subagentMockFactory struct {
+	llm types.LLMProvider // 可选覆盖，nil 时用默认 mock
+}
 
 func (f *subagentMockFactory) GetLLMProvider() types.LLMProvider {
+	if f != nil && f.llm != nil {
+		return f.llm
+	}
 	return newSubagentMockLLMProvider([]string{"mock response"})
 }
 
