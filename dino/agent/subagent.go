@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -13,15 +14,25 @@ import (
 )
 
 const (
-	subagentMaxIterations   = 50
-	subagentExecuteTimeout  = 3 * time.Minute
-	subagentMaxFileBytes    = 32 << 10
+	subagentMaxIterations  = 50
+	subagentExecuteTimeout = 3 * time.Minute
+	subagentMaxFileBytes   = 32 << 10
 )
 
 type Result struct {
 	Output string
 	Error  error
 	Usage  types.Usage
+
+	// —— 结构化字段（设计 docs/design/subagent.md §6.1，方案 A）——
+	// Status 终态："completed" | "error" | "timeout" | "cancelled"。
+	Status string
+	// Duration 墙钟耗时（含队列等待）。
+	Duration time.Duration
+	// Iterations 实际迭代数。
+	Iterations int
+	// FilesChanged 子代理涉猎/改动的文件路径（tool_event 采集 + prompt 引导）。
+	FilesChanged []string
 }
 
 type Request struct {
@@ -111,6 +122,7 @@ func buildAgentInput(req *Request) types.AgentInput {
 }
 
 func (s *subagentImpl) Execute(ctx context.Context, req *Request) (*Result, error) {
+	start := time.Now()
 	cfg := s.buildConfig(req)
 	filteredTools := s.filterTools()
 
@@ -124,18 +136,40 @@ func (s *subagentImpl) Execute(ctx context.Context, req *Request) (*Result, erro
 
 	var output strings.Builder
 	var lastUsage types.Usage
+	iterations := 0
+	filesChanged := make([]string, 0)
+	seenFiles := make(map[string]struct{})
 	for result := range stream {
 		if result.Error != nil {
-			return &Result{Error: result.Error}, nil
+			// 错误态折叠（含 ctx deadline -> timeout / ctx cancel -> cancelled）。
+			status := statusFromStreamError(result.Error)
+			return &Result{
+				Error:        result.Error,
+				Status:       status,
+				Duration:     time.Since(start),
+				Iterations:   iterations,
+				FilesChanged: filesChanged,
+			}, nil
 		}
 		switch result.Type {
 		case "chunk":
 			output.WriteString(result.Content)
+		case "tool_event":
+			// 程序化 files_changed 采集：捕获 write_file/edit_file 工具输入里的 path 键。
+			if result.ToolEvent != nil {
+				if p := filesChangedFromToolEvent(result.ToolEvent); p != "" {
+					if _, ok := seenFiles[p]; !ok {
+						seenFiles[p] = struct{}{}
+						filesChanged = append(filesChanged, p)
+					}
+				}
+			}
 		}
 		if result.Result != nil {
 			output.Reset()
 			output.WriteString(result.Result.Output)
 			lastUsage = result.Result.Usage
+			iterations++
 		}
 	}
 	if lastUsage.TotalTokens == 0 && lastUsage.PromptTokens == 0 && lastUsage.CompletionTokens == 0 {
@@ -143,9 +177,52 @@ func (s *subagentImpl) Execute(ctx context.Context, req *Request) (*Result, erro
 	}
 
 	return &Result{
-		Output: output.String(),
-		Usage:  lastUsage,
+		Output:       output.String(),
+		Usage:        lastUsage,
+		Status:       DelegateStatusCompleted,
+		Duration:     time.Since(start),
+		Iterations:   iterations,
+		FilesChanged: filesChanged,
 	}, nil
+}
+
+// statusFromStreamError 根据 stream 错误类型判定终态：
+// ctx deadline 超时 -> "timeout"；ctx 主动取消 -> "cancelled"；其余 -> "error"。
+func statusFromStreamError(err error) string {
+	if err == nil {
+		return DelegateStatusError
+	}
+	switch {
+	case stderrors.Is(err, context.DeadlineExceeded):
+		return DelegateStatusTimeout
+	case stderrors.Is(err, context.Canceled):
+		return DelegateStatusCancelled
+	}
+	return DelegateStatusError
+}
+
+// filesChangedFromToolEvent 从工具事件里提取文件路径：
+// write_file/edit_file 用 "path" 键（fs/write.go:37、fs/edit.go:36）。
+// 工具事件分 tool_call / tool_input_start / tool_input_end 三个阶段，只取一次即可，
+// 用 tool_input_start 采集避免与结果阶段重复；bash 的 git 操作无 path 键，属已知残留
+// （评审 R3：bash git 场景 files_changed 会漏，S5 用 prompt 引导兜底）。
+func filesChangedFromToolEvent(ev *types.ToolEvent) string {
+	if ev == nil || ev.Input == nil {
+		return ""
+	}
+	switch ev.ToolName {
+	case "write_file", "edit_file":
+	default:
+		return ""
+	}
+	if ev.Event != types.StreamEventToolInputStart {
+		return ""
+	}
+	p, ok := ev.Input["path"].(string)
+	if !ok || p == "" {
+		return ""
+	}
+	return p
 }
 
 func (s *subagentImpl) buildConfig(req *Request) *types.AgentConfig {
@@ -191,10 +268,10 @@ func (s *subagentImpl) Close() {
 }
 
 type Manager struct {
-	mu                   sync.RWMutex
-	subagents            map[string]Subagent
-	factory              Factory
-	subagentMaxHistory   int
+	mu                 sync.RWMutex
+	subagents          map[string]Subagent
+	factory            Factory
+	subagentMaxHistory int
 }
 
 type Factory interface {

@@ -8,7 +8,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/xichan96/cortex/agent/engine"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/dino/permission"
@@ -181,15 +183,29 @@ func (t *SubagentTool) Schema() map[string]interface{} {
 				"type":        "string",
 				"description": "The task description for the subagent",
 			},
+			"task_id": map[string]interface{}{
+				"type":        "string",
+				"description": "Optional; omit to auto-generate. Reuse to attach to an existing run (B 阶段).",
+			},
 		},
 		"required": []string{"agent", "task"},
 	}
 }
 
 func (t *SubagentTool) Metadata() types.ToolMetadata {
-	return types.ToolMetadata{ToolType: "builtin"}
+	// B1（评审 BLOCKER）：工具结果缓存毒化。delegate_to_agent 返回值从裸字符串改成
+	// 信封后，AgentEngine 的 toolCache（LRU + 5min TTL，key = toolName+args MD5）会让
+	// 父 LLM 在 5 分钟内混读裸字符串/信封两种形态。这里用 Extra["no_cache"]=true
+	// （agent_execution.go:354-359 已支持）从根上关掉 delegate 的缓存。
+	return types.ToolMetadata{
+		ToolType: "builtin",
+		Extra:    map[string]interface{}{"no_cache": true},
+	}
 }
 
+// Execute 返回 *DelegateResult 信封（方案 A，S1）。
+// 错误路径折叠进信封（评审 R1）：manager.Execute 出错时返回 Status=="error" 的信封 +
+// nil error，让错误态在 A 阶段对模型可见，而非走 toolObservationError 字符串分支。
 func (t *SubagentTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	if t.manager == nil {
 		return "", nil
@@ -202,16 +218,19 @@ func (t *SubagentTool) Execute(ctx context.Context, input map[string]interface{}
 		return nil, fmt.Errorf("agent and task are required")
 	}
 
+	start := time.Now()
 	result, err := t.manager.Execute(ctx, agentName, task)
-	if err != nil {
-		return nil, err
+
+	env := DelegateResultFromResult(agentName, result, err)
+	env.TaskID = uuid.NewString()
+	if env.DurationMS == 0 {
+		env.DurationMS = time.Since(start).Milliseconds()
 	}
 
 	if result != nil {
 		t.maybeReplayToParentMemory(ctx, agentName, task, result)
-		return result.Output, nil
 	}
-	return "", nil
+	return env, nil
 }
 
 const replayTaskMax = 2048

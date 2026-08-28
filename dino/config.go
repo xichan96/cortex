@@ -10,29 +10,29 @@ import (
 )
 
 type Config struct {
-	DefaultModel          string                   `yaml:"default_model"`
-	DefaultProvider       string                   `yaml:"default_provider"`
-	Temperature           float32                  `yaml:"temperature"`
-	MaxTokens             int                      `yaml:"max_tokens"`
-	TopP                  float32                  `yaml:"top_p"`
-	Timeout               time.Duration            `yaml:"timeout"`
-	SystemPrompt          string                   `yaml:"system_prompt"`
-	MaxIterations         int                      `yaml:"max_iterations"`
-	MaxSessions           int                      `yaml:"max_sessions"`
-	ToolExecutionTimeout  time.Duration            `yaml:"tool_execution_timeout"`
-	ToolTimeouts          map[string]time.Duration `yaml:"tool_timeouts"`
+	DefaultModel          string                                                            `yaml:"default_model"`
+	DefaultProvider       string                                                            `yaml:"default_provider"`
+	Temperature           float32                                                           `yaml:"temperature"`
+	MaxTokens             int                                                               `yaml:"max_tokens"`
+	TopP                  float32                                                           `yaml:"top_p"`
+	Timeout               time.Duration                                                     `yaml:"timeout"`
+	SystemPrompt          string                                                            `yaml:"system_prompt"`
+	MaxIterations         int                                                               `yaml:"max_iterations"`
+	MaxSessions           int                                                               `yaml:"max_sessions"`
+	ToolExecutionTimeout  time.Duration                                                     `yaml:"tool_execution_timeout"`
+	ToolTimeouts          map[string]time.Duration                                          `yaml:"tool_timeouts"`
 	ToolTimeoutCalculator func(toolName string, input map[string]interface{}) time.Duration `json:"-" yaml:"-"`
-	LoopDetection         LoopDetectionConfig    `yaml:"loop_detection"`
-	Budget                BudgetConfig           `yaml:"budget"`
-	Tools                 ToolConfig             `yaml:"tools"`
-	Permission            map[string]interface{} `yaml:"permission"`
-	WorkspaceRoot         string                 `yaml:"workspace_root"`
-	Skills                SkillsConfig           `yaml:"skills"`
-	Provider              ProviderConfig         `yaml:"provider"`
-	PlannerMode           PlannerModeConfig      `yaml:"planner_mode"`
-	Memory                MemoryConfig           `yaml:"memory"`
-	Subagent              agent.SubagentConfig   `yaml:"subagent"`
-	MCP                   MCPConfig              `yaml:"mcp"`
+	LoopDetection         LoopDetectionConfig                                               `yaml:"loop_detection"`
+	Budget                BudgetConfig                                                      `yaml:"budget"`
+	Tools                 ToolConfig                                                        `yaml:"tools"`
+	Permission            map[string]interface{}                                            `yaml:"permission"`
+	WorkspaceRoot         string                                                            `yaml:"workspace_root"`
+	Skills                SkillsConfig                                                      `yaml:"skills"`
+	Provider              ProviderConfig                                                    `yaml:"provider"`
+	PlannerMode           PlannerModeConfig                                                 `yaml:"planner_mode"`
+	Memory                MemoryConfig                                                      `yaml:"memory"`
+	Subagent              agent.SubagentConfig                                              `yaml:"subagent"`
+	MCP                   MCPConfig                                                         `yaml:"mcp"`
 }
 
 type MemoryConfig struct {
@@ -113,12 +113,12 @@ type BudgetConfig struct {
 
 func DefaultConfig() *Config {
 	return &Config{
-		DefaultModel:         "gpt-4o-mini",
-		DefaultProvider:      "openai",
-		Temperature:          0.7,
-		MaxTokens:            4096,
-		TopP:                 1.0,
-		Timeout:              30 * time.Second,
+		DefaultModel:    "gpt-4o-mini",
+		DefaultProvider: "openai",
+		Temperature:     0.7,
+		MaxTokens:       4096,
+		TopP:            1.0,
+		Timeout:         30 * time.Second,
 		SystemPrompt: `You are an interactive AI coding assistant. Use the tools available to help the user with software engineering tasks.
 
 # Doing tasks
@@ -202,9 +202,11 @@ func DefaultConfig() *Config {
 			Type:               "memory",
 		},
 		Subagent: agent.SubagentConfig{
-			Enabled:              true,
-			TriggerOnKeyword:     true,
-			MaxHistoryMessages:   48,
+			Enabled:            true,
+			TriggerOnKeyword:   true,
+			MaxHistoryMessages: 48,
+			NotifyCompletion:   true,
+			CompletionMaxRunes: agent.DefaultDelegateTruncatedRunes,
 			Triggers: []agent.SubagentTrigger{
 				{
 					AgentName: "general",
