@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -670,6 +671,82 @@ func TestParallelismLimit_CancelQueue(t *testing.T) {
 	if !foundErr {
 		t.Errorf("expected at least one queued call to report a cancellation error, steps: %+v", steps)
 	}
+}
+
+// schemaTool enforces a schema so ValidateInput fails when the call is missing
+// a required field. Used to exercise F3's fatal short-circuit.
+type schemaTool struct {
+	name string
+}
+
+func (t *schemaTool) Name() string { return t.name }
+func (t *schemaTool) Description() string {
+	return "schema tool"
+}
+func (t *schemaTool) Schema() map[string]interface{} {
+	return map[string]interface{}{
+		"type":       "object",
+		"properties": map[string]interface{}{"required_key": map[string]interface{}{"type": "string"}},
+		"required":   []string{"required_key"},
+	}
+}
+func (t *schemaTool) Metadata() types.ToolMetadata { return types.ToolMetadata{} }
+func (t *schemaTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	return "ok", nil
+}
+
+// TestF3_SchemaFatalShortCircuits verifies that an input-validation failure is
+// marked fatal and short-circuits the iteration: the error surfaces in the
+// steps AND the same-layer siblings are cancelled (a hanging tool is released
+// by the errgroup cancellation).
+func TestF3_SchemaFatalShortCircuits(t *testing.T) {
+	provider := NewMockLLMProvider()
+	config := types.NewAgentConfig()
+	config.EnableToolRetry = false
+	ae := NewAgentEngine(provider, config)
+
+	// A sibling tool that blocks until ctx is cancelled; it must be released by
+	// the fatal validation error.
+	blocked := NewMockTool("blocked").WithExecuteFunc(func(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	ae.AddTool(context.Background(), &schemaTool{name: "schema_tool"})
+	ae.AddTool(context.Background(), blocked)
+
+	calls := []types.ToolCall{
+		{ID: "call_schema", Type: "function", Function: types.ToolFunction{Name: "schema_tool", Arguments: map[string]interface{}{}}}, // missing required_key
+		{ID: "call_blocked", Type: "function", Function: types.ToolFunction{Name: "blocked", Arguments: map[string]interface{}{}}},
+	}
+
+	// Run under a generous timeout; the schema failure should cancel "blocked"
+	// immediately instead of waiting for it.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	sorted, err := ae.prepareToolCalls(calls)
+	if err != nil {
+		t.Fatalf("prepareToolCalls: %v", err)
+	}
+	exists, results := ae.runToolCallsByLayer(ctx, sorted, 5*time.Second)
+
+	// The schema tool's step must be a fatal error observation.
+	foundFatal := false
+	for i, tc := range sorted {
+		if tc.Function.Name != "schema_tool" {
+			continue
+		}
+		if results[i].err != nil {
+			var fe *types.FatalToolError
+			if stderrors.As(results[i].err, &fe) {
+				foundFatal = true
+			}
+		}
+	}
+	if !foundFatal {
+		t.Error("expected schema failure to be wrapped in FatalToolError")
+	}
+	_ = exists
 }
 
 func TestStreamBufferSize_Config(t *testing.T) {

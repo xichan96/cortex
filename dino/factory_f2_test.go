@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xichan96/cortex/agent/types"
 	agentutils "github.com/xichan96/cortex/agent/utils"
 	"github.com/xichan96/cortex/dino/tools"
 )
@@ -148,6 +149,30 @@ func TestApprovalTool_RejectionIsApprovalRejectedError(t *testing.T) {
 	var apErr *tools.ApprovalRejectedError
 	if !errors.As(err, &apErr) {
 		t.Fatalf("expected ApprovalRejectedError, got %T: %v", err, err)
+	}
+}
+
+// TestNonFatal_FatalPassthrough (F3): a FatalToolError must pass through as a
+// real error, not be converted to {ok:false}.
+func TestNonFatal_FatalPassthrough(t *testing.T) {
+	fatal := &mockTool{
+		name: "bash",
+		executeFunc: func(input map[string]interface{}) (interface{}, error) {
+			return nil, &types.FatalToolError{Err: errors.New("bad input"), Reason: "schema"}
+		},
+	}
+	nonFatal := tools.WrapNonFatalTool(fatal)
+
+	res, err := nonFatal.Execute(context.Background(), map[string]interface{}{})
+	if err == nil {
+		t.Fatal("FatalToolError must surface as a real error")
+	}
+	if res != nil {
+		t.Fatalf("expected nil result, got %v", res)
+	}
+	var fe *types.FatalToolError
+	if !errors.As(err, &fe) {
+		t.Fatalf("expected FatalToolError, got %T: %v", err, err)
 	}
 }
 

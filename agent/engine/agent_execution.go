@@ -391,12 +391,17 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 				hookRunner.BeforeToolCall(tool.Name(), args)
 
 				if err := schema.ValidateInput(tool.Schema(), args, tool.Name()); err != nil {
-					results[idx] = stepResult{err: err, cached: false, duration: 0}
+					// Input validation failure is fatal (F3): retrying the same
+					// arguments cannot succeed, and running the other parallel
+					// calls with the model's broken inputs is wasted work. Mark
+					// it fatal and cancel the same-layer siblings via the
+					// errgroup so this iteration unwinds quickly.
+					results[idx] = stepResult{err: &types.FatalToolError{Err: err, Reason: "tool input validation failed"}, cached: false, duration: 0}
 					if callback != nil {
 						callback.OnToolInputEnd(tool.Name(), toolCallID, args)
 						callback.OnToolError(tool.Name(), toolCallID, err)
 					}
-					return nil
+					return err
 				}
 				canonicalName := tool.Name()
 				// Check for no_cache flag in metadata

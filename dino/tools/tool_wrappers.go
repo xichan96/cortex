@@ -71,6 +71,13 @@ func (t *nonFatalTool) Execute(ctx context.Context, input map[string]interface{}
 		return nil, err
 	}
 
+	// Fatal tool errors (schema/input failures, tool-not-found) cannot be fixed
+	// by retrying the same input — pass through so the engine can act (F3).
+	var fatalErr *types.FatalToolError
+	if errors.As(err, &fatalErr) {
+		return nil, err
+	}
+
 	return map[string]interface{}{
 		"ok":    false,
 		"tool":  t.inner.Name(),

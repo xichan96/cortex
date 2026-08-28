@@ -1,6 +1,33 @@
 package types
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
+
+// FatalToolError marks a tool error that is NOT recoverable by feeding it back
+// to the model: retrying the same input cannot succeed. Fatal errors should
+// surface to the engine and stop (or restructure) the current iteration rather
+// than being converted into a recoverable {ok:false} result.
+//
+// Examples: schema/input validation failures, permission/approval vetoes, a
+// tool that does not exist. nonFatalTool passes these through as real errors.
+type FatalToolError struct {
+	Err    error
+	Reason string
+}
+
+func (e *FatalToolError) Error() string {
+	if e.Reason != "" {
+		return fmt.Sprintf("fatal tool error: %s", e.Reason)
+	}
+	if e.Err != nil {
+		return fmt.Sprintf("fatal tool error: %v", e.Err)
+	}
+	return "fatal tool error"
+}
+
+func (e *FatalToolError) Unwrap() error { return e.Err }
 
 // Tool defines tool interface
 type Tool interface {
