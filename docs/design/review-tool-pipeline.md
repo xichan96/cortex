@@ -11,14 +11,15 @@
 
 设计整体质量**高**：事实引用绝大部分准确，方案针对性强，迁移顺序合理，F2/F4/F5/F6/F1 的五步走设计成熟。**可以进入实现**。
 
-但存在 **2 个必须修改的 BLOCKER**、**8 个落地时应采纳的 RECOMMENDED**、**4 个可选 OPTIONAL**：
+但存在 **3 个必须修改的 BLOCKER**、**8 个落地时应采纳的 RECOMMENDED**、**4 个可选 OPTIONAL**：
 
 - **BLOCKER-1（F2 事实性错误）**：设计 §1.2 与 §3 对「MCP/bash 错误**终止本轮 tool 迭代循环**、`Execute` 返回 `hasMore=false`」的**现状断言与真实代码不符**。真实代码中任何 `err != nil` 都会被 `buildToolCallResults` 追加进 `intermediateSteps`，而 `executeIteration` 的 `hasMore = len(intermediateSteps) > 0`（`agent_execution.go:1090`、`:1353`）恒为 **true**。**错误（含 MCP 错误）从不停迭代——它会继续迭代直到 model 不再请求工具、maxIterations 或 doom loop。** 因此 F2 的「收益描述」（修复 MCP 错误硬终止迭代）是**虚构的收益**；F2 的真实收益只剩「limiter 结果上限生效」，工作量/收益叙事需要重写。这也放大了 F2 把**所有**错误转 `ok:false` 喂回模型的风险：当前循环本来就会把这些错误继续喂给模型，`nonFatalTool` 只是换了个载体（从 tool message 的 observation 变成结构化 map），而**新增的**循环放大主要来自「审批被拒/权限拒绝」这类**不可恢复**错误被转成了可恢复——见 BLOCKER-2。
 - **BLOCKER-2（F2 审批拒绝被吞）**：`ApprovalTool.Execute` 的「rejected by user」（`defined_tool.go:385`）与 `ExternalPathApprovalTool` 的「denied」（`:511`）是**不可恢复**的用户否决。F2 的包装顺序把 `nonFatal` 放在 approval **外层**，会把这些错误转成 `{ok:false}` 喂回模型 → 模型重试审批 → 再次否决 → 直到 doom loop。**必须**让 approval 拒绝作为 fatal 错误透传（这正是 F3 的范畴，但 F2 阶段就必须处理，否则 F2 上线即引入比现状更差的 UX）。最小解：`nonFatalTool` 对审批拒绝错误（或其包装的错误码）直接透传。
+- **BLOCKER-3（F6 死锁缓解依赖不存在的「引擎结束即 cancel」不变量）**：设计 §6.2 的缓解措施是 `resultSender` 监听 `ae.ctx.Done()`，并声称「`ExecuteStream` 结束即 close + ctx 取消，发送端必然退出」。但 `ae.ctx` 是**引擎生命周期** ctx（`agent.go:68-69,107-110`，仅 `Stop()` 调 `ae.cancel()`，`ExecuteStream` 从不 cancel 它），`resultSender` 闭包（`agent_execution.go:731-737`）也**只捕获 resultChan 未捕获任何 ctx**。消费者停止 `range`（UI 断开/`session.emit` 的 observer 阻塞）时发送端会**永久卡死**，`CancelCurrentTurn` 也救不了（errgroup 阻塞在无 ctx 守卫的发送上）。**必须**把调用方传入的 turn ctx 捕获进 `resultSender` 闭包 + 加死锁回归测试。
 
 **F1 的核心理念正确（单一入口预留字节），但 HeaderBudget=512 与正文预算下限 maxLen/4 会互相矛盾**（RECOMMENDED-1），且「history 层不再二次截断」的论证链里有一步站不住（RECOMMENDED-2）。F4/F5/F6 方案正确、风险可控。F3/F7 单列合理。F1 是唯一改模型可见输出格式的改动，release note 处理偏弱（RECOMMENDED-6）。
 
-**最危险的是 F6**（消费者 `for result := range stream` 退出时机 + 引擎引擎级 ctx 与 turn ctx 错配，见 BLOCKER-3 风险段）——设计在 §6.2 自己点出了死锁，缓解却依赖一个不存在的「引擎结束即 cancel」不变量。这是落地时**必须写死锁回归测试**的一项。
+**风险最高项是 F6 的死锁**（BLOCKER-3）——设计在 §6.2 自己点出了死锁风险，缓解却依赖一个不存在的「引擎结束即 cancel」不变量。这是落地时**必须写死锁回归测试**的一项。
 
 迁移顺序 **F2→F4→F5→F6→F1** 总体合理，但 F2 在 BLOCKER-1/BLOCKER-2 修正前不应排在第一位；建议把 **F1 提到 F2 之前** 或先做 F6（理由见 §4）。
 
@@ -213,6 +214,18 @@
 
 ### R-8（F6）session.emit 的 5s 超时与 engine 层「不丢」语义长期应统一——设计已在 §10 标注，建议落地时顺手把 `emit` 的丢弃从 `logger.Error` 升级为带事件的丢弃计数
 设计 §6.3 已点出两层背压语义不同（engine 不丢、session 5s 超时丢）。这是**对**的设计取舍（engine 层不丢是正确性，session 层超时是保活兜底），不需要改；但建议 session.emit 丢弃时发一个可观测计数（metrics/日志字段），否则「5s 超时丢」仍然静默。
+
+### O-1（F1）`ExitCode` 探测对 MCP 统一补 provider error code 字段（设计 §12.1）
+设计已列为待定点。建议**单列**为 MCP client 改造（`pkg/mcp/client.go:155-184` 的 `CallTool` 现在把 MCP 错误吞成 `EC_MCP_CALL_TOOL_FAILED`/`EC_MCP_TOOL_RETURNED_ERROR`，没有把服务器返回的 `isError`/结构化 error 透传进 header）。可选。
+
+### O-2（F1）落盘阈值 `maxLen*8` 是否可配（设计 §12.2）
+建议直接做成 agent 配置项（`ToolResultWriteDir` + `MaxToolResultDiskThreshold`），不要硬编码 `maxLen*8`。
+
+### O-3（F4）默认并发 `max(4, GOMAXPROCS*2)` 封顶 32 是否偏大（设计 §12.4）
+对纯 CPU/本地工具环境偏大但无害；MCP 工具多的环境靠 yaml 覆盖。可选，无需改默认。
+
+### O-4（F6）chunk 合并（§6.1 第二阶段）
+设计已把合并降为第二阶段。**同意**，第一版只做「阻塞 + ctx 修复」，合并的复杂度（无锁缓冲 + 定时 flush）不值得在正确性 bug 未闭环前引入。
 
 ---
 
