@@ -351,8 +351,122 @@ func runPhase2Merge(ctx context.Context, log *slog.Logger, mgr memkit.Manager, n
 		return err
 	}
 
+	// LLM 语义冲突消解（可选，默认关）：同 category 的相似条目交 LLM 判断
+	// 是否应合并为一条（只做内容级去重时语义重复会并存）。
+	if cfg.Phase2LLMMerge {
+		if err := llmConflictMerge(ctx, log, mgr, newLLM, db); err != nil {
+			log.Warn("memory_phase2: llm merge", "error", err)
+		}
+	}
+
 	// 成功 → 更新冷却，其它实例在 cooldown_until 前不抢。
 	return memsqlite.MarkPhase2Cooldown(ctx, db, holder, memsqlite.Phase2Cooldown)
+}
+
+// llmConflictMerge 对每 user 的同 category knowledge 做两两 LLM 相似判断，
+// 确认合并后以其中一条为准，另一条删除（tags 并入保留条目）。
+func llmConflictMerge(ctx context.Context, log *slog.Logger, mgr memkit.Manager, newLLM func(context.Context) (types.LLMProvider, error), db *sql.DB) error {
+	prov, err := newLLM(ctx)
+	if err != nil || prov == nil {
+		return err
+	}
+	users, err := listKnowledgeUsers(ctx, db)
+	if err != nil {
+		return err
+	}
+	for _, uid := range users {
+		rows, err := db.QueryContext(ctx,
+			`SELECT id, category, content, tags FROM knowledge WHERE user_id = ? ORDER BY category, updated_at DESC`,
+			uid)
+		if err != nil {
+			return err
+		}
+		var entries []phase2KnowledgeRow
+		for rows.Next() {
+			var e phase2KnowledgeRow
+			var tagsStr string
+			if err := rows.Scan(&e.id, &e.cat, &e.content, &tagsStr); err != nil {
+				continue
+			}
+			e.tags = parseTagsFromDB(tagsStr)
+			entries = append(entries, e)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		// 同 category 两两比较（限定 200 条以内，避免 O(n^2) 失控）。
+		if len(entries) > 200 {
+			entries = entries[:200]
+		}
+		for i := 0; i < len(entries); i++ {
+			for j := i + 1; j < len(entries); j++ {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if entries[i].cat != entries[j].cat {
+					continue
+				}
+				merge, err := llmShouldMerge(ctx, prov, entries[i].content, entries[j].content)
+				if err != nil {
+					continue
+				}
+				if !merge {
+					continue
+				}
+				// 保留较新的那条（查询按 updated_at DESC，i<j 即较新），删除较旧。
+				keep, drop := entries[i], entries[j]
+				if err := mgr.AddKnowledgeWithCategory(ctx, uid, keep.content, keep.cat, drop.tags...); err != nil {
+					continue
+				}
+				if err := mgr.Knowledge().Delete(ctx, drop.id); err != nil {
+					continue
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// phase2KnowledgeRow 是 LLM 冲突消解用的一行 knowledge。
+type phase2KnowledgeRow struct {
+	id, cat, content string
+	tags             []string
+}
+
+// llmShouldMerge 用 LLM 判断两条内容是否语义重复、应合并。
+func llmShouldMerge(ctx context.Context, prov types.LLMProvider, a, b string) (bool, error) {
+	prompt := `You judge whether two memory facts are semantically the same (a duplicate) and should be merged into one.
+Reply with exactly one word: YES or NO.
+Fact A: ` + a + `
+Fact B: ` + b
+	msg, err := prov.Chat(ctx, []types.Message{
+		{Role: "system", Content: "You are a strict duplicate detector. Reply YES only if the facts refer to the same underlying fact with no meaningful difference."},
+		{Role: "user", Content: prompt},
+	})
+	if err != nil {
+		return false, err
+	}
+	reply := strings.ToLower(strings.TrimSpace(msg.Content))
+	return strings.HasPrefix(reply, "yes"), nil
+}
+
+func listKnowledgeUsers(ctx context.Context, db *sql.DB) ([]string, error) {
+	rows, err := db.QueryContext(ctx, `SELECT DISTINCT user_id FROM knowledge ORDER BY user_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var users []string
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
+			continue
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
 }
 
 // mgrDB 从 Manager 取底层 *sql.DB。

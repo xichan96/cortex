@@ -176,6 +176,52 @@ func TestBuildLayeredPromptTokenBudget(t *testing.T) {
 	}
 }
 
+func TestRunPhase2MergeClaimAndPrune(t *testing.T) {
+	dir := testPersistDir(t)
+	cfg := testConfig(dir)
+	cfg.MaxUnusedDays = 30
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	ltm, err := NewLongTermMem(context.Background(), cfg, noopLLM{}, log, dir, chatstore.DefaultSharedDBFile)
+	if err != nil {
+		t.Fatalf("NewLongTermMem: %v", err)
+	}
+	ctx := context.Background()
+	uid := "phase2-session"
+	mgr := ltm.Manager()
+
+	// 写入：一条 40 天前的未用条目 + 一条新条目（重复内容）。
+	if err := mgr.AddKnowledgeWithCategory(ctx, uid, "旧条目应被剪枝", "project", "old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.AddKnowledgeWithCategory(ctx, uid, "用户使用 Go", "project", "lang"); err != nil {
+		t.Fatal(err)
+	}
+	// 直接把第一条的 updated_at 改旧。
+	db, err := mgrDB(ctx, mgr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-40 * 24 * time.Hour)
+	if _, err := db.ExecContext(ctx,
+		`UPDATE knowledge SET updated_at = ? WHERE tags = 'old'`, old); err != nil {
+		t.Fatal(err)
+	}
+
+	// 手动触发一次 Phase 2。
+	runPhase2Merge(ctx, log, mgr, func(c context.Context) (types.LLMProvider, error) {
+		return noopLLM{}, nil
+	}, cfg)
+
+	// 40 天前的未用条目应被剪枝。
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM knowledge WHERE user_id = ?`, uid).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 row after prune (only Go entry), got %d", n)
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || indexOf(s, sub) >= 0)
 }

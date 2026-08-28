@@ -18,6 +18,11 @@ func NewSQLiteKnowledgeStore(store *SQLiteStore) *SQLiteKnowledgeStore {
 	return &SQLiteKnowledgeStore{db: store.DB()}
 }
 
+// DB 暴露底层 *sql.DB（Phase 2 全局锁/剪枝直接操作 DB 用）。
+func (s *SQLiteKnowledgeStore) DB() *sql.DB {
+	return s.db
+}
+
 func (s *SQLiteKnowledgeStore) Add(ctx context.Context, entry KnowledgeEntry) error {
 	if entry.ID == "" {
 		entry.ID = utils.NewID()

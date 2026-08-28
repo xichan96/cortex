@@ -155,6 +155,46 @@ func TestNewDinoFactory(t *testing.T) {
 	}
 }
 
+func TestDinoFactory_LongTermMemEnabled(t *testing.T) {
+	cfg := getTestConfig()
+	cfg.Memory.PersistEnabled = true
+	cfg.LongTermMemory.Enabled = true
+	cfg.LongTermMemory.IngestInterval = time.Minute
+	factory, err := NewDinoFactory(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create factory: %v", err)
+	}
+	df, ok := factory.(*dinoFactory)
+	if !ok {
+		t.Fatal("expected *dinoFactory")
+	}
+	if df.longTermMem == nil {
+		t.Fatal("longTermMem should be constructed when LongTermMemory.Enabled")
+	}
+	if err := factory.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown with long-term memory: %v", err)
+	}
+	if df.longTermMem != nil {
+		t.Fatal("longTermMem should be nil after Shutdown")
+	}
+}
+
+func TestDinoFactory_LongTermMemDisabledByDefault(t *testing.T) {
+	cfg := getTestConfig()
+	factory, err := NewDinoFactory(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create factory: %v", err)
+	}
+	defer factory.Shutdown(context.Background())
+	df, ok := factory.(*dinoFactory)
+	if !ok {
+		t.Fatal("expected *dinoFactory")
+	}
+	if df.longTermMem != nil {
+		t.Fatal("longTermMem should be nil when disabled (default off)")
+	}
+}
+
 func TestNewDinoFactoryWithNilConfig(t *testing.T) {
 	cfg := getTestConfig()
 	factory, err := NewDinoFactory(cfg)
