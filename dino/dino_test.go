@@ -158,6 +158,7 @@ func TestNewDinoFactory(t *testing.T) {
 func TestDinoFactory_LongTermMemEnabled(t *testing.T) {
 	cfg := getTestConfig()
 	cfg.Memory.PersistEnabled = true
+	cfg.Memory.PersistDirectory = t.TempDir() // 避免污染仓库 ./dino_sessions
 	cfg.LongTermMemory.Enabled = true
 	cfg.LongTermMemory.IngestInterval = time.Minute
 	factory, err := NewDinoFactory(cfg)
