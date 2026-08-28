@@ -866,6 +866,20 @@ func (ae *AgentEngine) prepareMessages(ctx context.Context, input types.AgentInp
 		})
 	}
 
+	// 压缩摘要注入：若 memory 实现了可选 GetSummary 接口且摘要非空，插在
+	// system 之后、history 之前。评审 R3：不改 MemoryProvider 接口体，
+	// 用类型断言探测；L1 记忆在前、摘要在后（Anthropic 合并时顺序稳定）。
+	if ae.memory != nil {
+		if gs, ok := ae.memory.(interface{ GetSummary(context.Context) (string, error) }); ok {
+			if summary, sErr := gs.GetSummary(ctx); sErr == nil && summary != "" {
+				messages = append(messages, types.Message{
+					Role:    "system",
+					Content: "Previous conversation summary:\n" + summary,
+				})
+			}
+		}
+	}
+
 	budgetCap := 0
 	budgetTrim := false
 	if config != nil {

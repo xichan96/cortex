@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -352,6 +353,69 @@ func TestAgentEngine_SetMemory(t *testing.T) {
 
 	if memory == nil {
 		t.Error("Expected memory to be set")
+	}
+}
+
+// summaryMemory 实现 types.MemoryProvider + 可选 GetSummary 接口。
+type summaryMemory struct {
+	*providers.SimpleMemoryProvider
+	summary string
+}
+
+func (m *summaryMemory) GetSummary(ctx context.Context) (string, error) {
+	return m.summary, nil
+}
+
+func TestPrepareMessages_SummaryInjection(t *testing.T) {
+	provider := NewMockLLMProvider()
+	config := types.NewAgentConfig()
+	config.SystemMessage = "You are a test assistant."
+	engine := NewAgentEngine(provider, config)
+
+	mem := &summaryMemory{SimpleMemoryProvider: providers.NewSimpleMemoryProvider(), summary: "用户讨论了 Go 与 SQLite 的取舍。"}
+	engine.SetMemory(context.Background(), mem)
+
+	msgs, err := engine.prepareMessages(context.Background(), types.NewAgentInput("继续"), nil)
+	if err != nil {
+		t.Fatalf("prepareMessages: %v", err)
+	}
+
+	// 顺序：system (L1) → summary system → history → user。
+	if len(msgs) < 3 {
+		t.Fatalf("expected at least 3 messages (system, summary, user), got %d", len(msgs))
+	}
+	if msgs[0].Role != "system" || msgs[0].Content != "You are a test assistant." {
+		t.Fatalf("first message should be system L1, got %q/%q", msgs[0].Role, msgs[0].Content)
+	}
+	if msgs[1].Role != "system" || !strings.Contains(msgs[1].Content, "Previous conversation summary:") {
+		t.Fatalf("second message should be summary, got %q", msgs[1].Content)
+	}
+	if !strings.Contains(msgs[1].Content, "Go 与 SQLite") {
+		t.Fatalf("summary content missing: %q", msgs[1].Content)
+	}
+	if msgs[len(msgs)-1].Role != "user" {
+		t.Fatalf("last message should be user input, got %q", msgs[len(msgs)-1].Role)
+	}
+}
+
+func TestPrepareMessages_NoSummaryWhenEmpty(t *testing.T) {
+	provider := NewMockLLMProvider()
+	config := types.NewAgentConfig()
+	config.SystemMessage = "You are a test assistant."
+	engine := NewAgentEngine(provider, config)
+
+	mem := &summaryMemory{SimpleMemoryProvider: providers.NewSimpleMemoryProvider(), summary: ""}
+	engine.SetMemory(context.Background(), mem)
+
+	msgs, err := engine.prepareMessages(context.Background(), types.NewAgentInput("继续"), nil)
+	if err != nil {
+		t.Fatalf("prepareMessages: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages (system, user) when summary empty, got %d", len(msgs))
+	}
+	if msgs[0].Content != "You are a test assistant." {
+		t.Fatalf("first message should be system L1, got %q", msgs[0].Content)
 	}
 }
 

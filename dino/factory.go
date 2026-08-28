@@ -164,6 +164,13 @@ func (m *memoryAdapter) Clear(ctx context.Context) error {
 	return m.provider.Clear(ctx)
 }
 
+// GetSummary 转发到 chatstore.Provider.GetSummary（压缩摘要注入）。
+// 不加到 MemoryProvider 接口体（避免破坏 agent/providers 其它实现），
+// 由 engine 在 prepareMessages 用类型断言探测（评审 R3）。
+func (m *memoryAdapter) GetSummary(ctx context.Context) (string, error) {
+	return m.provider.GetSummary(ctx)
+}
+
 func (m *memoryAdapter) GetChatHistory(ctx context.Context) ([]types.Message, error) {
 	msgs, err := m.provider.GetMessages(ctx, 0)
 	if err != nil {
