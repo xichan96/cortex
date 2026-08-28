@@ -248,6 +248,7 @@ func DefaultConfig() *Config {
 			MaxHistoryMessages:   48,
 			NotifyCompletion:     true,
 			CompletionMaxRunes:   agent.DefaultDelegateTruncatedRunes,
+			DelegateReturnMode:   agent.DelegateReturnModeEnvelope,
 			Triggers: []agent.SubagentTrigger{
 				{
 					AgentName: "general",

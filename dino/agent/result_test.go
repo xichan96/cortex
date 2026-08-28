@@ -408,6 +408,83 @@ func TestSubagentTool_BackwardCompatString(t *testing.T) {
 	}
 }
 
+// ==================== delegate_return_mode 开关（设计 §14 遗留点 1，P2.2） ====================
+
+func newTestSubagentManagerWithMode(t *testing.T, llm types.LLMProvider, mode string) *SubagentManager {
+	t.Helper()
+	cfg := &SubagentConfig{Enabled: true, DelegateReturnMode: mode}
+	return NewSubagentManager(cfg, &subagentMockFactory{llm: llm})
+}
+
+// TestSubagentTool_ReturnModeString：string 模式返回裸字符串（S1 之前的兼容行为）。
+func TestSubagentTool_ReturnModeString(t *testing.T) {
+	sm := newTestSubagentManagerWithMode(t, newSubagentMockLLMProvider([]string{"plain text output"}), DelegateReturnModeString)
+	tool := NewSubagentTool(sm)
+
+	out, err := tool.Execute(context.Background(), map[string]interface{}{"agent": "general", "task": "say plain"})
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	s, ok := out.(string)
+	if !ok {
+		t.Fatalf("expected string, got %T", out)
+	}
+	if s != "plain text output" {
+		t.Errorf("expected bare output string, got %q", s)
+	}
+}
+
+// TestSubagentTool_ReturnModeString_ErrorPassthrough：string 模式下错误直接透传 error，
+// 不做信封折叠（区别于 envelope 模式的 R1 折叠）。
+func TestSubagentTool_ReturnModeString_ErrorPassthrough(t *testing.T) {
+	// 用无法取到子代理的 manager（GetAgent 不存在）触发错误路径。
+	cfg := &SubagentConfig{Enabled: true, DelegateReturnMode: DelegateReturnModeString}
+	sm := NewSubagentManager(cfg, &subagentMockFactory{})
+	tool := NewSubagentTool(sm)
+
+	out, err := tool.Execute(context.Background(), map[string]interface{}{"agent": "nonexistent", "task": "x"})
+	if err == nil {
+		t.Fatal("expected raw error in string mode (no envelope folding), got nil")
+	}
+	if out != nil {
+		t.Errorf("expected nil out in error path, got %T: %v", out, out)
+	}
+}
+
+// TestSubagentTool_ReturnModeInvalid_FallsBackEnvelope：非法 mode 回退 envelope（默认行为）。
+func TestSubagentTool_ReturnModeInvalid_FallsBackEnvelope(t *testing.T) {
+	for _, mode := range []string{"", "bogus", "ENVELOPE"} {
+		sm := newTestSubagentManagerWithMode(t, newSubagentMockLLMProvider([]string{"x"}), mode)
+		tool := NewSubagentTool(sm)
+
+		out, err := tool.Execute(context.Background(), map[string]interface{}{"agent": "general", "task": "hi"})
+		if err != nil {
+			t.Fatalf("mode %q: Execute failed: %v", mode, err)
+		}
+		if _, ok := out.(*DelegateResult); !ok {
+			t.Errorf("mode %q: expected envelope fallback, got %T", mode, out)
+		}
+	}
+}
+
+// TestDelegateReturnModeOrDefault：解析器对空串/非法值回退 envelope，合法值原样返回。
+func TestDelegateReturnModeOrDefault(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"envelope", DelegateReturnModeEnvelope},
+		{"string", DelegateReturnModeString},
+		{"", DelegateReturnModeEnvelope},
+		{"bogus", DelegateReturnModeEnvelope},
+	}
+	for _, c := range cases {
+		if got := DelegateReturnModeOrDefault(c.in); got != c.want {
+			t.Errorf("DelegateReturnModeOrDefault(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 // TestSubagentTool_ErrorFolded：manager.Execute 出错时工具返回信封 + nil error（评审 R1）。
 func TestSubagentTool_ErrorFolded(t *testing.T) {
 	// 用无法取到子代理的 manager（GetAgent 不存在）触发错误路径。
