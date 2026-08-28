@@ -720,3 +720,118 @@ func TestAgentEngine_ExecuteStream_Concurrent(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// TestExecuteStream_DeadlockTurnCtxCancel is the B3 regression test: a
+// consumer stops ranging but does not close the session, and the engine is
+// never Stop()ed. When the result channel fills, the engine's guarded sends
+// must unblock on the caller's turn ctx cancellation — otherwise
+// ExecuteStream's goroutine and errgroup hang forever.
+func TestExecuteStream_DeadlockTurnCtxCancel(t *testing.T) {
+	provider := NewMockLLMProvider()
+	// Emit far more chunks than the default channel buffer (50) so the engine
+	// is forced to block once the consumer stops draining.
+	for i := 0; i < 200; i++ {
+		provider.AddStreamMessage(types.StreamMessage{
+			Type:    "chunk",
+			Content: fmt.Sprintf("chunk-%03d-", i) + strings.Repeat("x", 40),
+		})
+	}
+
+	config := types.NewAgentConfig()
+	config.MaxIterations = 1
+	ae := NewAgentEngine(provider, config)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := ae.ExecuteStream(ctx, types.NewAgentInput("go"), nil)
+	if err != nil {
+		t.Fatalf("ExecuteStream: %v", err)
+	}
+
+	// Drain until the channel is momentarily empty, then stop ranging entirely
+	// without cancelling ctx or calling Stop(). The engine is now blocked on a
+	// full result channel (200 chunks > buffer 50). Give it a moment to make
+	// sure the engine goroutine is genuinely parked on a send.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-stream:
+		default:
+			goto drained
+		}
+	}
+	t.Fatal("did not observe a drain point")
+drained:
+	time.Sleep(50 * time.Millisecond)
+
+	// Now cancel the turn ctx while no consumer is reading. ExecuteStream must
+	// return (close the channel) within a bounded time — the guarded sends
+	// unblock. The consumer is only started after cancel so the channel being
+	// closed is genuinely caused by cancellation, not by us draining it.
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		for range stream {
+		}
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// success — no deadlock
+	case <-time.After(5 * time.Second):
+		t.Fatal("ExecuteStream deadlocked: channel not closed after turn ctx cancellation")
+	}
+}
+
+// TestResultSender_NoDrop verifies that with a slow consumer, tool events are
+// blocked (not dropped) until they can be delivered, preserving order.
+func TestResultSender_NoDrop(t *testing.T) {
+	provider := NewMockLLMProvider()
+	ae := NewAgentEngine(provider, types.NewAgentConfig())
+
+	resultChan := make(chan types.StreamResult, 8)
+	ae.mu.Lock()
+	ae.resultSender = func(result types.StreamResult) {
+		select {
+		case resultChan <- result:
+		case <-ae.ctx.Done():
+		}
+	}
+	ae.mu.Unlock()
+
+	// Produce 200 tool events from a goroutine.
+	const total = 200
+	go func() {
+		for i := 0; i < total; i++ {
+			ae.resultSender(types.StreamResult{
+				Type: "tool_event",
+				ToolEvent: &types.ToolEvent{
+					Event:      types.StreamEventToolResult,
+					ToolCallID: fmt.Sprintf("call_%d", i),
+					ToolName:   "mock",
+				},
+			})
+		}
+	}()
+
+	// Consume slowly: buffer is 8, so the producer blocks and must not drop.
+	got := make([]string, 0, total)
+	deadline := time.After(5 * time.Second)
+	for len(got) < total {
+		select {
+		case r := <-resultChan:
+			if r.ToolEvent != nil {
+				got = append(got, r.ToolEvent.ToolCallID)
+			}
+			// Simulate a slow consumer.
+			time.Sleep(time.Millisecond)
+		case <-deadline:
+			t.Fatalf("timeout waiting for tool events; got %d/%d", len(got), total)
+		}
+	}
+	for i, id := range got {
+		if want := fmt.Sprintf("call_%d", i); id != want {
+			t.Fatalf("event %d: expected %s, got %s (order violated)", i, want, id)
+		}
+	}
+}

@@ -70,6 +70,19 @@ func toolCallData(tool string, toolInput interface{}, toolCallID, typeStr, obser
 	}
 }
 
+// sendStreamResult sends a result to the stream channel, unblocking when the
+// caller's turn ctx is cancelled so a stuck consumer (stopped range / slow UI)
+// cannot deadlock the engine. It reports whether the result was actually sent.
+// The channel is never closed before this returns, so a blocking send is safe.
+func sendStreamResult(ctx context.Context, ch chan<- types.StreamResult, result types.StreamResult) bool {
+	select {
+	case ch <- result:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func toolObservationError(err error, toolName string, cached bool, maxLen int) string {
 	if maxLen <= 0 {
 		maxLen = types.ToolErrorMaxLen
@@ -732,15 +745,20 @@ func (ae *AgentEngine) ExecuteStream(ctx context.Context, input types.AgentInput
 		return nil, errors.EC_AGENT_BUSY
 	}
 
-	resultChan := make(chan types.StreamResult, types.DefaultChannelBuffer)
+	resultChan := make(chan types.StreamResult, ae.getStreamBufferSize())
 
-	// Set result sender for tool events
+	// Set result sender for tool events. It must honor the caller's turn ctx
+	// (NOT ae.ctx, which is the engine-lifetime ctx and is never cancelled by
+	// ExecuteStream): when the channel is full the send blocks so tool events
+	// are never silently dropped, and it unblocks when the turn is cancelled so
+	// a stuck consumer (stopped range / slow UI) cannot deadlock the engine.
+	turnCtx := ctx
 	ae.mu.Lock()
 	ae.resultSender = func(result types.StreamResult) {
 		select {
 		case resultChan <- result:
-		default:
-			// Channel full, skip event
+		case <-turnCtx.Done():
+		case <-ae.ctx.Done():
 		}
 	}
 	ae.mu.Unlock()
@@ -787,19 +805,19 @@ func (ae *AgentEngine) ExecuteStream(ctx context.Context, input types.AgentInput
 		// Call OnBeforeStart hook
 		if err := hookRunner.BeforeStart(&input); err != nil {
 			logger.LogError("ExecuteStream", err, slog.String("phase", "on_before_start"))
-			resultChan <- types.StreamResult{
+			sendStreamResult(ctx, resultChan, types.StreamResult{
 				Type:  "error",
 				Error: errors.NewError(errors.EC_HOOK_FAILED.Code, "hook OnBeforeStart failed").Wrap(err),
-			}
+			})
 			return
 		}
 
 		if err := ae.waitRateLimit(ctx); err != nil {
 			logger.LogError("ExecuteStream", err, slog.String("phase", "rate_limit"))
-			resultChan <- types.StreamResult{
+			sendStreamResult(ctx, resultChan, types.StreamResult{
 				Type:  "error",
 				Error: errors.NewError(errors.EC_SYSTEM_OVERLOAD.Code, "rate limit exceeded").Wrap(err),
-			}
+			})
 			return
 		}
 
@@ -807,10 +825,10 @@ func (ae *AgentEngine) ExecuteStream(ctx context.Context, input types.AgentInput
 			if r := recover(); r != nil {
 				logger.LogError("ExecuteStream", fmt.Errorf("panic recovered: %v", r))
 				hookRunner.OnError(fmt.Errorf("panic: %v", r))
-				resultChan <- types.StreamResult{
+				sendStreamResult(ctx, resultChan, types.StreamResult{
 					Type:  "error",
 					Error: errors.NewError(errors.EC_STREAM_PANIC.Code, "panic in stream execution").Wrap(fmt.Errorf("%v", r)),
-				}
+				})
 			}
 		}()
 
@@ -818,11 +836,11 @@ func (ae *AgentEngine) ExecuteStream(ctx context.Context, input types.AgentInput
 		messages, err := ae.prepareMessages(ctx, input, previousRequests)
 		if err != nil {
 			logger.LogError("ExecuteStream", err, slog.String("phase", "prepare_messages"))
-			resultChan <- types.StreamResult{
+			sendStreamResult(ctx, resultChan, types.StreamResult{
 				Type:      "error",
 				Error:     errors.NewError(errors.EC_PREPARE_MESSAGES_FAILED.Code, "failed to prepare messages").Wrap(err),
 				StopCause: types.StopCauseFromChatError(err),
-			}
+			})
 			return
 		}
 
@@ -1134,11 +1152,11 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 		select {
 		case <-ctx.Done():
 			hookRunner.OnError(ctx.Err())
-			resultChan <- types.StreamResult{
+			sendStreamResult(ctx, resultChan, types.StreamResult{
 				Type:      "error",
 				Error:     ctx.Err(),
 				StopCause: types.StopCauseFromChatError(ctx.Err()),
-			}
+			})
 			return
 		default:
 		}
@@ -1151,11 +1169,11 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 		if err != nil {
 			logger.LogError("executeStreamWithIterations", err, slog.Int("iteration", iteration+1))
 			hookRunner.OnError(err)
-			resultChan <- types.StreamResult{
+			sendStreamResult(ctx, resultChan, types.StreamResult{
 				Type:      "error",
 				Error:     errors.NewError(errors.EC_STREAM_ITERATION_FAILED.Code, fmt.Sprintf("iteration %d failed", iteration+1)).Wrap(err),
 				StopCause: types.StopCauseFromChatError(err),
-			}
+			})
 			return
 		}
 		lastHasMore = hasMore
@@ -1230,10 +1248,10 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 	// Call OnAfterEnd hook
 	hookRunner.AfterEnd(finalResult)
 
-	resultChan <- types.StreamResult{
+	sendStreamResult(ctx, resultChan, types.StreamResult{
 		Type:   "end",
 		Result: finalResult,
-	}
+	})
 }
 
 // executeStreamIteration executes a single streaming iteration
@@ -1287,14 +1305,18 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 		switch msg.Type {
 		case "chunk":
 			outputBuilder.WriteString(msg.Content)
-			resultChan <- types.StreamResult{
+			if !sendStreamResult(ctx, resultChan, types.StreamResult{
 				Type:    "chunk",
 				Content: msg.Content,
+			}) {
+				return nil, false, ctx.Err()
 			}
 		case "reasoning":
-			resultChan <- types.StreamResult{
+			if !sendStreamResult(ctx, resultChan, types.StreamResult{
 				Type:    "reasoning",
 				Content: msg.Reasoning,
+			}) {
+				return nil, false, ctx.Err()
 			}
 		case "tool_calls":
 			for _, tc := range msg.ToolCalls {
