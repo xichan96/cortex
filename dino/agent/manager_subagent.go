@@ -273,9 +273,12 @@ func (t *SubagentTool) Metadata() types.ToolMetadata {
 	}
 }
 
-// Execute 返回 *DelegateResult 信封（方案 A，S1）。
-// 错误路径折叠进信封（评审 R1）：manager.Execute 出错时返回 Status=="error" 的信封 +
-// nil error，让错误态在 A 阶段对模型可见，而非走 toolObservationError 字符串分支。
+// Execute 按 DelegateReturnMode 分支返回形态（设计 §14 遗留点 1，P2.2）：
+//   - envelope（默认）：返回 *DelegateResult 信封（S1 方案 A）。错误路径折叠进信封
+//     （评审 R1）：manager.Execute 出错时返回 Status=="error" 的信封 + nil error，
+//     让错误态在 A 阶段对模型可见，而非走 toolObservationError 字符串分支。
+//   - string：返回裸字符串 result.Output（S1 之前的兼容形态），错误直接透传，不做信封
+//     折叠。FilesChanged/Status/Usage 等信息在该模式下不进工具返回值——纯兼容开关。
 func (t *SubagentTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	if t.manager == nil {
 		return "", nil
@@ -286,6 +289,19 @@ func (t *SubagentTool) Execute(ctx context.Context, input map[string]interface{}
 
 	if agentName == "" || task == "" {
 		return nil, fmt.Errorf("agent and task are required")
+	}
+
+	if t.manager.config != nil &&
+		DelegateReturnModeOrDefault(t.manager.config.DelegateReturnMode) == DelegateReturnModeString {
+		result, err := t.manager.Execute(ctx, agentName, task)
+		if err != nil {
+			return nil, err
+		}
+		if result != nil {
+			t.maybeReplayToParentMemory(ctx, agentName, task, result)
+			return result.Output, nil
+		}
+		return "", nil
 	}
 
 	start := time.Now()

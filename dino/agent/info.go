@@ -147,6 +147,30 @@ type SubagentConfig struct {
 	NotifyCompletion bool `yaml:"notify_completion"`
 	// CompletionMaxRunes 信封截断上限，默认 2000（≈1000 tokens）。
 	CompletionMaxRunes int `yaml:"completion_max_runes"`
+	// DelegateReturnMode delegate_to_agent 返回形态（设计 §14 遗留点 1，P2.2）：
+	// "envelope"（默认）返回 *DelegateResult 信封；"string" 返回裸字符串
+	// （result.Output，S1 之前的兼容形态）。string 模式下 FilesChanged/Status/Usage
+	// 等信息不进工具返回值，是纯兼容开关。非法值/空串回退 envelope。
+	DelegateReturnMode string `yaml:"delegate_return_mode"`
+}
+
+// DelegateReturnMode 合法值（设计 §14 遗留点 1，P2.2）。
+const (
+	// DelegateReturnModeEnvelope 返回 *DelegateResult 信封（S1 起的默认行为）。
+	DelegateReturnModeEnvelope = "envelope"
+	// DelegateReturnModeString 返回裸字符串 result.Output（S1 之前的兼容行为）。
+	DelegateReturnModeString = "string"
+)
+
+// DelegateReturnModeOrDefault 解析 DelegateReturnMode 配置，空串/非法值回退 envelope
+// （防御：旧配置没有该字段，或手写 YAML 拼错时保持 S1 行为不炸）。
+func DelegateReturnModeOrDefault(mode string) string {
+	switch mode {
+	case DelegateReturnModeEnvelope, DelegateReturnModeString:
+		return mode
+	default:
+		return DelegateReturnModeEnvelope
+	}
 }
 
 type SubagentTrigger struct {
