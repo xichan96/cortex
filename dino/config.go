@@ -243,20 +243,11 @@ func DefaultConfig() *Config {
 			UseSameLLMForIngest: true,
 		},
 		Subagent: agent.SubagentConfig{
-			Enabled:              true,
-			TriggerOnKeyword:     true,
-			MaxHistoryMessages:   48,
-			NotifyCompletion:     true,
-			CompletionMaxRunes:   agent.DefaultDelegateTruncatedRunes,
-			DelegateReturnMode:   agent.DelegateReturnModeEnvelope,
-			Triggers: []agent.SubagentTrigger{
-				{
-					AgentName: "general",
-					Keywords:  []string{"research", "analyze", "investigate", "study", "研究", "分析", "调查"},
-					Patterns:  []string{`(?i)(research|analyze|investigate|study)\s+(about|on|the)`, `(?i)what\s+is\s+.*about`},
-					Priority:  5,
-				},
-			},
+			Enabled:            true,
+			MaxHistoryMessages: 48,
+			NotifyCompletion:   true,
+			CompletionMaxRunes: agent.DefaultDelegateTruncatedRunes,
+			DelegateReturnMode: agent.DelegateReturnModeEnvelope,
 		},
 		MCP: MCPConfig{
 			Enabled: false,

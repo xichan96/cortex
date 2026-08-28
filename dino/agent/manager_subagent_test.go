@@ -111,67 +111,7 @@ func (f *subagentMockFactory) GetAgent(name string) (*Info, bool) {
 	return info, exists
 }
 
-type mockEventEmitter struct {
-	events []SubagentEvent
-}
-
-func (e *mockEventEmitter) Emit(event *SubagentEvent) {
-	e.events = append(e.events, *event)
-}
-
-func (e *mockEventEmitter) GetEvents() []SubagentEvent {
-	return e.events
-}
-
-func TestShouldDelegate_KeywordMatch(t *testing.T) {
-	config := &SubagentConfig{
-		Enabled:          true,
-		TriggerOnKeyword: true,
-		Triggers: []SubagentTrigger{
-			{
-				AgentName: "general",
-				Keywords:  []string{"research", "analyze"},
-				Priority:  5,
-			},
-		},
-	}
-
-	manager := NewSubagentManager(config, &subagentMockFactory{})
-	if manager == nil {
-		t.Fatal("expected manager to be created")
-	}
-
-	tests := []struct {
-		name      string
-		input     string
-		wantAgent string
-	}{
-		{"research keyword", "research about the codebase", "general"},
-		{"analyze keyword", "analyze the code quality", "general"},
-		{"no match", "just a simple greeting", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := manager.ShouldDelegate(tt.input)
-			if tt.wantAgent == "" {
-				if result != nil {
-					t.Errorf("expected no delegation, got %s", result.AgentName)
-				}
-			} else {
-				if result == nil {
-					t.Errorf("expected delegation to %s, got nil", tt.wantAgent)
-				} else if result.AgentName != tt.wantAgent {
-					t.Errorf("expected agent %s, got %s", tt.wantAgent, result.AgentName)
-				}
-			}
-		})
-	}
-
-	manager.Close()
-}
-
-func TestShouldDelegate_Disabled(t *testing.T) {
+func TestNewSubagentManager_Disabled(t *testing.T) {
 	config := &SubagentConfig{
 		Enabled: false,
 	}
@@ -182,51 +122,9 @@ func TestShouldDelegate_Disabled(t *testing.T) {
 	}
 }
 
-func TestShouldDelegate_NilConfig(t *testing.T) {
+func TestNewSubagentManager_NilConfig(t *testing.T) {
 	manager := NewSubagentManager(nil, &subagentMockFactory{})
 	if manager != nil {
 		t.Error("expected nil manager for nil config")
 	}
-}
-
-func TestSubagentHandler_ProcessInput(t *testing.T) {
-	config := &SubagentConfig{
-		Enabled:          true,
-		TriggerOnKeyword: true,
-		Triggers: []SubagentTrigger{
-			{
-				AgentName: "general",
-				Keywords:  []string{"research"},
-				Priority:  5,
-			},
-		},
-	}
-
-	manager := NewSubagentManager(config, &subagentMockFactory{})
-	if manager == nil {
-		t.Fatal("expected manager to be created")
-	}
-
-	handler := NewSubagentHandler(manager, nil)
-	if handler == nil {
-		t.Fatal("expected handler to be created")
-	}
-
-	handled, err := handler.ProcessInput(nil, "research about files")
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-	if !handled {
-		t.Error("expected input to be handled")
-	}
-
-	handled, err = handler.ProcessInput(nil, "hello")
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-	if handled {
-		t.Error("expected input not to be handled")
-	}
-
-	manager.Close()
 }
