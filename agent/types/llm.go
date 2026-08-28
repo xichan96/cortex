@@ -38,12 +38,17 @@ type Message struct {
 }
 
 // Usage token usage information
+//
+// B1 (review): PromptTokens/TotalTokens must reflect the *total* input (uncached +
+// cached read + cache creation), because Anthropic's `input_tokens` is the uncached
+// remainder only. CachedTokens/CacheCreationTokens are a split *within* the input.
 type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-	ReasoningTokens  int `json:"reasoning_tokens,omitempty"` // Thinking tokens (o1, o3 series etc.)
-	CachedTokens     int `json:"cached_tokens,omitempty"`    // Cache read tokens
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	TotalTokens         int `json:"total_tokens"`
+	ReasoningTokens     int `json:"reasoning_tokens,omitempty"` // Thinking tokens (o1, o3 series etc.)
+	CachedTokens        int `json:"cached_tokens,omitempty"`    // Cache read tokens (0.1x price)
+	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"` // Cache write tokens (1.25x price)
 }
 
 // MessagePart message part interface

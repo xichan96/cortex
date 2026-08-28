@@ -378,6 +378,52 @@ func TestAgentEngine_GetTotalUsage(t *testing.T) {
 	}
 }
 
+// TestAgentEngine_Execute_AccumulatesCacheUsage (U8) verifies the Execute loop
+// sums CachedTokens / CacheCreationTokens across iterations.
+func TestAgentEngine_Execute_AccumulatesCacheUsage(t *testing.T) {
+	provider := NewMockLLMProvider()
+	// Iteration 1: assistant tool call, cached=100/created=50.
+	provider.AddResponse(types.Message{
+		Role:    "assistant",
+		Content: "let me look",
+		ToolCalls: []types.ToolCall{{
+			ID:   "call_1",
+			Type: "function",
+			Function: types.ToolFunction{Name: "test_tool", Arguments: map[string]interface{}{}},
+		}},
+		Usage: types.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15, CachedTokens: 100, CacheCreationTokens: 50},
+	})
+	// Iteration 2: final answer, cached=200/created=25.
+	provider.AddResponse(types.Message{
+		Role:    "assistant",
+		Content: "done",
+		Usage:   types.Usage{PromptTokens: 20, CompletionTokens: 7, TotalTokens: 27, CachedTokens: 200, CacheCreationTokens: 25},
+	})
+
+	config := types.NewAgentConfig()
+	config.MaxIterations = 3
+	engine := NewAgentEngine(provider, config)
+	engine.AddTool(context.Background(), NewMockTool("test_tool"))
+
+	ctx := context.Background()
+	result, err := engine.Execute(ctx, types.NewAgentInput("hi"), nil)
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if result == nil {
+		t.Fatal("nil result")
+	}
+	if result.Usage.CachedTokens != 300 {
+		t.Errorf("CachedTokens = %d, want 300 (100+200)", result.Usage.CachedTokens)
+	}
+	if result.Usage.CacheCreationTokens != 75 {
+		t.Errorf("CacheCreationTokens = %d, want 75 (50+25)", result.Usage.CacheCreationTokens)
+	}
+	if result.Usage.PromptTokens != 30 {
+		t.Errorf("PromptTokens = %d, want 30 (10+20)", result.Usage.PromptTokens)
+	}
+}
+
 func TestAgentEngine_ExecuteStream_ContextCancellation(t *testing.T) {
 	provider := NewMockLLMProvider()
 	// Add a slow response

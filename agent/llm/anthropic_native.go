@@ -93,8 +93,10 @@ type anthropicMessageStartData struct {
 	Type    string `json:"type"`
 	Message struct {
 		Usage struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
+			InputTokens             int `json:"input_tokens"`
+			OutputTokens            int `json:"output_tokens"`
+			CacheReadInputTokens    int `json:"cache_read_input_tokens"`
+			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 		} `json:"usage"`
 	} `json:"message"`
 }
@@ -218,6 +220,9 @@ func (p *NativeAnthropicProvider) readStream(body io.ReadCloser, out chan<- type
 	toolBlocks := map[int]*toolState{}
 	var usage types.Usage
 	var inputTokens int
+	// B1: Anthropic `input_tokens` is the *uncached remainder* only. The total
+	// prompt size is input_tokens + cache_read_input_tokens + cache_creation_input_tokens.
+	var cacheReadTokens, cacheCreationTokens int
 
 	var currentEvent string
 
@@ -253,6 +258,8 @@ func (p *NativeAnthropicProvider) readStream(body io.ReadCloser, out chan<- type
 			var ev anthropicMessageStartData
 			if json.Unmarshal([]byte(data), &ev) == nil {
 				inputTokens = ev.Message.Usage.InputTokens
+				cacheReadTokens = ev.Message.Usage.CacheReadInputTokens
+				cacheCreationTokens = ev.Message.Usage.CacheCreationInputTokens
 			}
 
 		case "content_block_start":
@@ -319,8 +326,11 @@ func (p *NativeAnthropicProvider) readStream(body io.ReadCloser, out chan<- type
 			var ev anthropicMessageDeltaData
 			if json.Unmarshal([]byte(data), &ev) == nil {
 				usage.CompletionTokens = ev.Usage.OutputTokens
-				usage.PromptTokens = inputTokens
-				usage.TotalTokens = inputTokens + ev.Usage.OutputTokens
+				// B1: PromptTokens/TotalTokens reflect total input (uncached + cache read + cache write).
+				usage.PromptTokens = inputTokens + cacheReadTokens + cacheCreationTokens
+				usage.TotalTokens = usage.PromptTokens + ev.Usage.OutputTokens
+				usage.CachedTokens = cacheReadTokens
+				usage.CacheCreationTokens = cacheCreationTokens
 			}
 
 		case "message_stop":

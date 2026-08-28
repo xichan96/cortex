@@ -642,6 +642,8 @@ func (ae *AgentEngine) Execute(ctx context.Context, input types.AgentInput, prev
 		totalUsage.PromptTokens += result.Usage.PromptTokens
 		totalUsage.CompletionTokens += result.Usage.CompletionTokens
 		totalUsage.TotalTokens += result.Usage.TotalTokens
+		totalUsage.CachedTokens += result.Usage.CachedTokens
+		totalUsage.CacheCreationTokens += result.Usage.CacheCreationTokens
 		finalResult = result
 		finalResult.Usage = totalUsage
 		allIntermediateSteps = append(allIntermediateSteps, result.IntermediateSteps...)
@@ -1156,6 +1158,8 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 		finalResult.Usage.PromptTokens += iterationResult.Usage.PromptTokens
 		finalResult.Usage.CompletionTokens += iterationResult.Usage.CompletionTokens
 		finalResult.Usage.TotalTokens += iterationResult.Usage.TotalTokens
+		finalResult.Usage.CachedTokens += iterationResult.Usage.CachedTokens
+		finalResult.Usage.CacheCreationTokens += iterationResult.Usage.CacheCreationTokens
 		toolCalls = append(toolCalls, iterationResult.ToolCalls...)
 		intermediateSteps = append(intermediateSteps, iterationResult.IntermediateSteps...)
 
@@ -1212,6 +1216,8 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 	ae.totalUsage.PromptTokens += finalResult.Usage.PromptTokens
 	ae.totalUsage.CompletionTokens += finalResult.Usage.CompletionTokens
 	ae.totalUsage.TotalTokens += finalResult.Usage.TotalTokens
+	ae.totalUsage.CachedTokens += finalResult.Usage.CachedTokens
+	ae.totalUsage.CacheCreationTokens += finalResult.Usage.CacheCreationTokens
 	ae.mu.Unlock()
 
 	logger.LogExecution("executeStreamWithIterations", 0, "Stream execution completed successfully",

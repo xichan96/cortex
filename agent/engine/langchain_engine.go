@@ -109,6 +109,8 @@ func (e *LangChainAgentEngine) ExecuteSimple(ctx context.Context, input types.Ag
 		e.totalUsage.PromptTokens += response.Usage.PromptTokens
 		e.totalUsage.CompletionTokens += response.Usage.CompletionTokens
 		e.totalUsage.TotalTokens += response.Usage.TotalTokens
+		e.totalUsage.CachedTokens += response.Usage.CachedTokens
+		e.totalUsage.CacheCreationTokens += response.Usage.CacheCreationTokens
 		e.memory = append(e.memory, response)
 		e.limitMemoryLocked()
 		e.mu.Unlock()
@@ -129,6 +131,8 @@ func (e *LangChainAgentEngine) ExecuteSimple(ctx context.Context, input types.Ag
 	e.totalUsage.PromptTokens += response.Usage.PromptTokens
 	e.totalUsage.CompletionTokens += response.Usage.CompletionTokens
 	e.totalUsage.TotalTokens += response.Usage.TotalTokens
+	e.totalUsage.CachedTokens += response.Usage.CachedTokens
+	e.totalUsage.CacheCreationTokens += response.Usage.CacheCreationTokens
 	e.memory = append(e.memory, response)
 	e.limitMemoryLocked()
 	e.mu.Unlock()
@@ -169,6 +173,8 @@ func (e *LangChainAgentEngine) ExecuteStreamSimple(ctx context.Context, input ty
 				e.totalUsage.PromptTokens += msg.Usage.PromptTokens
 				e.totalUsage.CompletionTokens += msg.Usage.CompletionTokens
 				e.totalUsage.TotalTokens += msg.Usage.TotalTokens
+				e.totalUsage.CachedTokens += msg.Usage.CachedTokens
+				e.totalUsage.CacheCreationTokens += msg.Usage.CacheCreationTokens
 				e.mu.Unlock()
 			}
 			select {
