@@ -74,7 +74,12 @@ func toolCallData(tool string, toolInput interface{}, toolCallID, typeStr, obser
 // caller's turn ctx is cancelled so a stuck consumer (stopped range / slow UI)
 // cannot deadlock the engine. It reports whether the result was actually sent.
 // The channel is never closed before this returns, so a blocking send is safe.
+// A nil ctx is treated as a background ctx (no cancellation guard).
 func sendStreamResult(ctx context.Context, ch chan<- types.StreamResult, result types.StreamResult) bool {
+	if ctx == nil {
+		ch <- result
+		return true
+	}
 	select {
 	case ch <- result:
 		return true
@@ -283,10 +288,33 @@ func (ae *AgentEngine) buildToolCallResults(sortedToolCalls []types.ToolCall, ex
 		truncationLength := ae.getToolTruncationLength(name)
 		sanitized := types.SanitizeToolResult(r.result, truncationLength)
 		formatted := types.FormatToolResult(sanitized)
-		observation, _, _ := types.TruncateToolResult(formatted, truncationLength, writeDir)
+		header := ae.buildOutputHeader(toolCall, name, r, formatted)
+		observation, _ := types.TruncateToolResult(formatted, truncationLength, writeDir, header)
 		intermediateSteps = append(intermediateSteps, toolCallData(name, args, toolCall.ID, toolCall.Type, observation))
 	}
 	return toolCalls, intermediateSteps
+}
+
+// buildOutputHeader assembles the structured header for a tool observation.
+// ExitCode is probed from bash/command-style results (map with exit_code).
+func (ae *AgentEngine) buildOutputHeader(toolCall types.ToolCall, name string, r stepResult, formatted string) types.OutputHeader {
+	h := types.OutputHeader{
+		ChunkID:        toolCall.ID,
+		WallTime:       r.duration,
+		OriginalBytes:  len(formatted),
+		OriginalTokens: types.RoughTokenEstimate(formatted),
+	}
+	if lines := strings.Count(formatted, "\n"); lines > 0 {
+		h.TotalLines = lines + 1
+	}
+	if m, ok := r.result.(map[string]interface{}); ok {
+		if ec, ok := m["exit_code"]; ok {
+			if code, ok := ec.(int); ok {
+				h.ExitCode = &code
+			}
+		}
+	}
+	return h
 }
 
 func (ae *AgentEngine) getToolByName(name string) (types.Tool, bool) {

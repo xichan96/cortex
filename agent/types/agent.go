@@ -304,12 +304,14 @@ func (f *ToolCallbackFunc) OnToolError(toolName string, toolCallID string, err e
 	}
 }
 
-// TruncateString truncates a string to the specified length
+// TruncateString truncates a string to the specified length, keeping the head
+// (a UTF-8-safe convenience used for logging and short labels). For
+// tool-output truncation that preserves the middle, use TruncateMiddle.
 func TruncateString(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	return truncateUTF8Head(s, maxLen) + "..."
 }
 
 const ToolErrorMaxLen = 400
