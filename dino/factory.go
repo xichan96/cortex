@@ -505,6 +505,8 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	agentConfig.TopP = f.config.TopP
 	agentConfig.MaxBudgetTokens = f.config.Memory.MaxBudgetTokens
 	agentConfig.CompactAfterTurns = f.config.Memory.CompactAfterTurns
+	agentConfig.ToolParallelismLimit = f.config.Tools.MaxToolParallelism
+	agentConfig.StreamBufferSize = f.config.Tools.StreamBufferSize
 	sid := sessionID
 	agentConfig.RemainPromptTokens = func() int {
 		if !f.config.Budget.Enabled || f.config.Budget.MaxTokens <= 0 {

@@ -68,10 +68,14 @@ type SkillsConfig struct {
 }
 
 type ToolConfig struct {
-	Profile          string   `yaml:"profile"`
-	Allowed          []string `yaml:"allowed"`
-	ApprovalRequired []string `yaml:"approval_required"`
-	Denied           []string `yaml:"denied"`
+	Profile                    string   `yaml:"profile"`
+	Allowed                    []string `yaml:"allowed"`
+	ApprovalRequired           []string `yaml:"approval_required"`
+	Denied                     []string `yaml:"denied"`
+	MaxToolParallelism         int      `yaml:"max_tool_parallelism,omitempty"`          // 0=默认 max(4, GOMAXPROCS*2)；>0 用该值
+	StreamBufferSize           int      `yaml:"stream_buffer_size,omitempty"`            // 0=默认 50
+	ResultLimiterMaxBytes      int      `yaml:"result_limiter_max_bytes,omitempty"`      // 0=默认 120_000
+	ResultLimiterMaxStringBytes int     `yaml:"result_limiter_max_string_bytes,omitempty"` // 0=默认 60_000
 }
 
 type LoopDetectionConfig struct {

@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -488,6 +490,200 @@ func TestStreamToolCallback_Close(t *testing.T) {
 
 	// After close, events should not be sent
 	callback.OnToolCall("test", "call_2", nil)
+}
+
+// countingTool is a mock tool that tracks the max concurrent executions.
+// Distinct instances share the same state so parallel calls with different
+// tool names can be measured against one counter (the engine's dependency
+// sorter keys by tool name, so parallel calls to one name collapse).
+type countingTool struct {
+	name string
+	// shared state
+	mu      *sync.Mutex
+	running *int
+	maxSeen *int
+	done    *chan struct{} // if set, tool blocks until closed
+}
+
+func newCountingTool(name string, shared *countingState) *countingTool {
+	return &countingTool{name: name, mu: &shared.mu, running: &shared.running, maxSeen: &shared.maxSeen, done: &shared.done}
+}
+
+type countingState struct {
+	mu      sync.Mutex
+	running int
+	maxSeen int
+	done    chan struct{} // if set, tools block until closed
+}
+
+func (t *countingTool) Name() string                   { return t.name }
+func (t *countingTool) Description() string            { return "counting tool" }
+func (t *countingTool) Schema() map[string]interface{} { return map[string]interface{}{} }
+func (t *countingTool) Metadata() types.ToolMetadata   { return types.ToolMetadata{} }
+
+func (t *countingTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	t.mu.Lock()
+	*t.running++
+	if *t.running > *t.maxSeen {
+		*t.maxSeen = *t.running
+	}
+	t.mu.Unlock()
+	if t.done != nil && *t.done != nil {
+		select {
+		case <-*t.done:
+		case <-ctx.Done():
+		}
+	}
+	t.mu.Lock()
+	*t.running--
+	t.mu.Unlock()
+	return "ok", nil
+}
+
+func (t *countingTool) maxConcurrent() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return *t.maxSeen
+}
+
+// executeToolCallRound drives a single tool-calling iteration through the
+// engine and returns the resulting intermediate steps. It lets tests exercise
+// runToolCallsByLayer without going through the full LLM loop.
+func (ae *AgentEngine) executeToolCallRound(t *testing.T, calls []types.ToolCall) []types.ToolCallData {
+	t.Helper()
+	sorted, err := ae.prepareToolCalls(calls)
+	if err != nil {
+		t.Fatalf("prepareToolCalls: %v", err)
+	}
+	exists, results := ae.runToolCallsByLayer(context.Background(), sorted, 5*time.Second)
+	_, steps := ae.buildToolCallResults(sorted, exists, results, "", "test")
+	return steps
+}
+
+func TestParallelismLimit_One(t *testing.T) {
+	provider := NewMockLLMProvider()
+	config := types.NewAgentConfig()
+	config.ToolParallelismLimit = 1
+	config.EnableToolRetry = false
+	ae := NewAgentEngine(provider, config)
+
+	shared := &countingState{}
+	var calls []types.ToolCall
+	for i := 0; i < 4; i++ {
+		name := fmt.Sprintf("count_%d", i)
+		ae.AddTool(context.Background(), newCountingTool(name, shared))
+		calls = append(calls, types.ToolCall{
+			ID:   fmt.Sprintf("call_%d", i),
+			Type: "function",
+			Function: types.ToolFunction{Name: name, Arguments: map[string]interface{}{"i": i}},
+		})
+	}
+	steps := ae.executeToolCallRound(t, calls)
+	if len(steps) != 4 {
+		t.Fatalf("expected 4 steps, got %d", len(steps))
+	}
+	if got := shared.maxSeen; got != 1 {
+		t.Errorf("expected max concurrency 1, got %d", got)
+	}
+}
+
+func TestParallelismLimit_Four(t *testing.T) {
+	provider := NewMockLLMProvider()
+	config := types.NewAgentConfig()
+	config.ToolParallelismLimit = 4
+	config.EnableToolRetry = false
+	ae := NewAgentEngine(provider, config)
+
+	shared := &countingState{}
+	var calls []types.ToolCall
+	for i := 0; i < 10; i++ {
+		name := fmt.Sprintf("count_%d", i)
+		ae.AddTool(context.Background(), newCountingTool(name, shared))
+		calls = append(calls, types.ToolCall{
+			ID:   fmt.Sprintf("call_%d", i),
+			Type: "function",
+			Function: types.ToolFunction{Name: name, Arguments: map[string]interface{}{"i": i}},
+		})
+	}
+	steps := ae.executeToolCallRound(t, calls)
+	if len(steps) != 10 {
+		t.Fatalf("expected 10 steps, got %d", len(steps))
+	}
+	if got := shared.maxSeen; got > 4 {
+		t.Errorf("expected max concurrency <= 4, got %d", got)
+	}
+}
+
+func TestParallelismLimit_Default(t *testing.T) {
+	provider := NewMockLLMProvider()
+	config := types.NewAgentConfig()
+	ae := NewAgentEngine(provider, config)
+	want := defaultToolParallelismLimit()
+	if got := ae.getToolParallelismLimit(); got != want {
+		t.Errorf("expected default parallelism %d, got %d", want, got)
+	}
+}
+
+func TestParallelismLimit_CancelQueue(t *testing.T) {
+	provider := NewMockLLMProvider()
+	config := types.NewAgentConfig()
+	config.ToolParallelismLimit = 1
+	config.EnableToolRetry = false
+	ae := NewAgentEngine(provider, config)
+
+	shared := &countingState{done: make(chan struct{})}
+	ae.AddTool(context.Background(), newCountingTool("block", shared))
+	ae.AddTool(context.Background(), newCountingTool("fast", shared))
+
+	// Limit 1, so "block" occupies the only slot and holds it; "fast" queues.
+	calls := []types.ToolCall{
+		{ID: "call_block", Type: "function", Function: types.ToolFunction{Name: "block", Arguments: map[string]interface{}{}}},
+		{ID: "call_fast", Type: "function", Function: types.ToolFunction{Name: "fast", Arguments: map[string]interface{}{}}},
+	}
+
+	// Run the round under a context that times out quickly; when the context is
+	// cancelled the queued call is skipped (results[idx] gets the ctx error).
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	sorted, err := ae.prepareToolCalls(calls)
+	if err != nil {
+		t.Fatalf("prepareToolCalls: %v", err)
+	}
+	exists, results := ae.runToolCallsByLayer(ctx, sorted, 5*time.Second)
+
+	// Unblock "block" so goroutines wind down cleanly.
+	close(shared.done)
+
+	_, steps := ae.buildToolCallResults(sorted, exists, results, "", "test")
+	if len(steps) != 2 {
+		t.Fatalf("expected 2 steps (one error), got %d", len(steps))
+	}
+	// The queued "fast" call must surface as an error (ctx cancellation), not as
+	// a zero-value success.
+	foundErr := false
+	for _, s := range steps {
+		if strings.Contains(s.Observation, "execution failed") || strings.Contains(s.Observation, "context deadline") {
+			foundErr = true
+		}
+	}
+	if !foundErr {
+		t.Errorf("expected at least one queued call to report a cancellation error, steps: %+v", steps)
+	}
+}
+
+func TestStreamBufferSize_Config(t *testing.T) {
+	provider := NewMockLLMProvider()
+	config := types.NewAgentConfig()
+	config.StreamBufferSize = 200
+	ae := NewAgentEngine(provider, config)
+	if got := ae.getStreamBufferSize(); got != 200 {
+		t.Errorf("expected stream buffer 200, got %d", got)
+	}
+	config.StreamBufferSize = 0
+	if got := ae.getStreamBufferSize(); got != types.DefaultChannelBuffer {
+		t.Errorf("expected default stream buffer %d, got %d", types.DefaultChannelBuffer, got)
+	}
 }
 
 func TestAgentEngine_ExecuteStream_Concurrent(t *testing.T) {

@@ -317,8 +317,16 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 	// Get hooks
 	hookRunner := hooks.NewRunner(ae.getHooks(), "", "")
 
+	// Global concurrency cap across all layers: parallel bash/MCP calls (same
+	// layer, no dependencies) are bounded, dependent calls in later layers wait
+	// for earlier layers to release their slots. This is a wall-time throttle
+	// only — correctness is unchanged (errgroup already waits for every call).
+	limit := ae.getToolParallelismLimit()
 	for _, layer := range layers {
 		g, gctx := errgroup.WithContext(ctx)
+		if limit > 0 {
+			g.SetLimit(limit)
+		}
 		for _, idx := range layer {
 			if !exists[idx] {
 				continue

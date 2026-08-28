@@ -85,6 +85,8 @@ type AgentConfig struct {
 	DefaultToolResultMaxLen  int                                                               `json:"defaultToolResultMaxLen"`
 	ToolErrorMaxLen          int                                                               `json:"toolErrorMaxLen"`
 	ReasoningEffort          string                                                            `json:"reasoningEffort"`
+	ToolParallelismLimit     int                                                               `json:"toolParallelismLimit,omitempty"` // 0=默认 max(4, GOMAXPROCS*2) 封顶 32；>0 用该值
+	StreamBufferSize         int                                                               `json:"streamBufferSize,omitempty"`     // 0=默认 50；>0 用该值
 }
 
 func (c *AgentConfig) EffectiveMaxCompletionTokens() int {
@@ -126,6 +128,8 @@ func NewAgentConfig() *AgentConfig {
 		DefaultToolResultMaxLen:  0,
 		ToolErrorMaxLen:          0,
 		ReasoningEffort:          "",
+		ToolParallelismLimit:     0,
+		StreamBufferSize:         0,
 	}
 }
 
