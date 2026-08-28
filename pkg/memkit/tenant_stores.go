@@ -107,6 +107,17 @@ func (t *tenantKnowledgeStore) GetStats(ctx context.Context, _ string) (int, err
 	return t.inner.GetStats(ctx, t.uid)
 }
 
+func (t *tenantKnowledgeStore) RecordKnowledgeUse(ctx context.Context, id string) error {
+	e, err := t.inner.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if e == nil || e.UserID != t.uid {
+		return nil
+	}
+	return t.inner.RecordKnowledgeUse(ctx, id)
+}
+
 type tenantIndexStore struct {
 	inner IndexStore
 	uid   string

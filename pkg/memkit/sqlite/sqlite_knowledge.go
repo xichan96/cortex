@@ -18,6 +18,11 @@ func NewSQLiteKnowledgeStore(store *SQLiteStore) *SQLiteKnowledgeStore {
 	return &SQLiteKnowledgeStore{db: store.DB()}
 }
 
+// DB 暴露底层 *sql.DB（Phase 2 全局锁/剪枝直接操作 DB 用）。
+func (s *SQLiteKnowledgeStore) DB() *sql.DB {
+	return s.db
+}
+
 func (s *SQLiteKnowledgeStore) Add(ctx context.Context, entry KnowledgeEntry) error {
 	if entry.ID == "" {
 		entry.ID = utils.NewID()
@@ -121,10 +126,19 @@ func (s *SQLiteKnowledgeStore) Get(ctx context.Context, id string) (*KnowledgeEn
 }
 
 func (s *SQLiteKnowledgeStore) Search(ctx context.Context, userID string, opts *SearchOptions) (*SearchResult, error) {
-	query := `SELECT id, user_id, category, content, tags, metadata, source, priority, created_at, updated_at 
+	query := `SELECT id, user_id, category, content, tags, metadata, source, priority, created_at, updated_at, usage_count, last_usage
               FROM knowledge WHERE user_id = ?`
 	args := []interface{}{userID}
 
+	useScore := false
+	if opts != nil && opts.Query != "" {
+		// 关键词下推：content/tags/category 任一命中即可（LIKE %..% 不走索引，
+		// 但 MaxKnowledge 默认 5000 量级 + LIMIT 下推后成本可控）。
+		pattern := "%" + escapeLikePattern(strings.ToLower(opts.Query)) + "%"
+		query += ` AND (LOWER(content) LIKE ? ESCAPE '\' OR LOWER(tags) LIKE ? ESCAPE '\' OR LOWER(category) LIKE ? ESCAPE '\')`
+		args = append(args, pattern, pattern, pattern)
+		useScore = true
+	}
 	if opts != nil && opts.Category != "" {
 		query += " AND category = ?"
 		args = append(args, opts.Category)
@@ -133,7 +147,6 @@ func (s *SQLiteKnowledgeStore) Search(ctx context.Context, userID string, opts *
 		query += " AND priority >= ?"
 		args = append(args, int(*opts.Priority))
 	}
-	query += " ORDER BY priority DESC, updated_at DESC"
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -142,22 +155,20 @@ func (s *SQLiteKnowledgeStore) Search(ctx context.Context, userID string, opts *
 	defer rows.Close()
 
 	var items []MemoryItem
+	usageMap := make(map[string]int)
 	for rows.Next() {
 		var entry KnowledgeEntry
 		var tags, metadata string
+		var usage int
+		var lastUsage *time.Time
 		if err := rows.Scan(&entry.ID, &entry.UserID, &entry.Category, &entry.Content, &tags, &metadata,
-			&entry.Source, &entry.Priority, &entry.CreatedAt, &entry.UpdatedAt); err != nil {
+			&entry.Source, &entry.Priority, &entry.CreatedAt, &entry.UpdatedAt, &usage, &lastUsage); err != nil {
 			return nil, err
 		}
 		entry.Tags = parseTagsFromDB(tags)
 		_ = safeJSONUnmarshal(metadata, &entry.Metadata)
 		if opts != nil && len(opts.Tags) > 0 {
 			if !entryHasAllTags(entry.Tags, opts.Tags) {
-				continue
-			}
-		}
-		if opts != nil && opts.Query != "" {
-			if !matchKnowledgeQuery(&entry, opts.Query) {
 				continue
 			}
 		}
@@ -169,6 +180,7 @@ func (s *SQLiteKnowledgeStore) Search(ctx context.Context, userID string, opts *
 				continue
 			}
 		}
+		usageMap[entry.ID] = usage
 		items = append(items, MemoryItem{
 			ID:        entry.ID,
 			Type:      MemoryTypeKnowledge,
@@ -185,7 +197,22 @@ func (s *SQLiteKnowledgeStore) Search(ctx context.Context, userID string, opts *
 		return nil, err
 	}
 
+	queryText := ""
+	if opts != nil {
+		queryText = opts.Query
+	}
 	sort.Slice(items, func(i, j int) bool {
+		if useScore && queryText != "" {
+			si := utils.PageKeywordScore(queryText, items[i].Key, items[i].Value)
+			sj := utils.PageKeywordScore(queryText, items[j].Key, items[j].Value)
+			if si != sj {
+				return si > sj
+			}
+		}
+		ui, uj := usageMap[items[i].ID], usageMap[items[j].ID]
+		if ui != uj {
+			return ui > uj
+		}
 		if items[i].Priority != items[j].Priority {
 			return items[i].Priority > items[j].Priority
 		}
@@ -216,6 +243,15 @@ func (s *SQLiteKnowledgeStore) Search(ctx context.Context, userID string, opts *
 		q = opts.Query
 	}
 	return &SearchResult{Items: items, Total: total, HasMore: hasMore, Query: q}, nil
+}
+
+// RecordKnowledgeUse 记录一条知识被实际引用：usage_count + 1 并刷新 last_usage。
+// 仅由「模型实际引用」路径调用（见 dino/mem 引用反馈），不用于「返回即计数」。
+func (s *SQLiteKnowledgeStore) RecordKnowledgeUse(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE knowledge SET usage_count = COALESCE(usage_count, 0) + 1, last_usage = ? WHERE id = ?`,
+		time.Now(), id)
+	return err
 }
 
 func entryHasAllTags(have []string, need []string) bool {

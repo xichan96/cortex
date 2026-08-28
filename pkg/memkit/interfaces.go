@@ -40,6 +40,8 @@ type KnowledgeStore interface {
 	Clear(ctx context.Context, userID string) error
 	// GetStats 获取知识条目数量
 	GetStats(ctx context.Context, userID string) (int, error)
+	// RecordKnowledgeUse 记录一条知识被实际引用（usage_count + 1 / last_usage 刷新）。
+	RecordKnowledgeUse(ctx context.Context, id string) error
 }
 
 // IndexStore Manage Markdown index.

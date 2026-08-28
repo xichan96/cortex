@@ -24,21 +24,42 @@ const (
 	maxMemoryTagRunes       = 64
 )
 
-const defaultMemoryToolDescription = `Long-term memory (same SQLite as chat). Read: search knowledge, preferences, indexes, stats, build_system_prompt. Write: set_preference (category/key/value), add_knowledge (content, category user|feedback|project|reference, optional tags). Call writes only when the user clearly asks to remember something or when a durable fact should persist; skip trivial chat.`
+const defaultMemoryToolDescription = `Long-term memory (same SQLite as chat). Read: search_knowledge (query), get_preference (category/key), list_preferences, memory_stats. Write: set_preference (category/key/value), add_knowledge (content, category user|feedback|project|reference, optional tags), forget_knowledge (id from search results), forget_preference (category/key). Call writes only when the user clearly asks to remember something or when a durable fact should persist; skip trivial chat.`
 
-type sqliteMemoryTool struct {
-	sessionID   string
-	mgr         memkit.Manager
-	name        string
-	writeTag    string
-	description string
+// memoryAction 是模型的可见 action 全集（build_system_prompt 已从模型可见中移除）。
+// 默认暴露子集由 MemoryToolOptions.HideInternalActions / ExposeSearchIndexes 控制。
+var memoryActions = []string{
+	"get_preference", "list_preferences",
+	"search_knowledge",
+	"search_indexes",
+	"memory_stats",
+	"set_preference", "add_knowledge",
+	"forget_knowledge", "forget_preference",
 }
 
-func newSQLiteMemoryTool(sessionID string, mgr memkit.Manager, name, writeTag, description string) types.Tool {
+type sqliteMemoryTool struct {
+	sessionID            string
+	mgr                  memkit.Manager
+	name                 string
+	writeTag             string
+	description          string
+	exposeSearchIndexes  bool
+	hideInternalActions  bool
+}
+
+func newSQLiteMemoryTool(sessionID string, mgr memkit.Manager, name, writeTag, description string, exposeSearchIndexes, hideInternalActions bool) types.Tool {
 	if description == "" {
 		description = defaultMemoryToolDescription
 	}
-	return &sqliteMemoryTool{sessionID: sessionID, mgr: mgr, name: name, writeTag: writeTag, description: description}
+	return &sqliteMemoryTool{
+		sessionID:           sessionID,
+		mgr:                 mgr,
+		name:                name,
+		writeTag:            writeTag,
+		description:         description,
+		exposeSearchIndexes: exposeSearchIndexes,
+		hideInternalActions: hideInternalActions,
+	}
 }
 
 func (t *sqliteMemoryTool) Name() string { return t.name }
@@ -46,19 +67,20 @@ func (t *sqliteMemoryTool) Name() string { return t.name }
 func (t *sqliteMemoryTool) Description() string { return t.description }
 
 func (t *sqliteMemoryTool) Schema() map[string]interface{} {
+	actions := make([]string, 0, len(memoryActions))
+	for _, a := range memoryActions {
+		if a == "search_indexes" && !t.exposeSearchIndexes {
+			continue
+		}
+		actions = append(actions, a)
+	}
 	return map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
-				"type": "string",
-				"enum": []string{
-					"get_preference", "list_preferences",
-					"search_knowledge",
-					"search_indexes",
-					"memory_stats", "build_system_prompt",
-					"set_preference", "add_knowledge",
-				},
-				"description": "Operation: reads, set_preference, or add_knowledge.",
+				"type":        "string",
+				"enum":        actions,
+				"description": "Operation: reads, writes, or forget.",
 			},
 			"category": map[string]interface{}{"type": "string"},
 			"key":      map[string]interface{}{"type": "string"},
@@ -67,9 +89,9 @@ func (t *sqliteMemoryTool) Schema() map[string]interface{} {
 			"tags": map[string]interface{}{
 				"description": "For add_knowledge: optional semicolon-separated tags or JSON array of strings.",
 			},
-			"query":      map[string]interface{}{"type": "string"},
-			"limit":      map[string]interface{}{"type": "integer"},
-			"max_tokens": map[string]interface{}{"type": "integer"},
+			"query": map[string]interface{}{"type": "string"},
+			"limit": map[string]interface{}{"type": "integer"},
+			"id":    map[string]interface{}{"type": "string", "description": "For forget_knowledge: the id returned by search_knowledge."},
 		},
 		"required": []string{"action"},
 	}
@@ -217,6 +239,9 @@ func (t *sqliteMemoryTool) Execute(ctx context.Context, input map[string]interfa
 		lim := capLimit(intArg(input, "limit", 20), 20, maxKnowledgeSearchLimit)
 		var items []memkit.MemoryItem
 		items, err = t.mgr.SearchKnowledge(ctx, uid, strArg(input, "query"), lim)
+		// 引用反馈候选登记：仅登记「返回给模型的条目」，不在这里计数
+		// （B3：计数发生在 turn 结束后模型实际引用时）。
+		recordSearchResults(t.sessionID, items)
 		out = items
 	case "search_indexes":
 		lim := capLimit(intArg(input, "limit", 10), 10, maxIndexSearchLimit)
@@ -227,14 +252,24 @@ func (t *sqliteMemoryTool) Execute(ctx context.Context, input map[string]interfa
 		var st *memkit.MemoryStats
 		st, err = t.mgr.GetStats(ctx, uid)
 		out = st
-	case "build_system_prompt":
-		mt := intArg(input, "max_tokens", 2000)
-		if mt <= 0 {
-			mt = 2000
+	case "forget_knowledge":
+		id := strings.TrimSpace(strArg(input, "id"))
+		if id == "" {
+			return nil, fmt.Errorf("id is required")
 		}
-		var s string
-		s, err = t.mgr.BuildSystemPrompt(ctx, uid, mt)
-		out = map[string]string{"prompt": s}
+		err = t.mgr.Knowledge().Delete(ctx, id)
+		out = map[string]any{"ok": true}
+	case "forget_preference":
+		cat := strings.TrimSpace(strArg(input, "category"))
+		if cat == "" {
+			cat = "user"
+		}
+		key := strings.TrimSpace(strArg(input, "key"))
+		if key == "" {
+			return nil, fmt.Errorf("key is required")
+		}
+		err = t.mgr.Preferences().Delete(ctx, uid, cat, key)
+		out = map[string]any{"ok": true}
 	case "set_preference":
 		cat := strings.TrimSpace(strArg(input, "category"))
 		if cat == "" {
@@ -312,6 +347,6 @@ func MemoryTools(opts MemoryToolOptions) []types.Tool {
 		log.Warn("memory tool disabled", "session_id", opts.SessionID, "persist_dir", opts.PersistDir, "error", "nil manager")
 		return tools
 	}
-	tools = append(tools, newSQLiteMemoryTool(opts.SessionID, mgr, name, writeTag, opts.Description))
+	tools = append(tools, newSQLiteMemoryTool(opts.SessionID, mgr, name, writeTag, opts.Description, opts.ExposeSearchIndexes, opts.HideInternalActions))
 	return tools
 }

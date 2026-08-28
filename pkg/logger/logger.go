@@ -72,6 +72,14 @@ func NewLoggerWithConfig(cfg *LoggerConfig) *Logger {
 	}
 }
 
+// Slog 返回底层 *slog.Logger，供需要原生 slog.Logger 的子系统使用。
+func (l *Logger) Slog() *slog.Logger {
+	if l == nil || l.logger == nil {
+		return slog.Default()
+	}
+	return l.logger
+}
+
 // LogExecution logs execution information
 func (l *Logger) LogExecution(operation string, iteration int, message string, attrs ...slog.Attr) {
 	l.logger.Info(message,

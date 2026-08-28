@@ -155,6 +155,70 @@ func TestNewDinoFactory(t *testing.T) {
 	}
 }
 
+func TestDinoFactory_LongTermMemEnabled(t *testing.T) {
+	cfg := getTestConfig()
+	cfg.Memory.PersistEnabled = true
+	cfg.Memory.PersistDirectory = t.TempDir() // 避免污染仓库 ./dino_sessions
+	cfg.LongTermMemory.Enabled = true
+	cfg.LongTermMemory.IngestInterval = time.Minute
+	factory, err := NewDinoFactory(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create factory: %v", err)
+	}
+	df, ok := factory.(*dinoFactory)
+	if !ok {
+		t.Fatal("expected *dinoFactory")
+	}
+	if df.longTermMem == nil {
+		t.Fatal("longTermMem should be constructed when LongTermMemory.Enabled")
+	}
+	if err := factory.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown with long-term memory: %v", err)
+	}
+	if df.longTermMem != nil {
+		t.Fatal("longTermMem should be nil after Shutdown")
+	}
+}
+
+func TestDinoFactory_LongTermMemExposesMemoryTool(t *testing.T) {
+	cfg := getTestConfig()
+	cfg.Memory.PersistEnabled = true
+	cfg.Memory.PersistDirectory = t.TempDir()
+	cfg.LongTermMemory.Enabled = true
+	cfg.LongTermMemory.IngestInterval = time.Minute
+	factory, err := NewDinoFactory(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create factory: %v", err)
+	}
+	defer factory.Shutdown(context.Background())
+
+	sess, err := factory.CreateSession(context.Background(), "ltm-session")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if sess == nil {
+		t.Fatal("nil session")
+	}
+	// memory 工具在 mem 包单测已覆盖（MemoryTools 构造 + action 拆分）；
+	// 这里验证 LTM 开启时 CreateSession 能正常跑通（L1 prompt 注入 + 工具装配不 panic）。
+}
+
+func TestDinoFactory_LongTermMemDisabledByDefault(t *testing.T) {
+	cfg := getTestConfig()
+	factory, err := NewDinoFactory(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create factory: %v", err)
+	}
+	defer factory.Shutdown(context.Background())
+	df, ok := factory.(*dinoFactory)
+	if !ok {
+		t.Fatal("expected *dinoFactory")
+	}
+	if df.longTermMem != nil {
+		t.Fatal("longTermMem should be nil when disabled (default off)")
+	}
+}
+
 func TestNewDinoFactoryWithNilConfig(t *testing.T) {
 	cfg := getTestConfig()
 	factory, err := NewDinoFactory(cfg)

@@ -22,6 +22,7 @@ import (
 	agentutils "github.com/xichan96/cortex/agent/utils"
 	dinoAgent "github.com/xichan96/cortex/dino/agent"
 	"github.com/xichan96/cortex/dino/chatstore"
+	dinoMem "github.com/xichan96/cortex/dino/mem"
 	"github.com/xichan96/cortex/dino/permission"
 	"github.com/xichan96/cortex/dino/session"
 	dinoTools "github.com/xichan96/cortex/dino/tools"
@@ -161,6 +162,13 @@ func (m *memoryAdapter) SaveContext(ctx context.Context, input, output map[strin
 
 func (m *memoryAdapter) Clear(ctx context.Context) error {
 	return m.provider.Clear(ctx)
+}
+
+// GetSummary 转发到 chatstore.Provider.GetSummary（压缩摘要注入）。
+// 不加到 MemoryProvider 接口体（避免破坏 agent/providers 其它实现），
+// 由 engine 在 prepareMessages 用类型断言探测（评审 R3）。
+func (m *memoryAdapter) GetSummary(ctx context.Context) (string, error) {
+	return m.provider.GetSummary(ctx)
 }
 
 func (m *memoryAdapter) GetChatHistory(ctx context.Context) ([]types.Message, error) {
@@ -305,6 +313,7 @@ type dinoFactory struct {
 	streamSender         StreamEventSender
 	subagentManager      *dinoAgent.SubagentManager
 	mcpManager           *dinoTools.MCPManager
+	longTermMem          *dinoMem.LongTermMem // 长期记忆子系统句柄（nil = 未启用）
 	sessionToolsProvider func(sessionID string) []types.Tool
 	hooks                hooks.Hooks
 }
@@ -470,6 +479,20 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 			}
 		}
 	}
+	if cfg.LongTermMemory.Enabled {
+		ltm, err := dinoMem.NewLongTermMem(context.Background(), &cfg.LongTermMemory, llmProvider, logger.GetLogger().Slog(),
+			cfg.Memory.PersistDirectory, cfg.Memory.PersistFileName)
+		if err != nil {
+			logger.Warn("[DinoFactory] long-term memory disabled", slog.String("error", err.Error()))
+		} else {
+			f.longTermMem = ltm
+			f.longTermMem.Start()
+			logger.Info("[DinoFactory] long-term memory enabled",
+				slog.String("persist_dir", cfg.Memory.PersistDirectory),
+				slog.String("persist_file", cfg.Memory.PersistFileName))
+		}
+	}
+
 	for _, opt := range opts {
 		opt(f)
 	}
@@ -497,6 +520,13 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	systemPrompt := f.config.SystemPrompt
 	if len(f.cortexSkills) > 0 {
 		systemPrompt += agentskills.BuildSystemPromptInjectionWithTriggers(f.cortexSkills)
+	}
+	// 长期记忆 L1 分层披露：session 级快照，CreateSession 时计算一次，
+	// 不随 turn 刷新（评审 R7）。uid = sessionID（per-session 语义，评审 B1）。
+	if f.longTermMem != nil {
+		if l1 := f.longTermMem.BuildLayeredPrompt(ctx, sessionID); l1 != "" {
+			systemPrompt += "\n\n" + l1
+		}
 	}
 	agentConfig.SystemMessage = systemPrompt
 	agentConfig.MaxIterations = f.config.MaxIterations
@@ -541,6 +571,15 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	}
 
 	sessionTools := f.tools.GetAll()
+
+	// 长期记忆工具：与 f.longTermMem.Manager() 复用同一进程内单例，不会开第二个连接。
+	if f.longTermMem != nil {
+		ltmTools := f.longTermMem.MemoryToolsForSession(sessionID,
+			dinoMem.WithToolNameOverride("memory"))
+		sessionTools = append(sessionTools, ltmTools...)
+		logger.Info("[DinoFactory] Added long-term memory tools", slog.Int("count", len(ltmTools)))
+	}
+
 	logger.Info("[DinoFactory] Total tools in registry", slog.Int("count", len(sessionTools)))
 	var ruleset permission.Ruleset
 	if len(f.config.Permission) > 0 {
@@ -820,6 +859,11 @@ func (f *dinoFactory) Shutdown(ctx context.Context) error {
 
 		if f.mcpManager != nil {
 			f.mcpManager.Close()
+		}
+
+		if f.longTermMem != nil {
+			f.longTermMem.Stop()
+			f.longTermMem = nil
 		}
 
 		done <- nil
