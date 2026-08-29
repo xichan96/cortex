@@ -681,6 +681,69 @@ func classifyToolError(err error) error {
 - **grep**：`search/grep.go` 改 `cmd.Output()` 分支（exit 1 空输出 → 空结果）+ 结果上限。
 - **bash 内存上限**：`pkg/shell/shell.go` `exec` 用有界 buffer（如 `cap = 8MB`，超限截断并标记）。
 
+---
+
+## 10. 改动文件清单（按项汇总）
+
+| 文件 | 项 | 改动 |
+|---|---|---|
+| `agent/types/tool.go` | E1 | `ToolExposure` + `IsDirect/IsDeferred/IsHidden`；`ToolMetadata.Exposure`/`SearchKeywords` |
+| `agent/tools/registry.go` | E1 | `GetAllVisible`/`GetDeferred`/`GetDeferredTool` |
+| `dino/factory.go:754-857,1086-1095` | E1+E2 | 两阶段 sessionTools；`sessionDeferredTools` 预包装缓存；`ToolSearchTool` 注入 + discover 闭包 |
+| `dino/config.go` | E1+E2 | `Tools.ToolSearchEnabled`、`Tools.MCPDeferred` |
+| `dino/tools/manager.go` | E1 | `AddServer` 按 config 给 MCP 工具打 `ExposureDeferred` |
+| `dino/tools/builtin.go:1167` | E1 | `mcp_client` 移除或降级 `Hidden` |
+| `agent/tools/builtin/runtime/tool_search.go` | E2 | 新文件：`ToolSearchTool` + `SearchableTool`/`SearchInfo` |
+| `agent/tools/builtin/runtime/tool_search_index.go` | E2 | 新文件：倒排 + 评分 |
+| `dino/session/session.go:507-517` | E2 | tool_result 分支检测 `discovered` → `AddTools` |
+| `agent/tools/builtin/web/websearch.go:182-198` | P1 | 完整 SSE 解析 |
+| `dino/mem/tool.go` | E6 | `add_knowledge` schema 加 `external_context`；`ExternalContextTool(name)` |
+| `dino/tools/tool_wrappers.go` | E7 | `classifyToolError`（auth/connect 态 → fatal） |
+| `agent/tools/builtin/fs/read.go` | P2 | `offset`/`limit` + `total_lines` |
+| `agent/tools/builtin/search/grep.go` | P2 | exit 1 空输出 → 空结果 + 上限 |
+| `pkg/shell/shell.go` | P2 | `exec` 有界 buffer |
+| `agent/tools/builtin/fs/edit.go` | P2（可选） | 多 hunk JSON patch |
+| `dino/session/session.go` + `dino/client.go` | P2（与 F7 合并） | `AnswerQuestion(questionID, answer)` 注入回流 |
+
+---
+
+## 11. 风险点
+
+| 风险 | 概率/影响 | 缓解 |
+|---|---|---|
+| **E1 改变模型可见工具列表**：`mcp_deferred=true` 后模型不再直接看到 MCP 工具，若不熟悉 `tool_search` 会「不会用」 | 中/中 | 工具描述引导（`tool_search` 的 description 写清楚用法）；默认 `mcp_deferred=false` 灰度；`ToolSearchEnabled` 可关 |
+| **E2 discover 时机**：`tool_search` 命中后注入 `ae.tools`，若模型下一轮没调（列表变化但模型选错），浪费一轮 | 低/低 | `tool_search` 返回 `discovered` 标记进上下文；模型看到「新工具已可用」自会尝试 |
+| **E2 索引质量**：关键词检索命中不准，模型找不到需要的工具 → 放弃 | 中/中 | 评分覆盖 name/keywords/description；`SearchableTool` 让 MCP server 提供关键词；可配 `SearchOnly` |
+| **E1 包装链遗漏**：Deferred 工具被发现后若包装链不完整（漏 approval/limiter），绕过权限审批 | 高/高 | §2.4 明确「构造期预包装」；测试断言包装链类型顺序（`tool-pipeline.md` §10.9 复用） |
+| **E6 误伤**：`add_knowledge` 加 `external_context` 后，模型诚实标注或忘记标注导致知识分类错误 | 低/中 | 只是分类调整，不阻塞；`reference` 类仍接受 |
+| **E7 误伤**：`EC_TOOL_AUTH_ERROR` 判 fatal 后，临时性 auth（token 过期但 refresh 后可用）被中止 | 中/中 | fatal 只影响「重试同一输入」；模型换输入（刷新 token 的工具）可继续。fatal 清单评审时逐条过 |
+| **web_search SSE**：exa API 改格式 / 非标准 SSE | 低/低 | 只读 `data:` 前缀行的兼容逻辑保留；`httptest` 覆盖多块场景 |
+| **question 回流**：挂起等待用户回答的 turn 语义复杂（与 budget/超时/流式交互） | 中/高 | 与 F7 合并评审；第一版只做「注入下一条 user 消息」不挂起 |
+
+---
+
+## 12. 留给用户的待定点
+
+1. **MCP Deferred 默认值**：`mcp_deferred` 默认 `false`（保持现状），灰度后翻 `true`——是否接受「默认直连」过渡期？
+2. **`mcp_client` 去留**：移除 vs 降级 `Hidden`。取决于产品是否依赖「运行时动态 connect 任意 MCP server」。（若依赖，`Hidden` 版保留，但 Hidden 工具不被模型看到——动态接入需走其他通道。）
+3. **MCP 工具名空间**：是否在 E1 落地时一并引入 `mcp://server/tool` 前缀？（改变模型可见名，需 release note。）
+4. **question 回答回流**：是否进入本季度？它跨 engine+dino 两层，且与 `tool-pipeline.md` F7 的未做项重叠——建议合并排期，但需确认产品「提问-回答」近期是否要用。
+5. **bash 会话复用**：P3 的「长会话 shell 状态」是否有产品诉求？有状态 shell 是调试陷阱，倾向不做。
+6. **edit_file 多 hunk**：P2 可选。是否需要？（当前单 hunk + 多次调用模型已能工作。）
+7. **E3 apply_patch**：确认暂缓到 P3？（本设计的判断是：Lark 语法收益依赖 cortex 没有的「中途反馈」通道。）
+
+---
+
+## 13. 实现备注（落地时相对设计的偏离记录）
+
+> 本设计文档在落地时若与代码不符，在此记录偏离（参照 `tool-pipeline.md` §13 的惯例）。当前为空。
+
+## 14. 与既有设计的关系
+
+- `tool-pipeline.md` F1–F7 已落地（§13 实现备注）。本设计**不重复** F1（截断）/F3（错误二分）/F4（并发），只评估残余差距。
+- F7 的「question 回答回流」（`tool-pipeline.md` §12.7 遗留）与本设计 §8.6 的 `AnswerQuestion` 是同一机制，**建议合并排期**。
+- 评估报告 `optimization-review-vs-codex.md` 落地优先级表的 P2（ToolExposure / 工具错误二分）中，「错误二分」已在 `tool-pipeline` 分支落地（F3），本设计补 ToolExposure（E1）+ tool_search（E2）+ 错误分类补全（E7）。
+
 
 
 
