@@ -69,6 +69,38 @@ func IsFatalToolError(err error) bool {
 	return FatalToolErrorKindOf(err) != nil
 }
 
+// ToolExposure controls a tool's visibility in the model's initial tool list
+// (E1). Registration and model-visibility are decoupled: a tool stays registered
+// (dispatchable) regardless of its exposure.
+//
+//   - ExposureDirect: registered AND visible in the initial list (current default).
+//   - ExposureDeferred: registered but NOT in the initial list; the model finds it
+//     via tool_search, and it is injected into ae.tools the next iteration.
+//   - ExposureHidden: registered and dispatchable by the engine, never visible to
+//     the model (reserved for escape-hatch / internal orchestration tools).
+type ToolExposure string
+
+const (
+	// ExposureDirect 默认：注册即对模型可见（现状行为）。空值等价于 Direct。
+	ExposureDirect ToolExposure = "direct"
+	// ExposureDeferred 注册可分发但初始列表不可见；模型通过 tool_search 发现后
+	// 下一轮才注入为正式工具。
+	ExposureDeferred ToolExposure = "deferred"
+	// ExposureHidden 完全不可见（但仍可被引擎内部分发）。
+	ExposureHidden ToolExposure = "hidden"
+)
+
+// IsDirect reports whether the exposure yields initial-list visibility.
+// The empty value is treated as Direct (zero migration: tools that never set
+// Exposure keep current behavior).
+func (e ToolExposure) IsDirect() bool { return e == "" || e == ExposureDirect }
+
+// IsDeferred reports whether the exposure is deferred.
+func (e ToolExposure) IsDeferred() bool { return e == ExposureDeferred }
+
+// IsHidden reports whether the exposure is hidden.
+func (e ToolExposure) IsHidden() bool { return e == ExposureHidden }
+
 // Tool defines tool interface
 type Tool interface {
 	// Tool basic information
@@ -91,6 +123,8 @@ type ToolMetadata struct {
 	Priority            int                    `json:"priority,omitempty"`            // 优先级，数字越大优先级越高
 	Dependencies        []string               `json:"dependencies,omitempty"`        // 依赖的工具名称列表
 	MaxTruncationLength int                    `json:"maxTruncationLength,omitempty"` // 工具结果截断长度，0表示使用默认值
+	Exposure            ToolExposure           `json:"exposure,omitempty"`            // E1：模型可见性；空值=direct（向后兼容）
+	SearchKeywords      []string               `json:"searchKeywords,omitempty"`      // E2：tool_search 索引关键词；空则用 Name+Description 分词
 	Extra               map[string]interface{} `json:"extra,omitempty"`
 }
 
