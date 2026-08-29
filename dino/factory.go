@@ -805,6 +805,10 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 			f.mu.Lock()
 			f.sessionTracers[sessionID] = rec
 			f.mu.Unlock()
+			// context-trace（评审 B3）：同步给 subagent manager，子代理事件落父 session trace。
+			if f.subagentManager != nil {
+				f.subagentManager.SetSessionTracer(sessionID, rec)
+			}
 			logger.Info("[DinoFactory] Trace recorder enabled", slog.String("session_id", sessionID), slog.String("dir", traceCfg.Dir))
 		}
 	}
@@ -904,7 +908,7 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	}
 
 	if f.subagentManager != nil {
-		delegateTool := dinoAgent.NewSubagentTool(f.subagentManager)
+		delegateTool := dinoAgent.NewSubagentTool(f.subagentManager).WithSessionID(sessionID)
 		registerDelegate := types.Tool(delegateTool)
 		if f.config.Subagent.ReplayToParentMemory {
 			registerDelegate = newDelegateParentMemoryTool(delegateTool, sessionID, func() types.MemoryProvider {

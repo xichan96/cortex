@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/xichan96/cortex/agent/hooks"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/dino/permission"
 	"github.com/xichan96/cortex/pkg/logger"
@@ -27,6 +28,9 @@ type SubagentManager struct {
 	// goroutine 在父 session 关闭后继续烧 token。S3 spawn_agent 落地时把子代理 ctx
 	// 的 cancel 注册进这里，CloseSession 遍历 cancel。
 	sessionCancels map[string]map[string]context.CancelFunc
+	// tracerBySession 每 session 的 trace 句柄（context-trace，评审 B3）。
+	// Execute/Spawn 给子代理注入 tracer，使子代理事件也落父 session 的 trace。
+	tracerBySession map[string]hooks.Tracer
 
 	// notifier 完成通知（mailbox.Put + 旁路事件）。S3 spawn 完成时调用。
 	notifier *CompletionNotifier
@@ -94,6 +98,7 @@ func (sm *SubagentManager) Spawn(
 		cancel()
 		return nil, err
 	}
+	sm.attachSessionTracer(parentSessionID, sa)
 
 	done := make(chan struct{})
 	go func() {
@@ -160,6 +165,40 @@ func (sm *SubagentManager) SetMaxConcurrentSpawns(n int) {
 	sm.spawnSem = make(chan struct{}, n)
 }
 
+// SetSessionTracer 记录某 session 的 trace 句柄（context-trace，评审 B3）。
+// Execute/Spawn 时给子代理注入 tracer，使子代理事件落父 session 的 trace。
+func (sm *SubagentManager) SetSessionTracer(sessionID string, t hooks.Tracer) {
+	if sm == nil {
+		return
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if t == nil {
+		delete(sm.tracerBySession, sessionID)
+		return
+	}
+	sm.tracerBySession[sessionID] = t
+}
+
+// sessionTracer 取某 session 的 trace 句柄（nil 表示不 trace）。
+func (sm *SubagentManager) sessionTracer(sessionID string) hooks.Tracer {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.tracerBySession[sessionID]
+}
+
+// attachSessionTracer 给 subagent 注入该 session 的 tracer（评审 B3）。
+func (sm *SubagentManager) attachSessionTracer(sessionID string, sa Subagent) {
+	if sm == nil || sa == nil {
+		return
+	}
+	if impl, ok := sa.(*subagentImpl); ok {
+		if t := sm.sessionTracer(sessionID); t != nil {
+			impl.WithTracer(t)
+		}
+	}
+}
+
 type SubagentManagerFactory interface {
 	GetLLMProvider() types.LLMProvider
 	GetTools() []types.Tool
@@ -175,11 +214,12 @@ func NewSubagentManager(config *SubagentConfig, factory SubagentManagerFactory) 
 	}
 
 	mgr := &SubagentManager{
-		config:         config,
-		manager:        NewManager(factory, config.MaxHistoryMessages),
-		llmProv:        factory.GetLLMProvider(),
-		sessionCancels: make(map[string]map[string]context.CancelFunc),
-		tools:          factory.GetTools(),
+		config:          config,
+		manager:         NewManager(factory, config.MaxHistoryMessages),
+		llmProv:         factory.GetLLMProvider(),
+		sessionCancels:  make(map[string]map[string]context.CancelFunc),
+		tracerBySession: make(map[string]hooks.Tracer),
+		tools:           factory.GetTools(),
 	}
 	// restrict-only（P2.4）：父权限注入，子代理工具过滤取交集。
 	if rs := factory.GetParentRuleset(); len(rs) > 0 {
@@ -189,6 +229,12 @@ func NewSubagentManager(config *SubagentConfig, factory SubagentManagerFactory) 
 }
 
 func (sm *SubagentManager) Execute(ctx context.Context, agentName, input string) (*Result, error) {
+	return sm.ExecuteWithSession(ctx, "", agentName, input)
+}
+
+// ExecuteWithSession 在 Execute 基础上带 sessionID（context-trace，评审 B3）：
+// 给子代理注入该 session 的 tracer，使子代理事件落父 session 的 trace。
+func (sm *SubagentManager) ExecuteWithSession(ctx context.Context, sessionID, agentName, input string) (*Result, error) {
 	if sm == nil || sm.manager == nil {
 		return nil, nil
 	}
@@ -201,6 +247,7 @@ func (sm *SubagentManager) Execute(ctx context.Context, agentName, input string)
 	if err != nil {
 		return nil, err
 	}
+	sm.attachSessionTracer(sessionID, sa)
 
 	result, err := sa.Execute(ctx, &Request{
 		AgentName: agentName,
@@ -235,6 +282,8 @@ func (sm *SubagentManager) Close() {
 // S1 阶段无 spawn（delegate 仍同步执行），此处只有分桶/释放接口，S3 落地填充。
 func (sm *SubagentManager) CloseSession(sessionID string) {
 	sm.cancelSessionAll(sessionID)
+	// context-trace（评审 B3）：释放该 session 的 tracer 引用。
+	sm.SetSessionTracer(sessionID, nil)
 }
 
 // registerSubagentCancel 注册一次子代理执行的 cancel（S3 spawn_agent 用）。
@@ -291,10 +340,18 @@ func (sm *SubagentManager) cancelSessionAll(sessionID string) {
 
 type SubagentTool struct {
 	manager *SubagentManager
+	// sessionID 是父 session（context-trace，评审 B3）。Execute 用它给子代理注入 tracer。
+	sessionID string
 }
 
 func NewSubagentTool(manager *SubagentManager) *SubagentTool {
 	return &SubagentTool{manager: manager}
+}
+
+// WithSessionID 注入父 session ID（context-trace，评审 B3）。
+func (t *SubagentTool) WithSessionID(sessionID string) *SubagentTool {
+	t.sessionID = sessionID
+	return t
 }
 
 func (t *SubagentTool) Name() string {
@@ -358,7 +415,7 @@ func (t *SubagentTool) Execute(ctx context.Context, input map[string]interface{}
 
 	if t.manager.config != nil &&
 		DelegateReturnModeOrDefault(t.manager.config.DelegateReturnMode) == DelegateReturnModeString {
-		result, err := t.manager.Execute(ctx, agentName, task)
+		result, err := t.manager.ExecuteWithSession(ctx, t.sessionID, agentName, task)
 		if err != nil {
 			return nil, err
 		}
@@ -370,7 +427,7 @@ func (t *SubagentTool) Execute(ctx context.Context, input map[string]interface{}
 	}
 
 	start := time.Now()
-	result, err := t.manager.Execute(ctx, agentName, task)
+	result, err := t.manager.ExecuteWithSession(ctx, t.sessionID, agentName, task)
 
 	env := DelegateResultFromResult(agentName, result, err)
 	env.TaskID = uuid.NewString()

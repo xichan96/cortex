@@ -63,12 +63,21 @@ type subagentImpl struct {
 	// 非 nil 时子代理工具必须同时通过子代理自身权限与父权限的过滤——
 	// 「子代理永不比父代理更特权」。nil = 不约束（向后兼容旧行为）。
 	parentRuleset permission.Ruleset
+	// tracer 是父 session 的 trace 句柄（context-trace，评审 B3）。子代理每次
+	// Execute 新建 AgentEngine，须把 tracer 传给新引擎，否则子代理事件全丢。
+	tracer hooks.Tracer
 }
 
 // WithParentRuleset 注入父代理权限约束（restrict-only）。
 // 子代理 filterTools 时与自身权限取交集：仅同时被两边 allow 的工具可用。
 func (s *subagentImpl) WithParentRuleset(rs permission.Ruleset) *subagentImpl {
 	s.parentRuleset = rs
+	return s
+}
+
+// WithTracer 注入 trace 句柄（context-trace，评审 B3）。nil 允许（= 不 trace）。
+func (s *subagentImpl) WithTracer(t hooks.Tracer) *subagentImpl {
+	s.tracer = t
 	return s
 }
 
@@ -139,6 +148,10 @@ func (s *subagentImpl) Execute(ctx context.Context, req *Request) (*Result, erro
 	filteredTools := s.filterTools()
 
 	eng := engine.NewAgentEngine(s.llmProvider, cfg)
+	// context-trace（评审 B3）：子代理新引擎须注入 tracer，否则子代理事件全丢。
+	if s.tracer != nil {
+		eng.SetTracer(s.tracer)
+	}
 	eng.AddTools(ctx, filteredTools)
 
 	// 迭代计数：ExecuteStream 只在 end 事件携带 AgentResult，用 OnAfterIteration 钩子
