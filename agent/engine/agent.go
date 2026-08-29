@@ -91,6 +91,11 @@ type AgentEngine struct {
 
 	// Hooks for lifecycle events
 	hooks hooks.Hooks
+
+	// compaction holds prefix-preserving compaction options (P3.1). nil means
+	// disabled. Injected via SetCompactionOptions by the constructor
+	// (dino/factory.go) so agent/engine never imports dino (B1).
+	compaction *CompactionOptions
 }
 
 // ResultSender is a function type for sending stream results

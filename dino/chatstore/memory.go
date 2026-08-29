@@ -279,25 +279,14 @@ func (m *Hybrid) AddMessage(ctx context.Context, msg Message) error {
 	return nil
 }
 
+// GetMessages returns the real history only. The summary is NOT injected here
+// (P3.1, design §4.2): GetMessages is a storage interface and must not reorder
+// context — the engine's prepareMessages assembles the request and places the
+// summary (from GetSummary) itself. Injecting at the head here would both
+// break the cache prefix (summary inside the system concatenation) and pollute
+// the history semantics seen by trim/repair/budget.
 func (m *Hybrid) GetMessages(ctx context.Context, limit int) ([]Message, error) {
-	messages, err := m.provider.GetMessages(ctx, limit)
-	if err != nil {
-		return nil, err
-	}
-
-	m.summaryMu.RLock()
-	summary := m.summary
-	m.summaryMu.RUnlock()
-
-	if summary != "" {
-		summaryMsg := Message{
-			Role:    "system",
-			Content: summary,
-		}
-		messages = append([]Message{summaryMsg}, messages...)
-	}
-
-	return messages, nil
+	return m.provider.GetMessages(ctx, limit)
 }
 
 func (m *Hybrid) GetSummary(ctx context.Context) (string, error) {

@@ -174,3 +174,31 @@ func (ae *AgentEngine) SetHooks(ctx context.Context, h hooks.Hooks) {
 	defer ae.mu.Unlock()
 	ae.hooks = h
 }
+
+// SetCompactionOptions wires prefix-preserving compaction (P3.1). The summary
+// generator must come from the constructor (dino/factory.go injects
+// chatstore.DeterministicCompact as a closure); the engine itself never
+// imports dino (review BLOCKER B1). Pass nil to disable.
+func (ae *AgentEngine) SetCompactionOptions(opts *CompactionOptions) {
+	ae.mu.Lock()
+	defer ae.mu.Unlock()
+	ae.compaction = opts
+}
+
+// GetCompactionOptions returns the current compaction options under the read
+// lock (nil when disabled). The Enabled/CacheAnchorTokens switches live on
+// types.AgentConfig; the SummaryGenerator lives only here. Exported so the
+// constructor (dino/factory.go) and tests can verify the wiring.
+func (ae *AgentEngine) GetCompactionOptions() *CompactionOptions {
+	ae.mu.RLock()
+	defer ae.mu.RUnlock()
+	return ae.compaction
+}
+
+// getCompactionOptions returns the current compaction options under the read
+// lock (internal, unexported).
+func (ae *AgentEngine) getCompactionOptions() *CompactionOptions {
+	ae.mu.RLock()
+	defer ae.mu.RUnlock()
+	return ae.compaction
+}

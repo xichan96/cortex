@@ -49,6 +49,16 @@ type MemoryConfig struct {
 	PersistFileName    string `yaml:"persist_file_name"`
 	PersistEnabled     bool   `yaml:"persist_enabled"`
 	Type               string `yaml:"type"` // "memory" or "sqlite"
+	// CompactionPrefix enables prefix-preserving compaction (P3.1 · prompt
+	// caching Step 4): trimHistoryToTokenBudget keeps a head cache anchor and
+	// preserves the recent tail verbatim, replacing the middle with a summary,
+	// so prompt-cache segments 1-2 (system+tools) survive compaction. Default
+	// off (conservative): the trim output structure changes when on.
+	CompactionPrefix bool `yaml:"compaction_prefix"`
+	// CacheAnchorTokens caps the head-cache-anchor budget (tokens). 0 = no
+	// anchor (the head is trimmed like today). Default 0. Suggest ≤30% of
+	// MaxBudgetTokens so the tail keeps enough room to anchor segment 3 (R5).
+	CacheAnchorTokens int `yaml:"cache_anchor_tokens"`
 }
 
 // PromptCachingConfig controls provider prompt caching. nil sub-fields mean
