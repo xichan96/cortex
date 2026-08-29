@@ -133,3 +133,22 @@
 | **下一轮（串行设计）** | P1.3 push 前确认远端策略 | 运维决策 |
 | **随后（专项）** | P2.1 question 回流、P2.4 子代理权限 | 需产品决策 |
 | **专项（大）** | P3.1 compaction、P3.2 user 全局合并、P3.3 S3/S4、P3.4/P3.5 压缩升级 | 各自需要设计 + 实现两个阶段 |
+
+---
+
+## Question 回答回流 `AnswerQuestion`（工具管线 F7 · 专项）—— ⏳ 待办
+
+> 状态：**2026-08-29 评估为下一专项**（与 F7 合并，跨 engine+dino 两层，需先写设计再实现，参照 context-trace 流程）。设计出处：`tool-pipeline.md` §7（F7 方案 A）+ `tools-codex-eval.md` §8.9 question 行。
+
+- **现状**（P2.1 已落地部分）：
+  - `QuestionTool.Execute` 返回 `SentinelQuestionResult{ok:true, ask_user:true}`（`runtime/question.go:57-71`）——非 fatal，作为 tool_result 喂回模型。
+  - session 检测到 question 工具结果时 emit `EventTypeQuestion` + `QuestionID`（`session.go:506-519`），UI 经 `client.go:448-451` onQuestion 回调拿到问题。
+  - `question` 权限默认 `ActionDeny`（`permission.go:34`）；`ModeBuild`/`ModePlan` 放开（`:65,74`）。
+- **差距**：
+  1. **无 `AnswerQuestion` 通道**：UI 拿到问题后无法把回答注入回当前 turn（`session.go` 事件注释提到的方法不存在）。
+  2. **engine 无「挂起迭代」机制**：sentinel 作为 tool_result 喂回后 agent 会继续迭代，不会真正暂停等待。
+- **方案 A 要点**（设计 `tool-pipeline.md` §7）：
+  - **engine**：`buildToolCallResults` 后检测哨兵 → 返回 `hasMore=false`（不继续迭代），把问题经 tool_event 发 UI。
+  - **session**：`AnswerQuestion(questionID, answer)` —— 复用 `Input()`/`ObserveOneUserTurn`（`turn_observe.go:50`）把回答作为下一条 user 消息注入；挂起当前 turn 等待（方案 A 的「挂起迭代」）。
+  - **权限**：默认 deny 保持（避免「放开权限但必报硬错」更糟状态）；产品确认「question 必须能问」后放开。
+- **测试清单**：engine 单测（哨兵被识别、`hasMore=false`）；session 单测（`AnswerQuestion` 注入回答 → 下一 turn 以回答为输入）；权限默认 deny。
