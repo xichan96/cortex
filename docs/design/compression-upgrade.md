@@ -443,3 +443,24 @@ engine 的 byCount 触发（`agent_execution.go:698`）与 chatstore 的 `AddMes
 - `docs/next-round.md` P3.4 / P3.5
 - `docs/design/prompt-caching.md` §2.3、Step 4（摘要头部→尾部记录在案）
 - `docs/design/longterm-memory.md`（`GetSummary` 接线、评审 R3）
+
+---
+
+## 13. 实现备注（2026-08-29 落地，评审修正后）
+
+按评审 BLOCKER/RECOMMENDED 落地后的实现记录。**评审 B1 选定方案 1「尾部单注入」**，
+其余为对设计的偏离/确认。
+
+| # | 项 | 落地结果 |
+|---|---|---|
+| 13.1 | **B1 单一注入源** | 选定**尾部单注入**（Codex 模型）：`Hybrid.GetMessages` 把摘要作为最后一项 user 消息（`[Summary]` marker）追加；`memoryAdapter.GetSummary` 在底层 provider 是 `*Hybrid` 且 `TailSummaryEnabled()` 时返回空，禁用 engine 头部注入（`agent_execution.go:1056-1067` 代码不动，靠 adapter 返回空）。**双注入消除**。与 §2 目标图一致。 |
+| 13.2 | **B2 estimateTokens** | `estimateTokens` 删除，`sqlite.go:226` 与 `InMemory.AddMessage` 统一引用 `EstimateTokens`（§7 改动清单更新：sqlite.go 一行改动）。编译通过。 |
+| 13.3 | **§4.4 注入位置改动** | 设计 §4.4 原描述「`Hybrid.GetMessages` 摘要移尾部 + engine 头部注入保持现状」被 B1 否决。实际：尾部追加 + adapter 禁用头部。engine `agent_execution.go` **零改动**（D6b 未做）。 |
+| 13.4 | **MaxRecentTailTokens 提为 Config 字段**（O3/A3） | `chatstore.Config` 新增 `MaxRecentTailTokens`（默认 20k，`compact.go` 常量保留作缺省）。测试可调。 |
+| 13.5 | **R1 摘要输入消毒** | `LLMSummaryAdapter.summarize` → `sanitizeSummaryInput`：跟踪 pending tool_call_id，丢弃孤儿 tool 消息、剥离未配对 ToolCalls、丢弃尾部孤儿 assistant(tool_use)。 |
+| 13.6 | **R2 摘要独立超时** | `defaultSummaryTimeout = 90s`，`GenerateSummary` 内 `context.WithTimeout`。`compressCtx` 默认 10min 的上限仅作外层兜底。 |
+| 13.7 | **R3 SQLite 输入上限** | `defaultSummaryMaxInput = 200` 条，`capSummaryInput` 优先保留最近消息。`maxMessages`（keepWindow）未透传（设计 §5.2 注释说明，避免双源）。 |
+| 13.8 | **R4/R5** | R4：`EnableLLMCompress` 时 `memConfig.EnableMemoryCompress=false`（共享指针，Hybrid/底层自触发同时关闭，压缩统一走 engine 路径——A5 选项二）。R5：`Hybrid.Compress` 压缩日志带 `summary_length / older_messages / tail_messages / llm_summary`。 |
+| 13.9 | **generateBasicSummary 删除** | 无调用方，删除（步 5 收尾完成）。 |
+| 13.10 | **测试** | chatstore 单测 14 项（Hybrid 构造、LLM 成功/失败/空 fallback、splitTail 预算/CJK/边界、EstimateTokens 对齐、GetMessages 尾部注入、sanitize、cap、SQLite roundtrip）；factory 集成 3 项（Hybrid 包裹/不包裹、单一注入断言）；engine 单注入断言 1 项。 |
+| 13.11 | **遗留待定点** | A2（D6b 预算裁剪是否裁掉尾部摘要——待数据，R5 日志已铺）、A4（SQLite 摘要持久化）、A5（压缩触发源收敛，当前 engine-only）、A6（CJK 摘要语言）。 |
