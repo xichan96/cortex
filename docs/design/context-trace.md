@@ -552,3 +552,125 @@ type ReducedToolCall struct {
 - **不互相读写**：trace 不读 chatstore，chatstore 不读 trace。本设计的分工就是 Codex 的「rollout（trace）≠ state_db（索引）」映射——cortex 的 chatstore 同时扮演了 state_db 的角色（session/thread 归属、queryable 历史），trace 只是补上「不可变事件日志」这一半。
 - **后续可选**：`trace-replay` 反哺——把 `ReducedTurn` 写回 chatstore `metadata`（`sqlite.go:118-123`，key `trace_<trace_id>`）做索引；或崩溃续跑时用 trace 重建 messages（走 `ReplayMessages`）。**本轮不做**，避免破坏「trace 是纯记录」的边界。
 - **评估报告 12.1 的既有问题不影响本设计**：chatstore 双 memory 收敛（`agent/providers` deprecated）与本设计正交。
+
+---
+
+## 8. 后续 eval 基础（10.2 token + 计时分相）
+
+### 8.1 本轮顺带设计的账本字段
+
+每个 `llm_call_end` 事件已携带 `types.Usage`（5 类 token）+ `DurationMS`；每个 `tool_result`/`tool_error` 已携带 `DurationMS` + `Cached`。这**已覆盖评估报告 10.2 的 `InferenceCall` 账本**（`input/cached_input/cache_write_input/output/reasoning_output`）。`types.Usage` 的字段恰好一一对应：
+
+| 10.2 Codex `InferenceCall` | cortex `types.Usage`（`llm.go:45-52`） |
+|---|---|
+| input | `PromptTokens`（含 uncached+cached+write，B1 语义） |
+| cached_input | `CachedTokens` |
+| cache_write_input | `CacheCreationTokens` |
+| output | `CompletionTokens` |
+| reasoning_output | `ReasoningTokens` |
+
+**本轮不做**的分相计时（`TurnProfile`/`ToolCallTimingGuard`，`core/src/turn_timing.rs:305-351`）：引擎的工具执行时间可以**近似**从 `tool_call`→`tool_result` 的 `wall_ms` 差值得到（`runToolCallsByLayer` 已有 `stepResult.duration`，`agent_execution.go:207-212`）；「dispatch 排队 vs handler 执行」的分离需要动 `runToolCallsByLayer` 的 errgroup 内部——**列为后续**。
+
+### 8.2 聚合器
+
+```go
+// dino/trace/aggregate.go（后续，非本轮）
+type TurnProfile struct {
+    SamplingMS  int64 // Σ llm_call_end.duration_ms
+    ToolMS      int64 // Σ tool_result/tool_error.duration_ms
+    CompactionMS int64 // Σ compaction 事件附近墙钟（近似）
+    OverheadMS  int64 // wall_ms - (sampling+tool+compaction)
+    Tokens      types.Usage
+}
+```
+
+`trace-replay --format json` 输出 `ReducedTurn` 后，聚合器按 `StopReason`（`dino/task/types.go:89-100` 已有 `StopReason*`）分组出效率账本。
+
+---
+
+## 9. 迁移顺序（每步可独立验证）
+
+| 步 | 改动 | 验证 | 独立可用 |
+|---|---|---|---|
+| **S1 信封 + recorder** | `dino/trace/trace.go`（类型/常量）+ `recorder.go`（chan + writer goroutine + JSONL 落盘 + 体积控制 + 零开销单测）。**不接引擎**，先 `go test ./dino/trace/` 单测 | 信封字段/seq 单调/崩溃半写容错/`Flush` 语义 | ✅ 纯新包，无依赖 |
+| **S2 引擎挂钩点** | `agent/hooks` 放 `Tracer` 接口；`agent/engine` 加 `tracer` 字段 + `SetTracer` + 调用点（§3.2③）。跑现有 engine 测试确认**不 trace 时零回归**（nil-guard 生效） | `TestDisabledTracerZeroOverhead`；engine 测试全绿 | ✅ 引擎带 disabled trace 跑一轮 |
+| **S3 dino 接线** | `dino/factory.go` `CreateSession`：`Trace.Enabled` 时 `NewRecorder` + `SetTracer` + `Subscribe`；`CloseSession`/`Shutdown` 时 `Close()`。跑一次 dino 会话，确认 JSONL 落盘 | 手动 `go run ./cmd/trace-replay --dir ./dino_sessions/traces --session <sid>` 出可读序列 | ✅ 端到端 trace 产生 |
+| **S4 trace-replay** | `cmd/trace-replay/main.go` + `dino/trace/replay.go`（`RenderText`/`Reduce`）。用 S3 的真实 JSONL 做 golden | `go test ./dino/trace/`（replay 单测：构造 trace → 断言 text/json 输出） | ✅ 工具独立 |
+| **S5 编排事件 + subagent** | session `Observer` 接 `orchestration` 事件；subagent `thread_id`/`parent_trace_id` 传递 | 子代理场景 replay 出子树缩进 + 父子配对 | ✅ 增量 |
+| **S6（后续）** | 重 payload 外置、`trace-replay` 反哺 metadata、批量 eval 聚合、`TurnProfile` | 各自单测 | — |
+
+**S1–S5 各步都向后兼容**：不 trace = 现状（nil tracer + 不 Subscribe）。**每步独立可验证**，不必等整轮完成。
+
+---
+
+## 10. 测试清单
+
+### 10.1 单测
+
+| 测试 | 覆盖 | 断言 |
+|---|---|---|
+| `TestEnvelopeFields` | `TraceEvent` 信封 | `schema_version=1`；`seq` 从 1 单调递增；`wall_time_unix_ms` 单调非降 |
+| `TestJSONLAppend` | recorder 落盘 | 每行是合法 JSON；`Payload` 反序列化回原类型；行序 = 入队序 |
+| `TestFlushDurability` | `turn_end` flush | `Flush()` 后读文件：整 turn 事件全在；文件 fsync 后字节稳定 |
+| `TestCrashPartialWrite` | 半写容错 | 手工 truncate 文件最后一行（模拟崩溃半写）→ replay 跳过坏行 + 报 `truncated_line`，不 panic |
+| `TestDroppedEventsCounter` | 满 chan 丢弃 | 小队列 + 快速灌入 → `dropped_events` 计数准确；引擎不阻塞 |
+| `TestDisabledTracerZeroOverhead` | 零开销 | 不 `SetTracer`：无文件、无 goroutine 泄漏、`AllocsPerRun` 不因调用点增加（bench） |
+| `TestExternalizePayloads` | 先 payload 后引用 | rename 序：payload 文件先存在，事件引用后写；模拟 payload 缺失 → 明确报错 |
+| `TestReplayRenderText` | reducer | 构造 trace → 断言对话/工具序列文本（含缩进、配对、dangling 标记） |
+| `TestReplayReduceJSON` | 语义图 | 断言 `ReducedTurn` 字段聚合正确（usage/耗时/iteration 分组） |
+| `TestReplaySubagentTree` | 溯源 | `thread_id`/`parent_trace_id` 还原子树 + 父子配对 |
+| `TestRotate` | 磁盘水位 | 达 `MaxBytes` → 轮转 `trace-*.1.jsonl`；replay 按 seq 归并 |
+
+### 10.2 集成
+
+- **S3 端到端**：dino 配置 `Trace.Enabled=true` → 会话 → 断言 JSONL 产生 → `trace-replay` 输出可读。
+- **不 trace 回归**：现有 engine/dino 测试全绿（tracer 默认 nil）。
+- **subagent**：`spawn_agent`/`delegate_to_agent` 场景 trace 包含父子 trace（`dino/agent/result_test.go` 现有测试扩 trace 断言）。
+
+---
+
+## 11. 落地改动文件清单（实施时）
+
+| 文件 | 动作 | 内容 |
+|---|---|---|
+| `dino/trace/trace.go` | 新增 | `TraceEvent`/`Event`/payload 结构/事件类型常量/`SchemaVersion` |
+| `dino/trace/recorder.go` | 新增 | `Recorder`/`NewRecorder`/writer goroutine/`Flush`/`Close`/体积控制/轮转 |
+| `dino/trace/replay.go` | 新增 | `RenderText`/`Reduce`/`ReducedTurn*` |
+| `dino/trace/recorder_test.go`、`replay_test.go` | 新增 | §10.1 单测 |
+| `agent/hooks/hooks.go` | 修改 | 新增 `Tracer` 接口（或新建 `agent/hooks/trace.go`） |
+| `agent/engine/agent.go` | 修改 | `AgentEngine.tracer` 字段 + `SetTracer` |
+| `agent/engine/agent_execution.go` | 修改 | §3.2③ 调用点（`turn_start/turn_end/llm_call/llm_call_end/tool_*/compaction/memory_save/error`） |
+| `agent/engine/agent_config.go` | 修改 | `AgentConfig.TraceEnabled bool`（或放 dino config，§9.3） |
+| `dino/factory.go` | 修改 | `CreateSession` 接线 + `CloseSession`/`Shutdown` 关闭 recorder |
+| `dino/config.go` | 修改 | `Config.Trace.TraceConfig`（`Enabled/Dir/QueueSize/FlushInterval/Capture*`） |
+| `dino/types.go` | 修改 | （可选）export `Trace` 相关类型 |
+| `cmd/trace-replay/main.go` | 新增 | CLI 入口 |
+
+**不在范围内**：`dino/chatstore`（messages 表不动）、`agent/providers`（遗留不动）、`ExecuteStream` resultChan 主循环（不动）。
+
+---
+
+## 12. 风险点与缓解
+
+| 风险 | 影响 | 缓解 |
+|---|---|---|
+| **磁盘满 / 写失败** | trace 写入失败 | `NewRecorder`/writer 错误 → 记日志 + 降级为 Disabled（`tracer=nil`），**绝不阻断 agent 会话**；`Close` 幂等 |
+| **JSONL 膨胀**（`llm_call` 全量 messages / `tool_result` 全量 output） | 磁盘占用、eval 变慢 | §4.3 体积控制默认截断 + 计数；`CaptureFull*` 显式开关 |
+| **chan 满丢事件** | 回放不完整 | 非阻塞丢弃有计数（`dropped_events`）；`turn_end` 的 `Flush` 保证已完成的 turn 完整；§8 后续可改「满时降级为合并事件」 |
+| **hook/调用点遗漏**（某工具路径不经过 `runToolCallsByLayer`） | 工具事件缺 | `tool_call/tool_result` 只在 `runToolCallsByLayer` 记录；MCP/审批等 wrapper 在 `dino` 层（`factory.go:1171-1180`）包裹，引擎层仍统一经过 `runToolCallsByLayer`——审查确认无旁路 |
+| **引擎无 sessionID** | trace 无法归属 | §1.4 决策：dino 层构造 recorder 绑定；引擎 trace 不感知 sessionID |
+| **agent/engine import dino 循环** | 编译失败 | §3.2④：`Tracer` 接口放 `agent/hooks`，dino → agent/hooks 单向 |
+| **subagent 每次新建 engine** | trace 归属断裂 | §3.5：同一 recorder + `thread_id`/`parent_trace_id` 溯源；无需改 subagent 构建 |
+| **性能**（trace 开时拖慢引擎） | 会话延迟 | 异步写 goroutine 解耦；`Record` 非阻塞；开启后 benchmark 对比（§5.3） |
+| **崩溃半写行** | replay 坏行 | replay 跳过 + 报 `truncated_line`；轮转 rename 原子（§4.4） |
+
+---
+
+## 13. 遗留待定点（留给用户的决策）
+
+1. **`Trace` 配置放哪**：`dino.Config.Trace`（推荐，dino 是编排层）还是 `types.AgentConfig.TraceEnabled`（引擎层）+ dino 读配置。本设计倾向 dino 层（sessionID 在 dino，且裸引擎用户默认无 trace）。
+2. **`CaptureFullToolOutput` 默认值**：本轮默认关（截断 + 计数）。若要「回放精确还原模型看到的完整工具输出」作为 eval 的硬前提，需默认开（磁盘代价）。
+3. **`trace-replay` 反哺 chatstore**（`ReducedTurn` → metadata 索引 / 崩溃续跑重建 messages）：是否纳入，纳入哪个版本。
+4. **批量 eval 跑批**（评估报告 10.6）：`trace-replay --format json` 输出 → 按 `StopReason` 聚合通过率的 runner，是否在 trace 落地后单独立项。
+5. **`Tracer` 接口 vs hooks 扩签名**（§3.2②）：本设计选了「直接调用点 + nil-guard」。若未来需要多个观察方（UI/审计/telemetry），再考虑扩 hooks 或引入 observer 注册表。
+6. **tok 估算 vs 真实 token**：`llm_call` 的 `est_tokens_in` 用 `types.RoughTokenEstimate`（`tokens.go:7-18`），对 CJK 偏差大（评估报告 12.1 已点名）；`llm_call_end` 的 `Usage` 是 provider 返回的真实值——**eval 账本以真实值为准**，`est_tokens_in` 只作证据。
