@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/dino/permission"
 )
 
 type subagentMockLLMProvider struct {
@@ -113,6 +114,11 @@ func (f *subagentMockFactory) GetTools() []types.Tool {
 func (f *subagentMockFactory) GetAgent(name string) (*Info, bool) {
 	info, exists := DefaultAgents()[name]
 	return info, exists
+}
+
+func (f *subagentMockFactory) GetParentRuleset() permission.Ruleset {
+	// 测试默认不限制（返回空 ruleset，restrict-only 不生效）。
+	return nil
 }
 
 func TestNewSubagentManager_Disabled(t *testing.T) {

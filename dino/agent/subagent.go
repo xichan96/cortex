@@ -59,6 +59,17 @@ type subagentImpl struct {
 	llmProvider        types.LLMProvider
 	tools              []types.Tool
 	maxHistoryMessages int
+	// parentRuleset 是父代理的权限约束（restrict-only，P2.4）。
+	// 非 nil 时子代理工具必须同时通过子代理自身权限与父权限的过滤——
+	// 「子代理永不比父代理更特权」。nil = 不约束（向后兼容旧行为）。
+	parentRuleset permission.Ruleset
+}
+
+// WithParentRuleset 注入父代理权限约束（restrict-only）。
+// 子代理 filterTools 时与自身权限取交集：仅同时被两边 allow 的工具可用。
+func (s *subagentImpl) WithParentRuleset(rs permission.Ruleset) *subagentImpl {
+	s.parentRuleset = rs
+	return s
 }
 
 func NewSubagent(info *Info, llmProvider types.LLMProvider, tools []types.Tool, maxHistoryMessages int) (Subagent, error) {
@@ -267,13 +278,24 @@ func (s *subagentImpl) buildConfig(req *Request) *types.AgentConfig {
 
 func (s *subagentImpl) filterTools() []types.Tool {
 	evaluator := permission.NewEvaluator(s.info.Permission)
+	var parentEvaluator *permission.Evaluator
+	if len(s.parentRuleset) > 0 {
+		parentEvaluator = permission.NewEvaluator(s.parentRuleset)
+	}
 	var filtered []types.Tool
 
 	for _, tool := range s.tools {
 		action := evaluator.Evaluate(tool.Name(), nil)
-		if action == permission.ActionAllow {
-			filtered = append(filtered, tool)
+		if action != permission.ActionAllow {
+			continue
 		}
+		// restrict-only：子代理权限必须 ⊆ 父权限。父权限不允许的工具子代理不可用。
+		if parentEvaluator != nil {
+			if pa := parentEvaluator.Evaluate(tool.Name(), nil); pa != permission.ActionAllow {
+				continue
+			}
+		}
+		filtered = append(filtered, tool)
 	}
 
 	return filtered
@@ -287,6 +309,8 @@ type Manager struct {
 	subagents          map[string]Subagent
 	factory            Factory
 	subagentMaxHistory int
+	// parentRuleset 父代理权限约束（restrict-only，P2.4）。
+	parentRuleset permission.Ruleset
 }
 
 type Factory interface {
@@ -305,6 +329,14 @@ func NewManager(factory Factory, maxHistoryMessages int) *Manager {
 		factory:            factory,
 		subagentMaxHistory: mh,
 	}
+}
+
+// SetParentRuleset 注入父代理权限约束（restrict-only，P2.4）。
+// 之后 GetSubagent 构造的子代理工具按「子权限 ∩ 父权限」过滤。
+func (m *Manager) SetParentRuleset(rs permission.Ruleset) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.parentRuleset = rs
 }
 
 func (m *Manager) GetSubagent(name string) (Subagent, error) {
@@ -326,6 +358,9 @@ func (m *Manager) GetSubagent(name string) (Subagent, error) {
 	sa, err := NewSubagent(info, m.factory.GetLLMProvider(), m.factory.GetTools(), m.subagentMaxHistory)
 	if err != nil {
 		return nil, err
+	}
+	if impl, ok := sa.(*subagentImpl); ok && len(m.parentRuleset) > 0 {
+		impl.WithParentRuleset(m.parentRuleset)
 	}
 
 	m.subagents[name] = sa

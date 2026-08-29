@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/dino/permission"
 	"github.com/xichan96/cortex/pkg/logger"
 )
 
@@ -163,6 +164,9 @@ type SubagentManagerFactory interface {
 	GetLLMProvider() types.LLMProvider
 	GetTools() []types.Tool
 	GetAgent(name string) (*Info, bool)
+	// GetParentRuleset 返回父代理权限约束（restrict-only，P2.4）。
+	// 子代理工具按「子权限 ∩ 父权限」过滤，子代理永不比父代理更特权。
+	GetParentRuleset() permission.Ruleset
 }
 
 func NewSubagentManager(config *SubagentConfig, factory SubagentManagerFactory) *SubagentManager {
@@ -170,13 +174,18 @@ func NewSubagentManager(config *SubagentConfig, factory SubagentManagerFactory) 
 		return nil
 	}
 
-	return &SubagentManager{
+	mgr := &SubagentManager{
 		config:         config,
 		manager:        NewManager(factory, config.MaxHistoryMessages),
 		llmProv:        factory.GetLLMProvider(),
 		sessionCancels: make(map[string]map[string]context.CancelFunc),
 		tools:          factory.GetTools(),
 	}
+	// restrict-only（P2.4）：父权限注入，子代理工具过滤取交集。
+	if rs := factory.GetParentRuleset(); len(rs) > 0 {
+		mgr.manager.SetParentRuleset(rs)
+	}
+	return mgr
 }
 
 func (sm *SubagentManager) Execute(ctx context.Context, agentName, input string) (*Result, error) {

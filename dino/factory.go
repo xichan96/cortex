@@ -446,6 +446,21 @@ func (f *dinoFactory) GetAgent(name string) (*dinoAgent.Info, bool) {
 	return info, exists
 }
 
+// GetParentRuleset 返回父代理权限约束（restrict-only，P2.4）。
+// 子代理 filterTools 时与自身权限取交集：仅同时被两边 allow 的工具可用。
+func (f *dinoFactory) GetParentRuleset() permission.Ruleset {
+	var ruleset permission.Ruleset
+	if len(f.config.Permission) > 0 {
+		ruleset = permission.Merge(permission.FromConfig(f.config.Permission), permission.DefaultRuleset())
+	} else {
+		ruleset = permission.Merge(
+			permission.FromAllowDenyAsk(f.config.Tools.Denied, f.config.Tools.ApprovalRequired, f.config.Tools.Allowed),
+			permission.DefaultRuleset(),
+		)
+	}
+	return ruleset
+}
+
 func (f *dinoFactory) RecordLoop(sessionID string, action agentutils.LoopDetectAction) {
 	f.loopDetector.Record(sessionID, action)
 }
