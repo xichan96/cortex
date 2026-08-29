@@ -63,7 +63,7 @@ ChatWithTools (agent_execution.go:1228,1244)
 
 ### 1.3 内置工具逐个对比（详见 §9 表格）
 
-- **bash**：`dino/tools/builtin.go:37-51` 包装 `runtime.NewCommandTool` → `dino/verify/shell.go`（待确认）→ `pkg/shell/shell.go:139-152`。支持 timeout（`command.go:78-94`，ctx deadline 或显式 `timeout` 参数，默认 30s）、background（`command.go:67-76` → `pkg/shell/background.go`）、工作目录（`fs.EffectiveWorkingDir`）。**无输出硬上限**（bytes.Buffer 无界，`shell.go:330`），靠 F1 截断兜底。
+- **bash**：`dino/tools/builtin.go:37-51` 包装 `runtime.NewCommandTool` → `pkg/shell/shell.go:139-152`（注：`dino/verify/shell.go:10` 的 `VerifyShell` 是 runner 的 verifier，不是 bash 工具本体）。支持 timeout（`command.go:78-94`，ctx deadline 或显式 `timeout` 参数，默认 30s）、background（`command.go:67-76` → `pkg/shell/background.go`）、工作目录（`fs.EffectiveWorkingDir`）。**无输出硬上限**（bytes.Buffer 无界，`shell.go:330`），靠 F1 截断兜底。
 - **edit_file**：`fs/edit.go:34-40`，单 hunk 精确字符串替换（`strings.Replace(…,1)`），非 diff 语义，不支持多 hunk。
 - **read_file**：`fs/read.go:34-78`，**无 offset/limit**，整文件读；目录读返回 listing。大文件靠 F1 截断兜底。
 - **web_fetch**：`web/webfetch.go`，5MB 上限（`:26,151-153`）、timeout（`:96-105`，默认 30s 上限 120s）、HTML→Markdown（`:179-188`）。**无限流**。
@@ -504,10 +504,12 @@ func ExternalContextTool(name string) bool {
 **不动** `FatalToolError` 机制本身（已正确）。只做**分类清单补全**：
 
 ```go
-// dino/tools/tool_wrappers.go 内 nonFatalTool.Execute 的错误分类（增强版）：
+// dino/tools/tool_wrappers.go 内 nonFatalTool.Execute 的错误分类（增强版）。
+// pkg/errors.Error 是 struct { Code int; Message string }（errors.go:11-13），
+// 错误码常量是 *errors.Error 值（ec.go:26,83-88）。errors.As 到 *errors.Error 后比 Code。
 func classifyToolError(err error) error {
-    var ec errors.ErrorCode // pkg/errors 的错误码类型
-    if errors.As(err, &ec) {
+    var ec *errors.Error
+    if stderrors.As(err, &ec) {
         switch ec.Code {
         case errors.EC_TOOL_AUTH_ERROR.Code,
              errors.EC_MCP_NOT_CONNECTED.Code,
@@ -520,7 +522,7 @@ func classifyToolError(err error) error {
 }
 ```
 
-- `errors.ErrorCode` 类型确认（`pkg/errors` 的 `NewError` 返回可 `errors.As` 到 `*Error`）。需读 `pkg/errors/errors.go` 确认字段名（`Code`/`Message`）。
+- 错误码常量是 `*errors.Error`（`pkg/errors/ec.go:26,83-88`），字段 `Code`/`Message`（`errors.go:11-13`），`errors.As` 到 `*errors.Error` 后比 `ec.Code`。
 - **注意**：`EC_TOOL_AUTH_ERROR` 变 fatal 后，`ExternalPathApprovalTool` 的审批拒绝已是 `ApprovalRejectedError`（fatal，`defined_tool.go:535`）；路径权限不足的错误（`EC_TOOL_PARAMETER_INVALID` 包装的 SafePath 失败）仍可恢复——模型可换路径重试，合理。
 
 ### 7.4 收益与成本
