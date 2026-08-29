@@ -51,7 +51,7 @@ func TestSpawn_FireAndForget(t *testing.T) {
 // sessionCancels 分桶被清理。
 func TestSpawn_ParentCancelKillsSubagent(t *testing.T) {
 	// 用阻塞 mock：等子代理真正进入执行后再 cancel，确保 cancel 作用于运行中的子代理。
-	blocker := &blockingMockProvider{responses: []string{"x"}}
+	blocker := newBlockingMockProvider([]string{"x"})
 	sm := newTestSubagentManager(t, blocker)
 	sm.SetMaxConcurrentSpawns(2)
 	mb := NewMailbox(0, 0)
@@ -90,7 +90,7 @@ func TestSpawn_RegistersSessionCancel(t *testing.T) {
 	sm.SetNotifier(n)
 
 	// 阻塞 LLM 让子代理挂起，便于观察 cancel。
-	blocker := &blockingMockProvider{responses: []string{"done"}}
+	blocker := newBlockingMockProvider([]string{"done"})
 	sm2 := newTestSubagentManager(t, blocker)
 	sm2.SetMaxConcurrentSpawns(4)
 	sm2.SetNotifier(n)
@@ -120,7 +120,7 @@ func TestSpawn_RegistersSessionCancel(t *testing.T) {
 
 // TestSpawn_MaxConcurrent：semaphore 上限生效——并发运行的子代理 ≤ 上限。
 func TestSpawn_MaxConcurrent(t *testing.T) {
-	blocker := &blockingMockProvider{responses: []string{"r"}}
+	blocker := newBlockingMockProvider([]string{"r"})
 	sm := newTestSubagentManager(t, blocker)
 	sm.SetMaxConcurrentSpawns(2)
 	mb := NewMailbox(0, 0)
@@ -202,6 +202,7 @@ func TestCompletionNotifier_MailboxFullDegrades(t *testing.T) {
 
 // blockingMockProvider 阻塞在 ChatWithToolsStream，配合测试观察并发/取消。
 // 实现 types.LLMProvider 接口（与 subagentMockLLMProvider 同签名）。
+// 初始化即创建一个 wake channel（未 release 前所有调用都阻塞等它）。
 type blockingMockProvider struct {
 	mu        sync.Mutex
 	responses []string
@@ -209,6 +210,13 @@ type blockingMockProvider struct {
 	runningN  int
 	released  bool
 	wake      chan struct{}
+}
+
+func newBlockingMockProvider(responses []string) *blockingMockProvider {
+	return &blockingMockProvider{
+		responses: responses,
+		wake:      make(chan struct{}),
+	}
 }
 
 func (b *blockingMockProvider) Chat(ctx context.Context, messages []types.Message) (types.Message, error) {

@@ -6,12 +6,15 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/xichan96/cortex/agent/types"
 )
 
 // TestSpawnWait_EndToEnd：真实 SubagentManager + mock LLM，spawn 两个并行 → 两个 wait，
-// 顺序无关性（subagent-s3s4 §10.2 #1）。用两个不同响应验证 task_id 精确寻址。
+// 顺序无关性（subagent-s3s4 §10.2 #1）。用 echo provider（按任务文本回显）验证 task_id
+// 精确寻址：并发下 mock 响应轮转不可靠，但回显内容是任务本身，天然确定。
 func TestSpawnWait_EndToEnd(t *testing.T) {
-	sm := newTestSubagentManager(t, newSubagentMockLLMProvider([]string{"result-A", "result-B"}))
+	sm := newTestSubagentManager(t, &echoMockProvider{})
 	sm.SetMaxConcurrentSpawns(4)
 	mb := NewMailbox(0, 0)
 	sm.SetNotifier(NewCompletionNotifier(func(string) *Mailbox { return mb }, nil, true))
@@ -27,14 +30,48 @@ func TestSpawnWait_EndToEnd(t *testing.T) {
 	}
 
 	// 顺序无关：无论先 wait 谁，都能拿到正确结果（按 task_id 精确寻址）。
-	ra := waitFor(t, waitTool, taskA, "result-A")
-	rb := waitFor(t, waitTool, taskB, "result-B")
-	if strings.Contains(ra, "result-A") != true {
-		t.Errorf("task A should carry result-A, got %q", ra)
+	ra := waitFor(t, waitTool, taskA, "task A")
+	rb := waitFor(t, waitTool, taskB, "task B")
+	if strings.Contains(ra, "task A") != true {
+		t.Errorf("task A should carry its own task text, got %q", ra)
 	}
-	if strings.Contains(rb, "result-B") != true {
-		t.Errorf("task B should carry result-B, got %q", rb)
+	if strings.Contains(rb, "task B") != true {
+		t.Errorf("task B should carry its own task text, got %q", rb)
 	}
+}
+
+// echoMockProvider 回显最后一次用户输入（按任务文本确定输出，供 task_id 寻址测试）。
+type echoMockProvider struct{}
+
+func (e *echoMockProvider) Chat(ctx context.Context, messages []types.Message) (types.Message, error) {
+	return types.Message{Content: lastUserText(messages)}, nil
+}
+func (e *echoMockProvider) ChatStream(ctx context.Context, messages []types.Message) (<-chan types.StreamMessage, error) {
+	return e.ChatWithToolsStream(ctx, messages, nil)
+}
+func (e *echoMockProvider) ChatWithTools(ctx context.Context, messages []types.Message, tools []types.Tool) (types.Message, error) {
+	return e.Chat(ctx, messages)
+}
+func (e *echoMockProvider) ChatWithToolsStream(ctx context.Context, messages []types.Message, tools []types.Tool) (<-chan types.StreamMessage, error) {
+	text := lastUserText(messages)
+	u := types.Usage{PromptTokens: 5, CompletionTokens: 5, TotalTokens: 10}
+	ch := make(chan types.StreamMessage, 1)
+	ch <- types.StreamMessage{Type: "chunk", Content: text, Usage: &u}
+	close(ch)
+	return ch, nil
+}
+func (e *echoMockProvider) GetModelName() string          { return "echo-mock" }
+func (e *echoMockProvider) GetModelMetadata() types.ModelMetadata {
+	return types.ModelMetadata{Name: "echo-mock"}
+}
+
+func lastUserText(messages []types.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" && messages[i].Content != "" {
+			return messages[i].Content
+		}
+	}
+	return "echo"
 }
 
 func spawn(t *testing.T, tool *SpawnAgentTool, task string) string {
@@ -101,16 +138,15 @@ func TestWaitAgent_AndAdapter_Concurrent(t *testing.T) {
 		waitMsg = waitFor(t, waitTool, taskW, "same")
 	}()
 
-	// 等全局通知到齐（两个 spawn 都完成），wait_agent 应已拿到自己的结果。
+	// 等全局通知到（任一 spawn 完成）→ wait_agent 开始阻塞拉取；同时轮询 taskN
+	// 的结果落 mailbox（确定 taskN 完成），再用 DrainAll 走唤醒路径消费它。
 	select {
 	case <-notified:
 	case <-time.After(5 * time.Second):
 		t.Fatal("SubscribeAll never notified")
 	}
-	// 第二个 spawn 的完成通知可能已进 channel（buffer 1）或仍在 mailbox 未触发，
-	// 再等一次确保两个完成事件都已 Put（用轮询 mailbox 大小兜底）。
 	deadline := time.Now().Add(5 * time.Second)
-	for mb.Len() < 1 && time.Now().Before(deadline) {
+	for mb.Peek(taskN) == nil && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	wg.Wait()
