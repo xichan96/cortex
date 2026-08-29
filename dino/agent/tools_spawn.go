@@ -168,6 +168,11 @@ func NewWaitAgentTool(manager *SubagentManager, mailbox func() *Mailbox, default
 // （见 subagent-s3s4 评审 §3 BLOCKER-3 修法）。
 const DefaultWaitAgentTimeout = 30 * time.Second
 
+// WaitAgentToolShellTimeout factory 为 wait_agent 配的 engine 工具外壳超时。
+// 必须 > DefaultWaitAgentTimeout（30s），保证 wait 内部先超时返回 {timed_out:true}
+// 信封，engine 的 select 收到 result 通道而非 EC_TOOL_EXECUTION_TIMEOUT。
+const WaitAgentToolShellTimeout = 200 * time.Second
+
 func (t *WaitAgentTool) Name() string { return "wait_agent" }
 
 func (t *WaitAgentTool) Description() string {
