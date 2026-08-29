@@ -79,6 +79,56 @@ func (r *Registry) GetAll() []types.Tool {
 	return tools
 }
 
+// GetAllVisible returns only tools whose exposure is Direct (the default).
+// It is the E1 filter used when assembling the model's initial tool list.
+// GetAll() keeps its original semantics (all tools) for subagent dispatch/debug.
+func (r *Registry) GetAllVisible() []types.Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	tools := make([]types.Tool, 0, len(r.tools))
+	for _, tool := range r.tools {
+		if tool.Metadata().Exposure.IsDirect() {
+			tools = append(tools, tool)
+		}
+	}
+	sort.Slice(tools, func(i, j int) bool { return tools[i].Name() < tools[j].Name() })
+	return tools
+}
+
+// GetDeferred returns all tools whose exposure is Deferred. It feeds the
+// tool_search index (E2).
+func (r *Registry) GetDeferred() []types.Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	tools := make([]types.Tool, 0, len(r.tools))
+	for _, tool := range r.tools {
+		if tool.Metadata().Exposure.IsDeferred() {
+			tools = append(tools, tool)
+		}
+	}
+	sort.Slice(tools, func(i, j int) bool { return tools[i].Name() < tools[j].Name() })
+	return tools
+}
+
+// GetDeferredTool returns a single deferred tool by name. It is used by the
+// tool_search index build and by tests; the runtime discover path uses the
+// per-session pre-wrapped cache instead (see dino/factory.go sessionDeferredTools).
+func (r *Registry) GetDeferredTool(name string) (types.Tool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	tool, exists := r.tools[name]
+	if !exists {
+		return nil, errors.NewError(errors.EC_TOOL_NOT_FOUND.Code, fmt.Sprintf("tool %s not found", name))
+	}
+	if !tool.Metadata().Exposure.IsDeferred() {
+		return nil, errors.NewError(errors.EC_TOOL_NOT_FOUND.Code, fmt.Sprintf("tool %s is not deferred", name))
+	}
+	return tool, nil
+}
+
 // GetByType gets tools by type
 func (r *Registry) GetByType(toolType string) []types.Tool {
 	r.mu.RLock()

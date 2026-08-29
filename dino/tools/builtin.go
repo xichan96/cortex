@@ -50,6 +50,32 @@ func (t *bashToolWrapper) Execute(ctx context.Context, input map[string]interfac
 }
 func (t *bashToolWrapper) Metadata() types.ToolMetadata { return t.tool.Metadata() }
 
+// deferredMCPTool wraps an MCP tool so its Exposure reports Deferred without
+// mutating the shared *pkg/mcp.MCPTool instance (E1, MCPDeferred config). All
+// other fields and execution forward to the wrapped tool.
+type deferredMCPTool struct {
+	tool types.Tool
+}
+
+// NewDeferredMCPTool wraps a tool with ExposureDeferred. Exported so the factory
+// can mark MCP tools as deferred (E1).
+func NewDeferredMCPTool(tool types.Tool) types.Tool {
+	return &deferredMCPTool{tool: tool}
+}
+
+func (t *deferredMCPTool) Name() string                    { return t.tool.Name() }
+func (t *deferredMCPTool) Description() string             { return t.tool.Description() }
+func (t *deferredMCPTool) Schema() map[string]interface{}  { return t.tool.Schema() }
+func (t *deferredMCPTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	return t.tool.Execute(ctx, input)
+}
+
+func (t *deferredMCPTool) Metadata() types.ToolMetadata {
+	md := t.tool.Metadata()
+	md.Exposure = types.ExposureDeferred
+	return md
+}
+
 // NewQuestionTool returns a tool to ask the user questions.
 // Delegates to agent/tools/builtin/runtime.QuestionTool
 func NewQuestionTool() types.Tool {

@@ -15,6 +15,7 @@ import (
 	"github.com/xichan96/cortex/agent/hooks"
 	agentproviders "github.com/xichan96/cortex/agent/providers"
 	agentTools "github.com/xichan96/cortex/agent/tools/builtin/fs"
+	runtimeTools "github.com/xichan96/cortex/agent/tools/builtin/runtime"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/logger"
 
@@ -401,6 +402,15 @@ type dinoFactory struct {
 	sessionMailboxes map[string]*dinoAgent.Mailbox
 	// sessionWakes 每 session 一个唤醒适配器（S4a，WakeOnCompletion 时构造）。
 	sessionWakes map[string]*sessionWakeSource
+
+	// —— E1/E2 延迟发现（tools-codex-eval §2.4/§3.3）——
+	// sessionDeferredTools：每 session 预包装的 Deferred 工具缓存（key=工具名，
+	// value=已 wrap 的工具）。tool_search 命中时取出 AddTools 注入 engine。
+	// discoverMu 保护两个 map 的并发读写（B2：tool_search 可在工具执行 goroutine
+	// 内并行，CloseSession 持 f.mu —— 不能用 f.mu 做此锁，否则死锁）。
+	discoverMu             sync.Mutex
+	sessionDeferredTools   map[string]map[string]types.Tool
+	sessionDiscoveredTools map[string][]string
 }
 
 // cloneToolTimeouts 深拷贝 ToolTimeouts map，避免 CreateSession 注入 wait_agent
@@ -567,6 +577,8 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 		bus:              NewBus(),
 		sessionMailboxes: make(map[string]*dinoAgent.Mailbox),
 		sessionWakes:     make(map[string]*sessionWakeSource),
+		sessionDeferredTools:   make(map[string]map[string]types.Tool),
+		sessionDiscoveredTools: make(map[string][]string),
 	}
 
 	f.subagentManager = dinoAgent.NewSubagentManager(&cfg.Subagent, f)
@@ -612,11 +624,17 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 		}
 		// Register tools discovered from all connected MCP servers so the agent
 		// can call them directly without going through the generic mcp_client tool.
+		// E1：MCPDeferred=true 时给所有 MCP 工具打 ExposureDeferred（不进初始
+		// 工具列表，靠 tool_search 发现）。MCPTool 是 *pkg/mcp.MCPTool，支持
+		// 改名包装（deferredMCPTool）。
 		for _, t := range f.mcpManager.GetAllMCPTools() {
+			if cfg.Tools.MCPDeferred {
+				t = dinoTools.NewDeferredMCPTool(t)
+			}
 			if err := toolRegistry.Register(t); err != nil {
 				logger.Warn("[DinoFactory] Failed to register MCP tool", slog.String("tool", t.Name()), slog.String("error", err.Error()))
 			} else {
-				logger.Info("[DinoFactory] Registered MCP tool", slog.String("tool", t.Name()))
+				logger.Info("[DinoFactory] Registered MCP tool", slog.String("tool", t.Name()), slog.Bool("deferred", cfg.Tools.MCPDeferred))
 			}
 		}
 	}
@@ -756,17 +774,10 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 		agent.SetHooks(ctx, f.hooks)
 	}
 
-	sessionTools := f.tools.GetAll()
-
-	// 长期记忆工具：与 f.longTermMem.Manager() 复用同一进程内单例，不会开第二个连接。
-	// uid = userID（user 全局合并，metadata 单一事实源）或回退 sessionID。
-	if f.longTermMem != nil {
-		ltmTools := f.longTermMem.MemoryToolsForSession(sessionID,
-			dinoMem.WithToolNameOverride("memory"),
-			dinoMem.WithUserID(userID))
-		sessionTools = append(sessionTools, ltmTools...)
-		logger.Info("[DinoFactory] Added long-term memory tools", slog.Int("count", len(ltmTools)))
-	}
+	// E1：注册与模型可见性解耦。初始工具列表只取 Direct 工具；Deferred 工具
+	// 预包装入 session 级缓存，靠 tool_search 发现后注入（E2）。GetAll() 保持
+	// 原语义（全部工具）供 subagent 分发/调试。
+	sessionTools := f.tools.GetAllVisible()
 
 	logger.Info("[DinoFactory] Total tools in registry", slog.Int("count", len(sessionTools)))
 	var ruleset permission.Ruleset
@@ -782,6 +793,48 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	senderAdapter := &toolEventSenderAdapter{sender: f.streamSender}
 	var wrappedTools []types.Tool
 	needApproval := make(map[string]bool)
+
+	// 阶段 2：Deferred 工具预包装（§2.4「包装提前 + 注册延后」）。
+	// wrapSessionTool 需要 sessionID/approvalStore/senderAdapter/needApproval，
+	// 构造期一次完成；运行中不重新 wrap。权限 Deny 的直接跳过。
+	if f.config.Tools.ToolSearchEnabled {
+		f.discoverMu.Lock()
+		if _, ok := f.sessionDeferredTools[sessionID]; !ok {
+			f.sessionDeferredTools[sessionID] = make(map[string]types.Tool)
+		}
+		if _, ok := f.sessionDiscoveredTools[sessionID]; !ok {
+			f.sessionDiscoveredTools[sessionID] = nil
+		}
+		f.discoverMu.Unlock()
+
+		for _, t := range f.tools.GetDeferred() {
+			name := t.Name()
+			action := evaluator.Evaluate(name, nil)
+			if action == permission.ActionDeny {
+				logger.Info("[DinoFactory] Deferred tool denied by permission", slog.String("tool", name))
+				continue
+			}
+			if action == permission.ActionAsk {
+				needApproval[name] = true
+			}
+			wrapped := f.wrapSessionTool(t, sessionID, senderAdapter, needApproval)
+			f.discoverMu.Lock()
+			f.sessionDeferredTools[sessionID][name] = wrapped
+			f.discoverMu.Unlock()
+			logger.Info("[DinoFactory] Deferred tool pre-wrapped for search", slog.String("tool", name))
+		}
+	}
+
+	// 长期记忆工具：与 f.longTermMem.Manager() 复用同一进程内单例，不会开第二个连接。
+	// uid = userID（user 全局合并，metadata 单一事实源）或回退 sessionID。
+	if f.longTermMem != nil {
+		ltmTools := f.longTermMem.MemoryToolsForSession(sessionID,
+			dinoMem.WithToolNameOverride("memory"),
+			dinoMem.WithUserID(userID))
+		sessionTools = append(sessionTools, ltmTools...)
+		logger.Info("[DinoFactory] Added long-term memory tools", slog.Int("count", len(ltmTools)))
+	}
+
 	for _, t := range sessionTools {
 		name := t.Name()
 		action := evaluator.Evaluate(name, nil)
@@ -858,6 +911,23 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	}
 
 	logger.Info("[DinoFactory] Total tools added to agent", slog.Int("count", len(wrappedTools)))
+
+	// —— E2：注入 tool_search 并接线 discover 闭包（机制 A，评审 BLOCKER B1）——
+	// Execute 内直接 AddTools 注入（语义内聚），不依赖 tool_result 分支。
+	// discover 幂等（命中即 delete）+ discoverMu 保护（评审 BLOCKER B2）。
+	if f.config.Tools.ToolSearchEnabled {
+		toolSearch := runtimeTools.NewToolSearchTool(runtimeTools.NewToolSearchIndex(f.tools.GetDeferred()))
+		toolSearch.SetDiscover(func(ctx context.Context, name string) error {
+			// 机制 A（评审 BLOCKER B1）：Execute 内直接注入，语义内聚。
+			return f.discoverTool(ctx, sessionID, name, agent.AddTools)
+		})
+
+		action := evaluator.Evaluate(toolSearch.Name(), nil)
+		if action != permission.ActionDeny {
+			wrappedTools = append(wrappedTools, f.wrapSessionTool(toolSearch, sessionID, senderAdapter, needApproval))
+			logger.Info("[DinoFactory] Adding tool_search tool")
+		}
+	}
 
 	agent.AddTools(ctx, wrappedTools)
 
@@ -975,6 +1045,11 @@ func (f *dinoFactory) CloseSession(sessionID string) {
 		w.Close()
 		delete(f.sessionWakes, sessionID)
 	}
+	// E2（评审 R2）：延迟发现缓存在此清理，与 mailbox 同位置。
+	f.discoverMu.Lock()
+	delete(f.sessionDeferredTools, sessionID)
+	delete(f.sessionDiscoveredTools, sessionID)
+	f.discoverMu.Unlock()
 	// S3/B1 铺路（评审 B2 BLOCKER）：释放该 session 派生的所有子代理 cancel。
 	// S1 阶段无 spawn，此钩子是接口预留；S3 spawn_agent 落地后生效。
 	if f.subagentManager != nil {
@@ -998,6 +1073,11 @@ func (f *dinoFactory) CloseAll() {
 		w.Close()
 		delete(f.sessionWakes, sid)
 	}
+	// E2（评审 R2）：全部 session 的延迟发现缓存一并清理。
+	f.discoverMu.Lock()
+	f.sessionDeferredTools = make(map[string]map[string]types.Tool)
+	f.sessionDiscoveredTools = make(map[string][]string)
+	f.discoverMu.Unlock()
 }
 
 func (f *dinoFactory) GetTools() []types.Tool {
@@ -1097,6 +1177,47 @@ func (f *dinoFactory) wrapSessionTool(t types.Tool, sessionID string, senderAdap
 	wrapped = dinoTools.WrapNonFatalTool(wrapped)
 	wrapped = dinoTools.WrapLoopDetection(wrapped, sessionID, f.loopDetector, senderAdapter)
 	return wrapped
+}
+
+// discoverTool injects one Deferred tool into the agent's tool list (E2).
+//
+//   - 幂等：工具在 sessionDeferredTools 里命中即 delete；已发现/不存在返回
+//     dinoTools.ErrToolNotFound，tool_search 不再报告为「新发现」。
+//   - 并发安全（评审 BLOCKER B2）：tool_search 可在工具执行 goroutine 内并行，
+//     所有对 sessionDeferredTools/sessionDiscoveredTools 的读写都受 discoverMu 保护；
+//     delete 也在锁内。
+//   - 上限（评审 R1）：session 已发现数达到 config.Tools.MaxDiscoveredTools（>0）
+//     后拒绝继续注入。
+//
+// injectFn 默认是 engine.AddTools（在锁外调用：agent.AddTools 拿 ae.mu，与
+// discoverMu 无关，不会死锁）。测试注入可替换为记录函数。
+func (f *dinoFactory) discoverTool(ctx context.Context, sessionID, name string, injectFn func(context.Context, []types.Tool)) error {
+	f.discoverMu.Lock()
+	discovered := f.sessionDiscoveredTools[sessionID]
+	if capLimit := f.config.Tools.MaxDiscoveredTools; capLimit > 0 && len(discovered) >= capLimit {
+		f.discoverMu.Unlock()
+		return dinoTools.ErrToolNotFound(name)
+	}
+	deferred, ok := f.sessionDeferredTools[sessionID]
+	if !ok || deferred == nil {
+		f.discoverMu.Unlock()
+		return dinoTools.ErrToolNotFound(name)
+	}
+	wrapped, exists := deferred[name]
+	if !exists {
+		f.discoverMu.Unlock()
+		return dinoTools.ErrToolNotFound(name)
+	}
+	delete(deferred, name)
+	f.sessionDiscoveredTools[sessionID] = append(discovered, name)
+	total := len(f.sessionDiscoveredTools[sessionID])
+	f.discoverMu.Unlock()
+
+	injectFn(ctx, []types.Tool{wrapped})
+	logger.Info("[DinoFactory] Discovered deferred tool via tool_search",
+		slog.String("tool", name),
+		slog.Int("discovered_total", total))
+	return nil
 }
 
 func wrapWorkspacePathTools(t types.Tool, workspaceRoot, sessionID string, store *ApprovalStore) types.Tool {

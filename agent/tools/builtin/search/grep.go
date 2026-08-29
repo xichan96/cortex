@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	_ "embed"
+	stderrors "errors"
 	"fmt"
 	"os/exec"
 
@@ -91,18 +92,14 @@ func (t *GrepTool) Execute(ctx context.Context, input map[string]interface{}) (i
 
 	result, err := cmd.CombinedOutput()
 	if err != nil {
-		// grep returns exit code 1 if no matches found. This is not necessarily an error for the tool execution.
-		// But combined output contains the result or error message.
-		// If exit code is 1 and output is empty, it means no matches.
-		// If exit code is 2, it means error.
-		// But err.Error() usually says "exit status 1".
-
-		// Dino implementation returns error if err != nil.
-		// I will do the same to be consistent with Dino.
-		// Wait, if grep finds nothing, it returns 1. Dino returns error?
-		// Yes: "return string(result), err".
-		// So the caller handles it? Or the agent sees it as failure?
-		// I'll keep it as is.
+		// grep exit semantics: 1 = no matches (normal outcome, NOT an error);
+		// anything else (e.g. 2 = usage/path error) is a real failure the model
+		// should be told about. Feeding "no match" back as an error misleads the
+		// model into thinking the search failed (P2/R6)。
+		var exitErr *exec.ExitError
+		if stderrors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return "", nil
+		}
 		return string(result), errors.EC_TOOL_EXECUTION_FAILED.Wrap(err)
 	}
 

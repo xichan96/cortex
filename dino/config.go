@@ -108,6 +108,15 @@ type ToolConfig struct {
 	StreamBufferSize           int      `yaml:"stream_buffer_size,omitempty"`            // 0=默认 50
 	ResultLimiterMaxBytes      int      `yaml:"result_limiter_max_bytes,omitempty"`      // 0=默认 120_000
 	ResultLimiterMaxStringBytes int     `yaml:"result_limiter_max_string_bytes,omitempty"` // 0=默认 60_000
+	// ToolSearchEnabled 控制是否注入 tool_search 工具并启用 Deferred 工具的
+	// 延迟发现（E2）。默认 true。
+	ToolSearchEnabled bool `yaml:"tool_search_enabled,omitempty"`
+	// MCPDeferred 为 true 时，所有 MCP 工具以 ExposureDeferred 注册（不进初始
+	// 工具列表，靠 tool_search 发现）。默认 false 灰度，稳定后翻 true（§2.5）。
+	MCPDeferred bool `yaml:"mcp_deferred,omitempty"`
+	// MaxDiscoveredTools 每个 session 可通过 tool_search 发现/注入的 Deferred
+	// 工具上限（R1）。0 = 默认 32；<0 = 不设上限。
+	MaxDiscoveredTools int `yaml:"max_discovered_tools,omitempty"`
 }
 
 type LoopDetectionConfig struct {
@@ -202,12 +211,19 @@ func DefaultConfig() *Config {
 				"grep",
 				"bash",
 				"list_directory",
+				// E2：tool_search 默认可见（否则默认白名单 `*→deny` 会把它挡掉，
+				// 延迟发现功能默认不可用）。
+				"tool_search",
 			},
 			ApprovalRequired: []string{
 				"bash",
 				"write_file",
 				"edit_file",
 			},
+			// E1/E2 默认：tool_search 开，MCP Deferred 灰度关，discover 上限 32。
+			ToolSearchEnabled:  true,
+			MCPDeferred:        false,
+			MaxDiscoveredTools: 32,
 		},
 		Skills: SkillsConfig{
 			Path:     "",
