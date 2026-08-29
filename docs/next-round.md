@@ -31,7 +31,7 @@
 
 ## P2 · 需产品决策
 
-### P2.1 F7 `question` 用户回答回流通道（工具管线）
+### P2.1 F7 `question` 用户回答回流通道（工具管线）—— ✅ 已完成（`d0236c8`，异步事件 + OnQuestion 回调）
 - **背景**：`QuestionTool.Execute` 已返回 `SentinelQuestionResult` sentinel（F7 部分落地），但 runner 侧检测 + `EventTypeQuestion` + 回答回流通道未做。当前 `question` 权限默认拒绝且无消费方。
 - **决策点**：question 的交互模型（同步阻塞等待回答？还是异步事件 + 外部回答注入？）；权限默认值。
 - **工作量**：中。**收益**：agent 可向用户提问，交互能力提升。
