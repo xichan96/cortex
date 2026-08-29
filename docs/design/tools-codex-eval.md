@@ -351,3 +351,183 @@ Deferred + tool_search 后：
 
 > **与 E1 强耦合**：没有 Deferred，tool_search 没有检索对象。落地时 E1+E2 一个 PR。
 
+---
+
+## 4. E3 · apply_patch 流式解析（评估 + 暂缓）
+
+### 4.1 Codex 的做法
+
+- **Lark 语法自由文本工具**（`apply_patch_spec.rs:9-28`）：模型直接给整个 patch 文本（`*** Begin Patch\n*** Update File: …\n@@ … @@`），不是 JSON schema 参数。
+- **流式增量解析**（`apply_patch.rs:86-155`）：`StreamingPatchParser` 消费参数增量（Anthropic 流式 `input_json_delta`），边解析边发 `PatchApplyUpdatedEvent`（500ms 节流），模型能在调用完成前看到 patch 实时解析进度。
+- **写权限从解析出的路径推导**（`apply_patch.rs:236-271`）：跳过已有写权限的目录的父目录。
+
+### 4.2 cortex 现状与差距
+
+| 维度 | cortex（`fs/edit.go`） | Codex apply_patch | 差距 |
+|---|---|---|---|
+| 工具形态 | JSON schema：`{path, old_str, new_str}` | 自由文本 patch | 结构性差异 |
+| hunk 数 | **单 hunk**（`strings.Replace(…,1)`，`edit.go:77`） | 任意多 hunk + 增删文件 | 能力差 |
+| 解析 | 无解析（直接字符串匹配） | Lark 语法增量解析 | 无 |
+| 流式进度 | 无中途反馈通道 | `PatchApplyUpdatedEvent` | 无 |
+| 写权限 | 路径审批（`ExternalPathApprovalTool`，`defined_tool.go:508-549`）+ `SafePath` | 从解析路径推导 + 父目录跳过 | 现状已覆盖 |
+
+**关键判断：cortex 的「流式进度」收益为负。**
+
+1. **无中途反馈通道**：cortex 的流式（`ExecuteStream`）只把 `tool_use` 完整结果发给模型，没有「模型可读的进行中 tool_result」。Codex 的 `PatchApplyUpdatedEvent` 依赖「模型在工具执行期间能看到进度」——cortex 的 `resultSender`（`agent_execution.go:731-737`）是**单向**的，模型无法在 `input_json_delta` 到达前看到部分结果。
+2. **JSON-schema 工具在现模型上更稳**：cortex 14 个工具全是 JSON 参数，模型（尤其当前用的 Claude 系列）对 `old_str`/`new_str` 精确替换的遵循度高。Lark 自由文本 patch 需要模型掌握一套新语法，且解析失败路径多。
+3. **单 hunk 限制是真痛点，但解法不同**：`edit.go:77` 一次只能替换一处。模型要改多处需多次调用。**多 hunk 的 JSON 化（不是 Lark）才是低成本高收益的中间态**（见 §4.4）。
+
+### 4.3 结论：完整 apply_patch（P3，暂缓）
+
+完整移植 Codex 的 Lark + StreamingParser 工作量**大**（新解析器 + 流式事件管线 + 写权限推导重构），收益依赖「中途反馈」这一 cortex 没有的通道。**不建议近期做。**
+
+### 4.4 中间态：多 hunk JSON patch（P2，可选）
+
+不改工具形态，扩展 `edit_file` schema 支持**多 hunk**：
+
+```go
+// edit_file schema 扩展（保持向后兼容：hunks 缺省时用旧 path/old_str/new_str）
+"properties": {
+    "path": {"type": "string", "description": "File to edit"},
+    "hunks": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "old_str": {"type": "string"},
+                "new_str": {"type": "string"}
+            },
+            "required": ["old_str", "new_str"]
+        },
+        "description": "Multiple precise replacements applied in order"
+    }
+}
+```
+
+执行：`edit.go` 读文件一次，依次对每个 hunk 做 `strings.Replace(…,1)`；任一 hunk 找不到 `old_str` → 整批失败（无部分应用，保持原子性）。`ExternalPathApprovalTool` 的 `collectOutsideAbsPaths`（`defined_tool.go`）已按工具名+输入路径收集——多 hunk 场景 path 仍只有一个，**审批逻辑零改动**。
+
+**收益**：一次调用改多处，减少 round-trip；不引入新语法。**风险**：hunk 间顺序敏感（前一个替换改变后一个的匹配上下文）——文档里要求模型用「互不重叠的 hunk」。
+
+> **决策**：§4.4 的「多 hunk JSON」是本设计的推荐中间态（P2，可选）；完整 Lark+流式（§4.3）P3 暂缓。两者独立，不互斥。
+
+---
+
+## 5. E5 · 并行门控（已做，不追）
+
+### 5.1 现状
+
+`agent_execution.go:463-467`：`errgroup.SetLimit(getToolParallelismLimit())`，全局并发上限（默认 `max(4, GOMAXPROCS*2)` 封顶 32，`AgentConfig.ToolParallelismLimit` 可配）。fatal 错误取消同层并行（`:489-497`）。
+
+### 5.2 Codex 的差异
+
+Codex 用 `async RwLock`：并行工具 `lock.read()`（并发），非并行工具 `lock.write()`（独占，`parallel.rs:152-156`）——即**按工具属性区分共享/独占**。cortex 的 errgroup 是「无依赖层内全并发 + 全局限额」，不区分共享/独占。
+
+### 5.3 是否值得做「共享/独占」？
+
+**不做。** 理由：
+
+1. cortex 的依赖拓扑已把「必须串行」建模为**层间依赖**（`Dependencies`，`agent_execution.go:433-458` 拓扑排序）；同层工具**天然可并行**。Codex 的写锁是给「同一工具并发写会冲突」（如 `edit_file` 并发改同一文件）的场景，但 cortex 的 `MaxToolCallsPerIteration` + 单 hunk edit 已把冲突面压到极小。
+2. 引入共享/独占需要每个工具声明 `ParallelSafe bool`，且要在 errgroup 之上再套一层锁调度——复杂度不成比例。
+3. **真正要防的**是「N 个 bash/MCP 全量并发」——已被 SetLimit 解决。
+
+**残余风险标注**：同层多个 `edit_file` 改同一文件仍可能并发竞态（`edit.go` 无文件锁）。当前默认并发 4–32，概率低；若要做，只需给 `fs` 工具加一个**进程内 per-path 锁**（`sync.Map[string]*sync.Mutex`），比 Codex 的读写锁更精准。列入「可选 P3」。
+
+---
+
+## 6. E6 · `contains_external_context()` 输出标记（轻量版）
+
+### 6.1 Codex 的做法
+
+工具输出声明「含外部上下文」（web/MCP），memory 生成自动关闭（`tool_output.rs:21-24`），防止外部搜索污染长期记忆。
+
+### 6.2 cortex 现状
+
+| 记忆层 | 现状 | 是否已防污染 |
+|---|---|---|
+| 长期记忆（`dino/mem/ingest.go`） | **tool 角色消息整体跳过**（`:136-139`）——任何工具输出都不进抽取 | 已防（比 Codex 更粗但方向一致） |
+| 短期记忆（chatstore，`factory.go` `memoryAdapter.SaveContext`） | 工具步骤经 `MessagesFromToolSteps`（`agent/providers/memory_save.go:50-57`）存为 tool 角色消息 | 存，但 tool 消息用于历史窗口重建，不参与记忆抽取 |
+| 记忆工具（`dino/mem/tool.go:27`） | 模型**主动写** `add_knowledge`/`set_preference` 时才会落长期记忆 | 模型可把 web 结果写进去（污染源） |
+
+### 6.3 差距与方案
+
+**差距**：`dino/mem/ingest.go` 的「tool 整体跳过」够用；真正的污染路径是**模型主动把外部内容写进 `add_knowledge`**，ingest 无法识别（它只扫 transcript，不扫 memory 工具写入）。Codex 的标记机制在**工具输出层**拦截——比 ingest 层更早。
+
+**轻量方案：工具名分类函数 + 记忆工具写入过滤。**
+
+```go
+// dino/mem/tool.go 新增
+// ExternalContextTool 判断工具是否产生外部上下文（web 搜索/抓取、MCP 外部调用）。
+func ExternalContextTool(name string) bool {
+    switch {
+    case name == "web_search" || name == "web_fetch":
+        return true
+    case strings.HasPrefix(name, "mcp://"): // MCP 工具命名空间
+        return true
+    }
+    return false
+}
+```
+
+- **记忆工具写入侧**：`sqliteMemoryTool`（`dino/mem/tool.go`）的 `add_knowledge` action 增加一个 `source` 字段；若调用上下文是「web 结果 → 记知识」，提示模型优先把来源标为 `reference`，且 web 结果写 `user/feedback` 类知识时降权。**更简单的一刀**：`add_knowledge` 的 schema 加 `external_context: bool`（模型诚实标注），标注后 `user/feedback` 类拒绝、`reference` 类接受。
+- **ingest 侧已足够**：`ingest.go:136-139` 跳过 tool 消息，无需改。
+
+### 6.4 收益与成本
+
+- **收益**：中低。长期记忆抽取已跳过工具输出，污染主要来自模型主动写入——这是低频且模型可被 prompt 约束的行为。
+- **成本**：小（一个分类函数 + `add_knowledge` schema 加字段 + 校验）。
+- **决策**：**P2 做轻量版**（改 `dino/mem/tool.go` 一个文件），但不做 Codex 的「输出标记贯穿 tool_output 类型」全量改造。
+
+---
+
+## 7. E7 · 错误分类（已做，补遗漏）
+
+### 7.1 现状
+
+- `FatalToolError`（`agent/types/tool.go:17-70`）+ `FatalToolErrorKind`（dino veto/loop 实现）。
+- 引擎 fatal 短路（`agent_execution.go:491-497`）；nonFatalTool 透传 fatal（`tool_wrappers.go:67-72`）。
+- 错误码体系：`agent/types/toolresult.go` + `pkg/errors`（EC_TOOL_*）。
+
+### 7.2 剩余问题
+
+`nonFatalTool`（`tool_wrappers.go:44-96`）现在把**所有非 fatal 错误**转可恢复 `{ok:false}` 喂回模型。其中几类「重试也无效」的错误被误判为可恢复：
+
+| 错误码 | 现状 | 应该 | 理由 |
+|---|---|---|---|
+| `EC_TOOL_AUTH_ERROR` | 可恢复 | **fatal** | 凭证错误重试输入无用 |
+| `EC_TOOL_INPUT_ERROR`（参数语义错） | 可恢复 | fatal（部分） | schema 已做 fatal（`agent_execution.go:491-497`）；参数语义错（如 `old_str` 找不到，`edit.go:74-76`）重试可能有用，**保留可恢复** |
+| MCP 11xxx（`EC_MCP_TOOL_RETURNED_ERROR`） | 可恢复 | **可恢复**（保留） | MCP server 可能临时失败，重试有效 |
+| `EC_MCP_NOT_CONNECTED` / `EC_MCP_CLIENT_INIT_FAILED` | 可恢复 | fatal | 连接态错误重试同一输入无效 |
+| 工具不存在（`agent_execution.go:364` `tool not found`） | 已在引擎层处理 | — | 已是 fatal 语义（`EC_TOOL_NOT_FOUND` 未走 nonFatal） |
+
+### 7.3 方案
+
+**不动** `FatalToolError` 机制本身（已正确）。只做**分类清单补全**：
+
+```go
+// dino/tools/tool_wrappers.go 内 nonFatalTool.Execute 的错误分类（增强版）：
+func classifyToolError(err error) error {
+    var ec errors.ErrorCode // pkg/errors 的错误码类型
+    if errors.As(err, &ec) {
+        switch ec.Code {
+        case errors.EC_TOOL_AUTH_ERROR.Code,
+             errors.EC_MCP_NOT_CONNECTED.Code,
+             errors.EC_MCP_CLIENT_INIT_FAILED.Code,
+             errors.EC_MCP_CLIENT_START_FAILED.Code:
+            return &types.FatalToolError{Err: err, Reason: "non-retryable tool state error"}
+        }
+    }
+    return err // 其余保持可恢复
+}
+```
+
+- `errors.ErrorCode` 类型确认（`pkg/errors` 的 `NewError` 返回可 `errors.As` 到 `*Error`）。需读 `pkg/errors/errors.go` 确认字段名（`Code`/`Message`）。
+- **注意**：`EC_TOOL_AUTH_ERROR` 变 fatal 后，`ExternalPathApprovalTool` 的审批拒绝已是 `ApprovalRejectedError`（fatal，`defined_tool.go:535`）；路径权限不足的错误（`EC_TOOL_PARAMETER_INVALID` 包装的 SafePath 失败）仍可恢复——模型可换路径重试，合理。
+
+### 7.4 收益与成本
+
+- **收益**：低-中。把「连接态错误」从无限重试（loop）中解放，减少无意义 token 消耗。
+- **成本**：小（一个分类函数 + 测试）。
+- **决策**：**P2 做**，与 `tool-pipeline.md` §13 遗留待定点 1（`EC_TOOL_AUTH_ERROR` 是否进 fatal）闭环。
+
+
+
