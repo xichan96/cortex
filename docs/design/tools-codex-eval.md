@@ -529,5 +529,158 @@ func classifyToolError(err error) error {
 - **成本**：小（一个分类函数 + 测试）。
 - **决策**：**P2 做**，与 `tool-pipeline.md` §13 遗留待定点 1（`EC_TOOL_AUTH_ERROR` 是否进 fatal）闭环。
 
+---
+
+## 8. 内置工具逐个对比 Codex（现状 → 差距 → 是否值得优化）
+
+> 用户补充要求。逐工具给「现状 → Codex 做法 → 差距 → 性价比 → 落地方案」。结论先行：**大多数「现状足够，不做」；唯一强烈推荐动刀的是 web_search（SSE 解析）与 bash（输出硬上限，但已被 F1 兜底）。**
+
+### 8.1 bash / command
+
+| 维度 | cortex 现状 | Codex 做法 | 差距 |
+|---|---|---|---|
+| 超时 | ctx deadline 或显式 `timeout`（默认 30s，`command.go:78-94`）；`EC_TOOL_EXECUTION_TIMEOUT`（`:105-107`） | 会话级 `session_token_limit` + 超时 | 已对齐 |
+| 会话复用 | `pkg/shell/shell.go` 每次 `NewShell`（`command.go:99`）——**无跨调用状态**（cwd/env 不延续） | 持久 shell session（cwd 延续、env 延续） | **差距**：cortex 每次调用独立 cwd（`EffectiveWorkingDir(t.workspace)`，恒等于 workspace）；模型无法 `cd` 后接着跑 |
+| 输出截断 | **无硬上限**（`bytes.Buffer` 无界，`shell.go:330`），靠 F1 截断（`truncate.go:160-229`）兜底 | `maxOutputBytes` 硬上限 + header | F1 已兜底；超长输出仍会全量进内存 |
+| 环境隔离 | `shell.EnvironNonInteractive()`（`shell.go`）+ 可选 blockFuncs；**无沙箱** | 沙箱（可选） | 沙箱是 P3 大项（评估报告已列） |
+| 工作目录切换 | `fs.EffectiveWorkingDir` 固定 workspace；bash 无 `cwd` 参数 | 会话持久 cwd | 见「会话复用」 |
+| 后台任务 | `background` + `job_output`/`job_kill`（`command.go:67-76`，`pkg/shell/background.go`） | 同款 | 已对齐 |
+
+**差距本质**：cortex 的 bash 是「无状态每次执行」vs Codex 的「会话复用 + cwd 延续」。
+
+**是否值得优化**：
+- **输出硬上限（值得，小）**：`command.go` 或 `pkg/shell` 加 `MaxOutputBytes`（默认如 4MB），超限即截断返回 + 提示。**但** F1 已把「喂模型」的上限做好（`TruncateToolResult` 落盘/中间截断），真正缺的是「内存上限」（超大输出撑爆 bytes.Buffer）。**P2 小项**：给 `pkg/shell` 的 `exec` 用 `io.LimitReader` 风格的有界 buffer。
+- **会话复用（暂缓）**：需要跨调用的 cwd/env 状态容器（session 级 `*shell.Shell` 单例 + mutex），与「模型 `cd` 后状态延续」的收益绑定。但**有状态 shell 是调试陷阱**（状态泄漏难查），且 cortex 工作流多用绝对路径（`SafePath` 已返回绝对路径）。**P3 暂缓**，除非产品明确要「长会话 shell 状态」。
+
+### 8.2 edit_file
+
+| 维度 | cortex 现状 | Codex 做法 | 差距 |
+|---|---|---|---|
+| 精确替换 vs 整文件重写 | `old_str`/`new_str` **精确字符串替换**（`edit.go:74-77`）；`write_file` 是整文件重写 | `apply_patch` Lark：多 hunk、增删文件 | 精度已对齐（甚至更稳）；**hunk 数不足** |
+| diff 语义 | 无 diff，单次 `Replace` | patch 应用 + 上下文校验 | 单 hunk 找错时整批失败（原子性好） |
+| 流式 | 无 | 流式解析 + 进度事件 | 见 §4，cortex 无中途反馈通道 |
+
+**结论**：精确字符串替换是 Codex 的**超集替代**（对当前模型更稳）。唯一值得做的是 §4.4 的多 hunk JSON（P2 可选）。**不做 Lark。**
+
+### 8.3 read_file
+
+| 维度 | cortex 现状 | Codex 做法 | 差距 |
+|---|---|---|---|
+| offset/limit | **无**（`read.go:40-78` 整文件读） | 支持行范围读 + 截断提示 | **差距**：大文件只能整读后靠 F1 截断（浪费内存，且模型拿不到中间段） |
+| 目录读 | 返回 listing（`read.go:59-72`） | 有 `list_directory` | 已有 |
+| 大文件 | F1 截断兜底 | 行范围 + 自动截断提示 | 见上 |
+
+**是否值得优化**：**P2 小项**。给 `read_file` schema 加 `offset`/`limit`（行号范围），超范围返回「TotalLines + 截断提示」——一次 API 改动（`read.go`）即可，复用 `fs/common.go` 的工具。收益：大文件高效读取、避免 F1 截断整读浪费。**这是本表里性价比最高的单工具优化之一。**
+
+### 8.4 web_fetch / web_search
+
+| 维度 | cortex 现状 | Codex 做法 | 差距 |
+|---|---|---|---|
+| 限流 | 无（`webfetch.go` 每次新 HTTP） | fetch 限流（并发/速率） | 低优先级 |
+| SSE | **手写只读第一行**（`websearch.go:182-198`） | 完整 SSE 解析 | **差距大**：exa MCP 返回可能多条 `data:`，只读第一条会丢结果 |
+| 超时 | fetch 30s/120s 上限；search 25s | 同 | 已对齐 |
+| 输出上限 | fetch 5MB（`:26,151-153`）；search 结果数 8 | `maxOutputBytes` | fetch 5MB 进内存 + F1 截断，可接受 |
+
+**是否值得优化**：
+- **web_search SSE（值得，小-中）**：`websearch.go:182-198` 从「只读第一个 `data:` 行」改为完整 `bufio.Scanner` 循环收集所有 `data:` 块（或改用 `github.com/r3labs/sse` 类库），解析全部 content。**这是评估报告 11.1 明确点名的脆弱点**，且改动小（一个函数）。**P1 做。**
+- **限流（暂缓）**：单 agent 并发 web 调用已受 `ToolParallelismLimit`（`agent_execution.go:463-467`）约束，无需工具内限流。P3。
+
+### 8.5 grep / glob / list_directory
+
+| 维度 | cortex 现状 | Codex 做法 | 差距 |
+|---|---|---|---|
+| grep 上限 | 无（`grep.go:89-109`，`CombinedOutput` 无行数 cap） | 结果上限 + 截断提示 | **差距**：超大 grep 结果全量进内存 |
+| grep ignore | 无 ignore 规则（不排 vendor/node_modules） | 尊重 ignore 文件 | **差距**：搜到 vendor 噪音 |
+| grep exit 1 | 当 error 返回（`grep.go:106`） | 「无匹配」当正常空结果 | **差距**：模型看到 error 误判失败 |
+| glob 递归 | `filepath.Glob` 单层，**不递归 `**`**（`glob.go:59-71`） | 支持 `**` 递归 | **差距** |
+| list_directory | 单层 ReadDir，无上限（`dino/tools/builtin.go:133-165`） | 同 | 已对齐 |
+
+**是否值得优化**：
+- **grep 无匹配当 error（值得，极小）**：`grep.go:106` 改为 `exit 1 + 空输出 → 返回空结果（正常）`。**P2 极小事**。
+- **grep 结果上限（P2 小项）**：`exec` 改用 `io.LimitReader` 或 `bytes.Buffer` 后截断 + 提示。
+- **glob `**` 递归（暂缓）**：`filepath.Glob` 不支持 `**`；换 `doublestar` 库或手写递归。收益中，但 glob 常被 grep/bash find 替代。P3。
+- **ignore 规则（暂缓）**：需要读 `.gitignore`/`.ignore` 并做过滤，收益中，P3。
+
+### 8.6 todo / question
+
+| 维度 | cortex 现状 | Codex 做法 | 差距 |
+|---|---|---|---|
+| todo | 完整 add/remove/update/list + 状态机（`task/todo.go`） | 无内置（agent 用文件自管理） | cortex 更好；**不做** |
+| question | P2.1 已接：`SentinelQuestionResult` → `EventTypeQuestion` → `onQuestion` 回调（`session.go:507-517`，`client.go:448-451`） | 无直接对应 | **差距**：**用户回答回流无 `AnswerQuestion` 通道**（事件注释提到的方法不存在）。模型提问后 UI 可回调 `onQuestion`，但回答怎么回到当前 turn 未定义（`session.go` 只有 `Input()`/`ObserveOneUserTurn`） |
+
+**是否值得优化**：**question 回答回流（值得，中，P2 单列）**。方案：session 提供 `AnswerQuestion(questionID, answer string)` —— 把回答作为下一条 user 消息注入（复用 `Input()`/`ObserveOneUserTurn`），同时挂起当前 turn 等待（类似 F7 方案 A 的「挂起迭代」）。**但**：这需要 engine 的「question 工具返回后暂停」语义（`hasMore=false` + 等待输入），与 `tool-pipeline.md` §7 的 F7 未做项重叠。**建议与 F7 合并排期**（同一个「提问-回答回流」机制）。
+
+### 8.7 MCP
+
+| 维度 | cortex 现状 | Codex 做法 | 差距 |
+|---|---|---|---|
+| 工具名空间 | 平铺 `t.Name()`（MCP 工具名可能与 builtin 撞名，`factory.go:608-618` 注册冲突报错） | 名空间/前缀 | **差距**：撞名是注册期报错而非隔离 |
+| 错误分类 | 11xxx 错误码，MCP 错误可恢复（`pkg/mcp/client.go:176-181`） | 统一 ToolError 二分 | E7 已覆盖连接态 |
+| 动态接入 | `mcp_client` 逃生舱（`builtin/mcp/client.go`） | 无逃生舱（配置驱动） | E1 后应退场 |
+| stdio | **无**（`pkg/mcp/client.go` 只 http/sse） | 有 stdio transport | **差距**：本地 MCP server（stdio）无法接入。`tool-pipeline.md` §13 已列「MCP stdio 二选一」，非本设计重点 |
+
+**结论**：MCP 的优化都在 E1（Deferred）+ E7（错误分类）里覆盖，无需单独设计。**名空间前缀（可选 P3）**：`mcp://server/tool` 命名规避撞名——但会改变模型可见工具名，需与 E1 一起评估。
+
+### 8.8 write_file
+
+`fs/write.go` 整文件覆盖写，与 Codex 的 `write_file` 等价。**不做**（整写语义正确，模型有 read 兜底）。
+
+### 8.9 逐工具优化优先级汇总
+
+| 工具 | 优化项 | 优先级 | 工作量 | 落地方案 |
+|---|---|---|---|---|
+| web_search | SSE 完整解析 | **P1** | 小-中 | `websearch.go:182-198` 改完整 SSE 循环 |
+| read_file | offset/limit 行范围 | **P2** | 小 | `read.go` schema + 实现 |
+| grep | 无匹配返回空 + 结果上限 | **P2** | 小 | `grep.go:106` + LimitReader |
+| bash | 输出内存硬上限 | **P2** | 小 | `pkg/shell` 有界 buffer |
+| question | 回答回流 `AnswerQuestion` | **P2**（与 F7 合并） | 中 | session 注入 + 挂起 |
+| glob | `**` 递归 | P3 | 小-中 | doublestar/手写 |
+| grep | ignore 规则 | P3 | 中 | 读 .gitignore 过滤 |
+| bash | 会话复用 + cwd 延续 | P3 | 中 | session 级 shell 单例 |
+| web_fetch | 限流 | P3 | 小 | 并发受 SetLimit 已约束 |
+| MCP | 名空间前缀 | P3 | 中 | 与 E1 一起评估 |
+
+---
+
+## 9. 优先级排序与落地路径
+
+### 9.1 推荐顺序（按性价比）
+
+| 轮次 | 项 | 理由 | 依赖 |
+|---|---|---|---|
+| **下一轮（P1）** | E1 ToolExposure + E2 tool_search（一个 PR） | MCP 多时的上下文根治；架构收益 | 无 |
+| **下一轮（P1）** | web_search SSE 完整解析 | 评估报告点名脆弱点，改动小 | 无 |
+| **P2** | E6 外部上下文标记 | 防记忆污染（轻量） | E1 的 exposure 命名空间（`mcp://`） |
+| **P2** | E7 fatal 清单补全 | 防连接态错误无限重试 | 无 |
+| **P2** | read_file offset/limit | 大文件高效读 | 无 |
+| **P2** | grep 空结果 + bash 内存上限 | 正确性 + 稳定性小项 | 无 |
+| **P2（与 F7 合并）** | question 回答回流 | 提问能力闭环 | F7 评审 |
+| **P2（可选）** | edit_file 多 hunk JSON | 减少 round-trip | 无 |
+| **P3** | E3 apply_patch Lark + 流式 | 收益依赖无的中途反馈通道 | — |
+| **P3** | glob `**` / grep ignore / bash 会话复用 / MCP 名空间 / fetch 限流 | 收益中、冲突小 | — |
+
+### 9.2 落地路径（E1+E2 详细步骤）
+
+1. **`agent/types/tool.go`**：`ToolExposure` 常量 + `IsDirect/IsDeferred/IsHidden`；`ToolMetadata.Exposure`/`SearchKeywords`。
+2. **`agent/tools/registry.go`**：`GetAllVisible`/`GetDeferred`/`GetDeferredTool`（不动 `GetAll`）。
+3. **`dino/factory.go:754-857`**：`sessionTools := f.tools.GetAllVisible()`；deferred 工具预包装入 `f.sessionDeferredTools[sessionID]`；`mcp_deferred` config 控制 MCP 是否 Deferred。
+4. **`dino/tools/builtin/runtime/tool_search{,_index}.go`**：索引 + 工具。
+5. **`dino/factory.go`**：构造索引 → 注入 `ToolSearchTool` → Execute 闭包 discover → `AddTools`。
+6. **`dino/session/session.go`**：tool_result 分支检测 `discovered` → `AddTools`。
+7. **`dino/config.go`**：`Tools.ToolSearchEnabled`（默认 true）、`Tools.MCPDeferred`（默认 false，灰度后翻 true）。
+8. **MCP exposure**：`dino/tools/manager.go` `AddServer` 时按 config 给 `mcpTools` 打 `ExposureDeferred`。
+9. **退场 `mcp_client`**：`loadBuiltinTools` 去掉或降级 `Hidden`。
+10. **测试 + release note**。
+
+### 9.3 落地路径（其他 P1/P2）
+
+- **web_search SSE**：`web/websearch.go` 的 `Execute` 里 `bufio.Scanner` 循环收集全部 `data:` 行 → 合并解析；或引入 `github.com/r3labs/sse/v2`。测试用 `httptest` mock SSE 流。
+- **E6**：`dino/mem/tool.go` `add_knowledge` schema 加 `external_context: bool` + `ExternalContextTool(name)` 分类；校验 user/feedback 拒绝外部来源。
+- **E7**：`dino/tools/tool_wrappers.go` `classifyToolError` + 测试。
+- **read_file offset/limit**：`agent/tools/builtin/fs/read.go` schema 加 `offset`/`limit`（int），实现按行切片，返回 `total_lines`。
+- **grep**：`search/grep.go` 改 `cmd.Output()` 分支（exit 1 空输出 → 空结果）+ 结果上限。
+- **bash 内存上限**：`pkg/shell/shell.go` `exec` 用有界 buffer（如 `cap = 8MB`，超限截断并标记）。
+
+
 
 
