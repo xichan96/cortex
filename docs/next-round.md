@@ -8,6 +8,20 @@
 
 ---
 
+## Context-Trace（评估报告第十章 · 专项）—— ✅ 已完成（2026-08-29）
+
+- **设计**：`docs/design/context-trace.md` + 评审 `docs/design/review-context-trace.md`（合并 `ctx-trace-impl` 进 dev，commit `e829464`）。
+- **实现**：S1-S5 全部落地，dev 分支 commit 序列：
+  - S1 `f50ddf7`：`dino/trace` recorder（异步 JSONL、非阻塞投递、体积控制、轮转）
+  - S2 `94f2756`：引擎挂钩点（`hooks.Tracer` + `SetTracer` + 各记录点，含 B1/B2 修正）
+  - S3+S4 `a044f04`：dino 接线 + `trace-replay` CLI + reducer（`RenderText`/`Reduce`）
+  - S5 `01a76e2`：subagent 引擎注入 tracer（B3）
+- **评审 BLOCKER 处理**：B1（turn_end 移入 `executeStreamWithIterations`）/ B2（tool_call 独立记录点 + 4 条工具路径全覆盖）/ B3（subagent 新引擎注入 tracer）全部修正。
+- **开启方式**：`dino.Config.Trace.Enabled = true`（默认关 = 零开销）。回放：`go run ./cmd/trace-replay --dir ./dino_sessions/traces --session <sid>`。
+- **测试**：`dino/trace` 单测（envelope/append/durability/崩溃半写/dropped/截断/轮转/replay）+ 引擎零开销断言全绿，`-race` 通过。
+
+---
+
 ## P1 · 低成本高收益（建议下一轮先做）
 
 ### P1.1 `ReasoningTokens` 回填（prompt caching O1）—— ✅ 已完成（`ee0c51f`）
