@@ -504,6 +504,19 @@ func (s *Session) executeWithInput(ctx context.Context, agentInput types.AgentIn
 						ToolInput:  result.ToolEvent.Input,
 					})
 				case "tool_result":
+					// P2.1 question 工具：输出为 SentinelQuestionResult（AskUser=true）
+					// 时 emit EventTypeQuestion，UI 拿到问题后可回答注入。
+					if result.ToolEvent.ToolName == "question" {
+						if q := questionFromOutput(result.ToolEvent.Output); q != "" {
+							s.emit(&Event{
+								Type:       EventTypeQuestion,
+								SessionID:  s.id,
+								ToolName:   result.ToolEvent.ToolName,
+								ToolCallID: result.ToolEvent.ToolCallID,
+								Question:   q,
+							})
+						}
+					}
 					s.emit(&Event{
 						Type:       EventTypeToolResult,
 						ToolName:   result.ToolEvent.ToolName,
@@ -640,4 +653,33 @@ type ToolCallInfo struct {
 
 func generateUUID() string {
 	return uuid.New().String()
+}
+
+// questionFromOutput 从 question 工具输出提取提问内容（P2.1）。
+// SentinelQuestionResult 可能以 struct 或 JSON 反序列化后的 map 形态出现，
+// 用反射兼容两种形态；非 question sentinel 返回空串。
+func questionFromOutput(output interface{}) string {
+	if output == nil {
+		return ""
+	}
+	// struct 形态：agent/tools/builtin/runtime.SentinelQuestionResult
+	if v, ok := output.(struct {
+		Ok       bool   `json:"ok"`
+		Question string `json:"question"`
+		AskUser  bool   `json:"ask_user"`
+	}); ok {
+		if v.AskUser {
+			return v.Question
+		}
+		return ""
+	}
+	// map 形态（工具结果经 FormatToolResult 后）。
+	if m, ok := output.(map[string]interface{}); ok {
+		if ask, ok := m["ask_user"].(bool); ok && ask {
+			if q, ok := m["question"].(string); ok {
+				return q
+			}
+		}
+	}
+	return ""
 }

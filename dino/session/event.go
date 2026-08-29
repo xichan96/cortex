@@ -22,6 +22,10 @@ const (
 	EventTypeApproval   EventType = "approval"
 	EventTypePlan       EventType = "plan"
 	EventTypePlanStep   EventType = "plan_step"
+	// EventTypeQuestion question 工具向用户提问（P2.1，异步事件模型）。
+	// session 检测到 SentinelQuestionResult 时 emit；UI 经 onQuestion 回调拿到
+	// 问题，随后用 AnswerQuestion 把回答注入（作为下一条 user 消息喂回）。
+	EventTypeQuestion EventType = "question"
 )
 
 type Event struct {
@@ -38,6 +42,9 @@ type Event struct {
 	Usage      *Usage         `json:"usage,omitempty"`
 	Plan       *Plan          `json:"plan,omitempty"`
 	StopCause  string         `json:"stop_cause,omitempty"`
+	// Question question 工具向用户提问的内容（P2.1）。配套 QuestionID 供回答注入。
+	QuestionID string `json:"question_id,omitempty"`
+	Question   string `json:"question,omitempty"`
 	// Source 事件来源（S4/B2，subagent-s3s4 §7.7）。默认 "user"（向后兼容，
 	// 缺失字段 = user）。唤醒注入 turn = "subagent"，供消费方（client.go /
 	// turn_observe.go）识别并折叠，避免"幽灵用户消息"喷到 UI 与 assistant-text。

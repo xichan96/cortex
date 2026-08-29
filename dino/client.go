@@ -354,6 +354,7 @@ type HandlerBuilder struct {
 	onError           func(err string)
 	onDone            func()
 	onApproval        func(toolName string, approved bool)
+	onQuestion        func(question string, toolCallID string)
 }
 
 func (hb *HandlerBuilder) OnMessage(fn func(content string)) *HandlerBuilder {
@@ -398,6 +399,13 @@ func (hb *HandlerBuilder) OnApproval(fn func(toolName string, approved bool)) *H
 	return hb
 }
 
+// OnQuestion 注册 question 工具提问回调（P2.1）。question 工具被调用且返回
+// SentinelQuestionResult 时触发，调用方可把问题展示给用户。
+func (hb *HandlerBuilder) OnQuestion(fn func(question string, toolCallID string)) *HandlerBuilder {
+	hb.onQuestion = fn
+	return hb
+}
+
 func (hb *HandlerBuilder) Build() string {
 	handler := func(event *Event) {
 		switch event.Type {
@@ -436,6 +444,10 @@ func (hb *HandlerBuilder) Build() string {
 		case EventTypeApproval, EventTypeApproved:
 			if hb.onApproval != nil {
 				hb.onApproval(event.ToolName, event.Approved)
+			}
+		case EventTypeQuestion:
+			if hb.onQuestion != nil {
+				hb.onQuestion(event.Question, event.ToolCallID)
 			}
 		}
 	}

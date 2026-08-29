@@ -60,6 +60,7 @@ const (
 	EventTypeApproval   = session.EventTypeApproval
 	EventTypePlan       = session.EventTypePlan
 	EventTypePlanStep   = session.EventTypePlanStep
+	EventTypeQuestion   = session.EventTypeQuestion
 
 	StreamEventContent    = session.EventTypeMessage
 	StreamEventReasoning  = session.EventTypeThinking
