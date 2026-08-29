@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/xichan96/cortex/agent/hooks"
 	"github.com/xichan96/cortex/pkg/logger"
 )
 
@@ -190,9 +191,18 @@ func (r *Recorder) openFile() error {
 
 // Record appends an event, non-blocking. It drops (and counts) when the channel
 // is full — trace is a side channel and must never block the engine.
-func (r *Recorder) Record(ev Event) {
+// It accepts hooks.TraceEvent (the engine's minimal event) and converts to the
+// package's Event, so Recorder implements hooks.Tracer directly.
+func (r *Recorder) Record(ev hooks.TraceEvent) {
+	internal := Event{
+		Type:          ev.Type,
+		Iteration:     ev.Iteration,
+		ThreadID:      ev.ThreadID,
+		ParentTraceID: ev.ParentTraceID,
+		Payload:       ev.Payload,
+	}
 	select {
-	case r.events <- ev:
+	case r.events <- internal:
 		atomic.AddInt64(&r.stats.EventsRecorded, 1)
 	default:
 		atomic.AddInt64(&r.stats.EventsDropped, 1)

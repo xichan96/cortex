@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xichan96/cortex/agent/hooks"
 	"github.com/xichan96/cortex/agent/types"
 )
 
@@ -26,8 +27,8 @@ func newTestRecorder(t *testing.T, cfg Config) (*Recorder, string) {
 func TestEnvelopeFields(t *testing.T) {
 	r, _ := newTestRecorder(t, DefaultConfig())
 	// Manually push two events through Record and Flush, then read the file.
-	r.Record(Event{Type: EventTurnStart, Payload: TurnStartPayload{Model: "gpt-4o"}})
-	r.Record(Event{Type: EventTurnEnd, Payload: TurnEndPayload{Iterations: 1}})
+	r.Record(hooks.TraceEvent{Type: EventTurnStart, Payload: TurnStartPayload{Model: "gpt-4o"}})
+	r.Record(hooks.TraceEvent{Type: EventTurnEnd, Payload: TurnEndPayload{Iterations: 1}})
 	if err := r.Flush(); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
@@ -68,7 +69,7 @@ func TestEnvelopeFields(t *testing.T) {
 func TestJSONLAppend(t *testing.T) {
 	r, _ := newTestRecorder(t, DefaultConfig())
 	for i := 0; i < 5; i++ {
-		r.Record(Event{Type: EventToolCall, Payload: ToolCallPayload{ToolName: "read_file"}})
+		r.Record(hooks.TraceEvent{Type: EventToolCall, Payload: ToolCallPayload{ToolName: "read_file"}})
 	}
 	if err := r.Flush(); err != nil {
 		t.Fatalf("Flush: %v", err)
@@ -102,9 +103,9 @@ func TestJSONLAppend(t *testing.T) {
 
 func TestFlushDurability(t *testing.T) {
 	r, _ := newTestRecorder(t, DefaultConfig())
-	r.Record(Event{Type: EventTurnStart, Payload: TurnStartPayload{}})
-	r.Record(Event{Type: EventLLMCall, Payload: LLMCallPayload{}})
-	r.Record(Event{Type: EventTurnEnd, Payload: TurnEndPayload{}})
+	r.Record(hooks.TraceEvent{Type: EventTurnStart, Payload: TurnStartPayload{}})
+	r.Record(hooks.TraceEvent{Type: EventLLMCall, Payload: LLMCallPayload{}})
+	r.Record(hooks.TraceEvent{Type: EventTurnEnd, Payload: TurnEndPayload{}})
 	if err := r.Flush(); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
@@ -117,7 +118,7 @@ func TestFlushDurability(t *testing.T) {
 func TestCrashPartialWrite(t *testing.T) {
 	r, dir := newTestRecorder(t, DefaultConfig())
 	for i := 0; i < 3; i++ {
-		r.Record(Event{Type: EventLLMCall, Payload: LLMCallPayload{}})
+		r.Record(hooks.TraceEvent{Type: EventLLMCall, Payload: LLMCallPayload{}})
 	}
 	if err := r.Flush(); err != nil {
 		t.Fatalf("Flush: %v", err)
@@ -147,7 +148,7 @@ func TestDroppedEventsCounter(t *testing.T) {
 
 	// Rapidly enqueue far more than the queue size.
 	for i := 0; i < 100; i++ {
-		r.Record(Event{Type: EventLLMCall, Payload: LLMCallPayload{}})
+		r.Record(hooks.TraceEvent{Type: EventLLMCall, Payload: LLMCallPayload{}})
 	}
 	st := r.Stats()
 	// Non-blocking Record: only queue-capacity events land; the rest drop.
@@ -165,7 +166,7 @@ func TestDroppedEventsCounter(t *testing.T) {
 
 func TestExternalizePayloadsNotEnabledByDefault(t *testing.T) {
 	r, _ := newTestRecorder(t, DefaultConfig())
-	r.Record(Event{Type: EventToolResult, Payload: ToolResultPayload{ToolName: "bash", Output: "hi"}})
+	r.Record(hooks.TraceEvent{Type: EventToolResult, Payload: ToolResultPayload{ToolName: "bash", Output: "hi"}})
 	if err := r.Flush(); err != nil {
 		t.Fatal(err)
 	}
@@ -187,8 +188,8 @@ func TestVolumeControlTruncation(t *testing.T) {
 	r, _ := newTestRecorder(t, cfg)
 
 	long := strings.Repeat("x", 100)
-	r.Record(Event{Type: EventLLMCall, Payload: LLMCallPayload{Messages: []types.Message{{Content: long}}}})
-	r.Record(Event{Type: EventToolResult, Payload: ToolResultPayload{ToolName: "bash", Output: long}})
+	r.Record(hooks.TraceEvent{Type: EventLLMCall, Payload: LLMCallPayload{Messages: []types.Message{{Content: long}}}})
+	r.Record(hooks.TraceEvent{Type: EventToolResult, Payload: ToolResultPayload{ToolName: "bash", Output: long}})
 	if err := r.Flush(); err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +230,7 @@ func TestRotate(t *testing.T) {
 	r, dir := newTestRecorder(t, cfg)
 
 	for i := 0; i < 200; i++ {
-		r.Record(Event{Type: EventLLMCall, Payload: LLMCallPayload{EstTokensIn: i}})
+		r.Record(hooks.TraceEvent{Type: EventLLMCall, Payload: LLMCallPayload{EstTokensIn: i}})
 	}
 	if err := r.Flush(); err != nil {
 		t.Fatal(err)
