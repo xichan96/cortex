@@ -1589,3 +1589,15 @@ func TestRecoverable_ErrorDoesNotShortCircuit(t *testing.T) {
 		}
 	}
 }
+
+func TestEngineTracerDefaultsNil(t *testing.T) {
+	eng := NewAgentEngine(&MockLLMProvider{}, types.NewAgentConfig())
+	if eng.getTracer() != nil {
+		t.Fatal("tracer must default to nil (trace disabled = zero overhead)")
+	}
+	// SetTracer(nil) clears; SetTracer(recorder) sets.
+	eng.SetTracer(nil)
+	if eng.getTracer() != nil {
+		t.Fatal("SetTracer(nil) must leave tracer nil")
+	}
+}

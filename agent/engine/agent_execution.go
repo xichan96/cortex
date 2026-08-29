@@ -430,6 +430,12 @@ func (ae *AgentEngine) getToolByName(name string) (types.Tool, bool) {
 }
 
 func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls []types.ToolCall, timeout time.Duration) (exists []bool, results []stepResult) {
+	return ae.runToolCallsByLayerIter(ctx, sortedToolCalls, timeout, -1)
+}
+
+// runToolCallsByLayerIter is runToolCallsByLayer with an iteration hint for
+// tracing (Iteration=-1 when the caller has no meaningful iteration).
+func (ae *AgentEngine) runToolCallsByLayerIter(ctx context.Context, sortedToolCalls []types.ToolCall, timeout time.Duration, iteration int) (exists []bool, results []stepResult) {
 	n := len(sortedToolCalls)
 	tools := make([]types.Tool, n)
 	exists = make([]bool, n)
@@ -480,6 +486,19 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 			}
 			g.Go(func() error {
 				start := time.Now()
+				toolCallStart := nowMillis()
+
+				// context-trace: tool_call start recorded at dispatch (B2).
+				ae.recordTrace(hooks.TraceEvent{
+					Type:      traceToolCall,
+					Iteration: traceIterationPtr(iteration),
+					Payload: traceToolCallPayload{
+						ToolName:    tool.Name(),
+						ToolCallID:  toolCallID,
+						Input:       args,
+						StartWallMS: toolCallStart,
+					},
+				})
 
 				// Emit tool call event and call OnBeforeToolCall hook
 				if callback != nil {
@@ -495,6 +514,16 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 					// it fatal and cancel the same-layer siblings via the
 					// errgroup so this iteration unwinds quickly.
 					results[idx] = stepResult{err: &types.FatalToolError{Err: err, Reason: "tool input validation failed"}, cached: false, duration: 0}
+					ae.recordTrace(hooks.TraceEvent{
+						Type:      traceToolError,
+						Iteration: traceIterationPtr(iteration),
+						Payload: traceToolErrorPayload{
+							ToolName:   tool.Name(),
+							ToolCallID: toolCallID,
+							Error:      err.Error(),
+							DurationMS: time.Since(start).Milliseconds(),
+						},
+					})
 					if callback != nil {
 						callback.OnToolInputEnd(tool.Name(), toolCallID, args)
 						callback.OnToolError(tool.Name(), toolCallID, err)
@@ -528,11 +557,34 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 						// and the model would retry the vetoed tool. Unwind like the
 						// fresh-execution fatal path. (P4.2)
 						if err != nil && isFatalToolError(err) {
+							ae.recordTrace(hooks.TraceEvent{
+								Type:      traceToolError,
+								Iteration: traceIterationPtr(iteration),
+								Payload: traceToolErrorPayload{
+									ToolName:   tool.Name(),
+									ToolCallID: toolCallID,
+									Error:      err.Error(),
+									DurationMS: 0,
+								},
+							})
 							if callback != nil {
 								callback.OnToolError(tool.Name(), toolCallID, err)
 							}
 							return err
 						}
+						// context-trace: cached hit is a normal tool_result path
+						// (B2 — cache is the common case, must not be missed).
+						ae.recordTrace(hooks.TraceEvent{
+							Type:      traceToolResult,
+							Iteration: traceIterationPtr(iteration),
+							Payload: traceToolResultPayload{
+								ToolName:   tool.Name(),
+								ToolCallID: toolCallID,
+								Output:     toolResult,
+								DurationMS: 0,
+								Cached:     true,
+							},
+						})
 						return nil
 					}
 				}
@@ -553,6 +605,17 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 					toolResult, err = ae.executeToolWithTimeout(gctx, tool, args, toolTimeout)
 					if err == nil {
 						results[idx] = stepResult{result: toolResult, cached: false, duration: time.Since(start)}
+						ae.recordTrace(hooks.TraceEvent{
+							Type:      traceToolResult,
+							Iteration: traceIterationPtr(iteration),
+							Payload: traceToolResultPayload{
+								ToolName:   tool.Name(),
+								ToolCallID: toolCallID,
+								Output:     toolResult,
+								DurationMS: time.Since(start).Milliseconds(),
+								Cached:     false,
+							},
+						})
 						if !noCache {
 							ae.setCachedToolResult(canonicalName, args, toolResult, nil)
 						}
@@ -570,6 +633,16 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 					// goroutines. (F3/P4.2)
 					if isFatalToolError(err) {
 						results[idx] = stepResult{err: err, cached: false, duration: time.Since(start)}
+						ae.recordTrace(hooks.TraceEvent{
+							Type:      traceToolError,
+							Iteration: traceIterationPtr(iteration),
+							Payload: traceToolErrorPayload{
+								ToolName:   tool.Name(),
+								ToolCallID: toolCallID,
+								Error:      err.Error(),
+								DurationMS: time.Since(start).Milliseconds(),
+							},
+						})
 						if callback != nil {
 							callback.OnToolError(tool.Name(), toolCallID, err)
 						}
@@ -589,6 +662,16 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 					}
 				}
 				results[idx] = stepResult{err: lastErr, cached: false, duration: time.Since(start)}
+				ae.recordTrace(hooks.TraceEvent{
+					Type:      traceToolError,
+					Iteration: traceIterationPtr(iteration),
+					Payload: traceToolErrorPayload{
+						ToolName:   tool.Name(),
+						ToolCallID: toolCallID,
+						Error:      lastErr.Error(),
+						DurationMS: time.Since(start).Milliseconds(),
+					},
+				})
 				if callback != nil {
 					callback.OnToolError(tool.Name(), toolCallID, lastErr)
 				}
@@ -666,6 +749,19 @@ func (ae *AgentEngine) saveToMemoryAndMaybeCompress(ctx context.Context, inputMa
 	if compressThreshold <= 0 && compactTurns <= 0 {
 		return
 	}
+
+	// context-trace: memory_save (evidence for eval accounting).
+	role := ""
+	if v, ok := inputMap["role"].(string); ok {
+		role = v
+	}
+	ae.recordTrace(hooks.TraceEvent{
+		Type: traceMemorySave,
+		Payload: traceMemorySavePayload{
+			InputRole:         role,
+			CompressTriggered: false,
+		},
+	})
 
 	byTurn := false
 	if compactTurns > 0 {
@@ -885,6 +981,22 @@ func (ae *AgentEngine) Execute(ctx context.Context, input types.AgentInput, prev
 		}, memoryOutputMap(finalResult, allIntermediateSteps))
 	}
 
+	if finalResult != nil {
+		ae.recordTrace(hooks.TraceEvent{
+			Type: traceTurnEnd,
+			Payload: traceTurnEndPayload{
+				Output:     finalResult.Output,
+				Usage:      finalResult.Usage,
+				Iterations: iteration + 1,
+				StopCause:  finalResult.StopCause,
+				WallMS:     time.Since(startTime).Milliseconds(),
+			},
+		})
+		if t := ae.getTracer(); t != nil {
+			_ = t.Flush()
+		}
+	}
+
 	return finalResult, nil
 }
 
@@ -959,6 +1071,19 @@ func (ae *AgentEngine) ExecuteStream(ctx context.Context, input types.AgentInput
 
 		startTime := time.Now()
 		logger.LogExecution("ExecuteStream", 0, "Starting stream execution", slog.String("input", types.TruncateString(input.String(), 100)), slog.Int("previousRequests", len(previousRequests)))
+
+		// context-trace: turn_start before OnBeforeStart (review B1 — a hook
+		// failure must still leave a turn_start record).
+		ae.recordTrace(hooks.TraceEvent{
+			Type: traceTurnStart,
+			Payload: traceTurnStartPayload{
+				Input:           input,
+				Model:           ae.getModelName(),
+				SystemPromptLen: len(ae.getSystemMessage()),
+				MaxIterations:   ae.getMaxIterations(),
+				ToolNames:       ae.getToolNames(),
+			},
+		})
 
 		// Call OnBeforeStart hook
 		if err := hookRunner.BeforeStart(&input); err != nil {
@@ -1101,15 +1226,37 @@ func (ae *AgentEngine) prepareMessages(ctx context.Context, input types.AgentInp
 	}
 
 	summaryFolded := false
+	beforeCount := len(history)
+	trimmed := false
 	if compactionEnabled && budgetTrim {
 		// 三段式 trim：保头（缓存锚）+ 压缩中间（SummaryGenerator）+ 保尾。
 		// existingSummary 折进摘要，避免跨多次压缩的累积摘要丢失（R3）。
 		history, summaryFolded = trimHistoryToTokenBudgetCompaction(
 			history, budgetCap, config, ae.getCompactionOptions(), summaryStr, previousRequests, input)
+		trimmed = true
 	} else if budgetTrim {
 		history = trimHistoryToTokenBudget(history, budgetCap, config, previousRequests, input)
+		trimmed = true
 	}
 	history = repairLLMMessageToolOrdering(history)
+	if trimmed {
+		// context-trace: compaction event (evidence for eval accounting).
+		mode := "tail_only"
+		if compactionEnabled {
+			mode = "three_phase"
+		}
+		ae.recordTrace(hooks.TraceEvent{
+			Type: traceCompaction,
+			Payload: traceCompactionPayload{
+				BeforeCount:   beforeCount,
+				AfterCount:    len(history),
+				BudgetTokens:  budgetCap,
+				SummaryFolded: summaryFolded,
+				HasSummary:    hasSummary,
+				Mode:          mode,
+			},
+		})
+	}
 
 	if len(history) > 0 {
 		messages = append(messages, history...)
@@ -1241,11 +1388,61 @@ func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Me
 		return nil, false, errors.NewError(errors.EC_LLM_CALL_FAILED.Code, "LLM model provider is nil")
 	}
 
+	// context-trace: llm_call before the model call (messages captured here),
+	// llm_call_end after with usage/duration.
+	toolNames := make([]string, 0, len(tools))
+	for _, t := range tools {
+		toolNames = append(toolNames, t.Name())
+	}
+	estIn := 0
+	for _, m := range messages {
+		estIn += types.RoughTokensForMessage(m)
+	}
+	ae.recordTrace(hooks.TraceEvent{
+		Type:      traceLLMCall,
+		Iteration: traceIterationPtr(iteration),
+		Payload: traceLLMCallPayload{
+			Messages:    messages,
+			Tools:       toolNames,
+			EstTokensIn: estIn,
+		},
+	})
+
+	llmStart := time.Now()
 	response, err := ae.model.ChatWithTools(ctx, messages, tools)
 	if err != nil {
+		ae.recordTrace(hooks.TraceEvent{
+			Type:      traceLLMCallEnd,
+			Iteration: traceIterationPtr(iteration),
+			Payload: traceLLMCallEndPayload{
+				DurationMS: time.Since(llmStart).Milliseconds(),
+				HasError:   true,
+				Error:      err.Error(),
+			},
+		})
 		logger.LogError("executeIteration", err, slog.Int("iteration", iteration))
 		return nil, false, errors.NewError(errors.EC_CHAT_FAILED.Code, "failed to chat with tools").Wrap(err)
 	}
+
+	toolCallRequests := make([]types.ToolCallRequest, 0, len(response.ToolCalls))
+	for _, tc := range response.ToolCalls {
+		toolCallRequests = append(toolCallRequests, types.ToolCallRequest{
+			Tool:       tc.Function.Name,
+			ToolInput:  tc.Function.Arguments,
+			ToolCallID: tc.ID,
+			Type:       tc.Type,
+		})
+	}
+	ae.recordTrace(hooks.TraceEvent{
+		Type:      traceLLMCallEnd,
+		Iteration: traceIterationPtr(iteration),
+		Payload: traceLLMCallEndPayload{
+			Usage:      response.Usage,
+			DurationMS: time.Since(llmStart).Milliseconds(),
+			OutputLen:  len(response.Content),
+			ToolCalls:  toolCallRequests,
+		},
+	})
 
 	result := &types.AgentResult{
 		Output: response.Content,
@@ -1266,7 +1463,7 @@ func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Me
 		}
 
 		sortedToolCalls, _ := ae.prepareToolCalls(response.ToolCalls)
-		exists, results := ae.runToolCallsByLayer(ctx, sortedToolCalls, toolExecutionTimeout)
+		exists, results := ae.runToolCallsByLayerIter(ctx, sortedToolCalls, toolExecutionTimeout, iteration)
 		cfg := ae.getConfig()
 		writeDir := ""
 		if cfg != nil {
@@ -1294,6 +1491,7 @@ func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Me
 func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialMessages []types.Message, resultChan chan<- types.StreamResult) {
 	messages := initialMessages
 	finalResult := &types.AgentResult{}
+	turnStartTime := time.Now()
 	maxIterations := ae.getMaxIterations()
 	estimatedToolCalls := maxIterations * 3
 	toolCalls := make([]types.ToolCallRequest, 0, estimatedToolCalls)
@@ -1422,6 +1620,22 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 	// Call OnAfterEnd hook
 	hookRunner.AfterEnd(finalResult)
 
+	// context-trace: turn_end after the end event; finalResult is in scope here
+	// (review B1 — the ExecuteStream defer has no finalResult).
+	ae.recordTrace(hooks.TraceEvent{
+		Type: traceTurnEnd,
+		Payload: traceTurnEndPayload{
+			Output:     finalResult.Output,
+			Usage:      finalResult.Usage,
+			Iterations: iteration + 1,
+			StopCause:  finalResult.StopCause,
+			WallMS:     time.Since(turnStartTime).Milliseconds(),
+		},
+	})
+	if t := ae.getTracer(); t != nil {
+		_ = t.Flush() // guarantee the completed turn is readable
+	}
+
 	sendStreamResult(ctx, resultChan, types.StreamResult{
 		Type:   "end",
 		Result: finalResult,
@@ -1463,8 +1677,37 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 	// Call OnBeforeLLMCall hook
 	hookRunner.BeforeLLMCall(messages)
 
+	// context-trace: llm_call before the stream call.
+	toolNames := make([]string, 0, len(tools))
+	for _, t := range tools {
+		toolNames = append(toolNames, t.Name())
+	}
+	estIn := 0
+	for _, m := range messages {
+		estIn += types.RoughTokensForMessage(m)
+	}
+	ae.recordTrace(hooks.TraceEvent{
+		Type:      traceLLMCall,
+		Iteration: traceIterationPtr(iteration),
+		Payload: traceLLMCallPayload{
+			Messages:    messages,
+			Tools:       toolNames,
+			EstTokensIn: estIn,
+		},
+	})
+
+	llmStart := time.Now()
 	stream, err := ae.model.ChatWithToolsStream(ctx, messages, tools)
 	if err != nil {
+		ae.recordTrace(hooks.TraceEvent{
+			Type:      traceLLMCallEnd,
+			Iteration: traceIterationPtr(iteration),
+			Payload: traceLLMCallEndPayload{
+				DurationMS: time.Since(llmStart).Milliseconds(),
+				HasError:   true,
+				Error:      err.Error(),
+			},
+		})
 		hookRunner.OnError(err)
 		return nil, false, errors.NewError(errors.EC_STREAM_CHAT_FAILED.Code, "failed to chat with tools stream").Wrap(err)
 	}
@@ -1544,6 +1787,29 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 		}
 	}
 
+	// context-trace: llm_call_end after the stream. Data source is result.Usage
+	// (the per-round usage accumulated in the loop); output_len is the builder's
+	// length (review R2).
+	streamToolCalls := make([]types.ToolCallRequest, 0, len(result.ToolCalls))
+	for _, tc := range result.ToolCalls {
+		streamToolCalls = append(streamToolCalls, types.ToolCallRequest{
+			Tool:       tc.Tool,
+			ToolInput:  tc.ToolInput,
+			ToolCallID: tc.ToolCallID,
+			Type:       tc.Type,
+		})
+	}
+	ae.recordTrace(hooks.TraceEvent{
+		Type:      traceLLMCallEnd,
+		Iteration: traceIterationPtr(iteration),
+		Payload: traceLLMCallEndPayload{
+			Usage:      result.Usage,
+			DurationMS: time.Since(llmStart).Milliseconds(),
+			OutputLen:  outputBuilder.Len(),
+			ToolCalls:  streamToolCalls,
+		},
+	})
+
 	// Call OnAfterLLMCall hook with the response
 	responseMsg := &types.Message{
 		Content: outputBuilder.String(),
@@ -1582,7 +1848,7 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 		}
 
 		sortedToolCalls, _ := ae.prepareToolCalls(toolCallsForSorting)
-		existsStream, resultsStream := ae.runToolCallsByLayer(ctx, sortedToolCalls, toolExecutionTimeout)
+		existsStream, resultsStream := ae.runToolCallsByLayerIter(ctx, sortedToolCalls, toolExecutionTimeout, iteration)
 		cfg := ae.getConfig()
 		writeDir := ""
 		if cfg != nil {
