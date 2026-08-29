@@ -99,6 +99,9 @@ func (t *sqliteMemoryTool) Schema() map[string]interface{} {
 			"tags": map[string]interface{}{
 				"description": "For add_knowledge: optional semicolon-separated tags or JSON array of strings.",
 			},
+			// E6（tools-codex-eval §6.3）：模型诚实标注来源是否外部上下文
+			// （web 搜索/抓取、MCP）。标注后 user/feedback 类拒绝、reference 类接受。
+			"external_context": map[string]interface{}{"type": "boolean", "description": "For add_knowledge: true if this fact comes from an external source (web search/fetch, MCP call), not the local conversation. External facts may only be stored as category 'reference'."},
 			"query": map[string]interface{}{"type": "string"},
 			"limit": map[string]interface{}{"type": "integer"},
 			"id":    map[string]interface{}{"type": "string", "description": "For forget_knowledge: the id returned by search_knowledge."},
@@ -210,12 +213,41 @@ func tagsFromInput(in map[string]interface{}) []string {
 	}
 }
 
+// ExternalContextTool 判断工具是否产生外部上下文（web 搜索/抓取、MCP 外部调用）。
+// E6（tools-codex-eval §6.3）：web 结果/MCP 输出不应污染长期记忆——
+// 模型主动 add_knowledge 时若来源是外部上下文，user/feedback 类应拒绝。
+// MCP 工具名平铺（pkg/mcp 的 MCPTool.Name() 直接是 server 侧工具名，无 mcp://
+// 前缀，评审 R5），但保留前缀匹配以兼容未来名空间化。
+func ExternalContextTool(name string) bool {
+	switch {
+	case name == "web_search" || name == "web_fetch":
+		return true
+	case strings.HasPrefix(name, "mcp://"):
+		return true
+	}
+	return false
+}
+
 func normalizeKnowledgeCategory(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	if s == "user" || s == "feedback" || s == "project" || s == "reference" {
 		return s
 	}
 	return "project"
+}
+
+// isExternalContextArg 读取 add_knowledge 输入的 external_context 标注。
+// true = 模型声明该事实来自外部上下文（web/MCP）。
+func isExternalContextArg(in map[string]interface{}) bool {
+	v, ok := in["external_context"]
+	if !ok || v == nil {
+		return false
+	}
+	if b, ok := v.(bool); ok {
+		return b
+	}
+	s := strings.ToLower(fmt.Sprint(v))
+	return s == "true" || s == "1" || s == "yes"
 }
 
 func (t *sqliteMemoryTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
@@ -304,6 +336,11 @@ func (t *sqliteMemoryTool) Execute(ctx context.Context, input map[string]interfa
 		}
 		body = clipRunes(body, maxKnowledgeWriteRunes)
 		cat := normalizeKnowledgeCategory(strArg(input, "category"))
+		// E6（tools-codex-eval §6.3）：外部上下文来源（web/MCP）只能进 reference
+		// 类，拒绝 user/feedback——防止外部搜索内容污染个人化记忆。
+		if isExternalContextArg(input) && (cat == "user" || cat == "feedback") {
+			return nil, fmt.Errorf("external context (web/MCP) may only be stored as category 'reference', not '%s'", cat)
+		}
 		tagList := tagsFromInput(input)
 		allTags := make([]string, 0, 1+len(tagList))
 		allTags = append(allTags, t.writeTag)

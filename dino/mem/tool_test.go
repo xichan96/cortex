@@ -121,3 +121,54 @@ func TestMemoryToolForgetPreference(t *testing.T) {
 		t.Fatalf("preference should be deleted, got %q", v)
 	}
 }
+
+// TestExternalContextTool verifies the E6 external-context classifier
+// (tools-codex-eval §6.3): web_* and MCP tools are external-context sources.
+func TestExternalContextTool(t *testing.T) {
+	external := []string{"web_search", "web_fetch", "mcp://github/tool"}
+	for _, name := range external {
+		if !ExternalContextTool(name) {
+			t.Errorf("ExternalContextTool(%q) = false, want true", name)
+		}
+	}
+	internal := []string{"read_file", "bash", "grep", "memory", ""}
+	for _, name := range internal {
+		if ExternalContextTool(name) {
+			t.Errorf("ExternalContextTool(%q) = true, want false", name)
+		}
+	}
+}
+
+// TestAddKnowledgeExternalContextRejectsUserFeedback verifies the E6 rule:
+// add_knowledge with external_context=true may only be stored as reference,
+// not user/feedback.
+func TestAddKnowledgeExternalContextRejectsUserFeedback(t *testing.T) {
+	tool := testTool(t, false)
+	// external_context=true + category=user → rejected.
+	_, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action":           "add_knowledge",
+		"content":          "the sky is blue per a web page",
+		"category":         "user",
+		"external_context": true,
+	})
+	if err == nil {
+		t.Fatal("external_context user write should be rejected")
+	}
+	// external_context=true + category=reference → accepted.
+	if _, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action":           "add_knowledge",
+		"content":          "the sky is blue per a web page",
+		"category":         "reference",
+		"external_context": true,
+	}); err != nil {
+		t.Fatalf("external_context reference write should be accepted: %v", err)
+	}
+	// external_context unset (default false) + category=user → accepted.
+	if _, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action":   "add_knowledge",
+		"content":  "I prefer Go",
+		"category": "user",
+	}); err != nil {
+		t.Fatalf("non-external user write should be accepted: %v", err)
+	}
+}
