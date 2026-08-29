@@ -1601,3 +1601,34 @@ func TestEngineTracerDefaultsNil(t *testing.T) {
 		t.Fatal("SetTracer(nil) must leave tracer nil")
 	}
 }
+
+// TestHasQuestionSentinel 验证 question 工具哨兵检测（question-reflow §2.1，
+// 评审 B2/R2 工具名检测）。
+func TestHasQuestionSentinel(t *testing.T) {
+	questionStep := types.ToolCallData{
+		Action:      types.ToolActionStep{Tool: "question", ToolCallID: "c1"},
+		Observation: `{"ok": true, "question": "proceed?", "ask_user": true}`,
+	}
+	normalStep := types.ToolCallData{
+		Action:      types.ToolActionStep{Tool: "read_file", ToolCallID: "c2"},
+		Observation: "file content",
+	}
+
+	if !hasQuestionSentinel([]types.ToolCallData{normalStep, questionStep}) {
+		t.Error("question sentinel should be detected by tool name")
+	}
+	if hasQuestionSentinel([]types.ToolCallData{normalStep}) {
+		t.Error("non-question steps should not trigger")
+	}
+	if hasQuestionSentinel(nil) {
+		t.Error("empty steps should not trigger")
+	}
+	// Tool name match regardless of observation content (truncation-robust).
+	truncatedQ := types.ToolCallData{
+		Action:      types.ToolActionStep{Tool: "question", ToolCallID: "c3"},
+		Observation: `{"ok": true, "question": "very long... \n…truncated…"`,
+	}
+	if !hasQuestionSentinel([]types.ToolCallData{truncatedQ}) {
+		t.Error("question detection must be robust to truncated observation")
+	}
+}
