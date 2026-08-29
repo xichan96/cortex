@@ -97,6 +97,18 @@ type AgentConfig struct {
 	// setting a value <0 (each fragment is sent immediately). Merging never
 	// affects end/error/tool_event delivery — those bypass the buffer.
 	ChunkMergeFlushInterval time.Duration                                                    `json:"chunkMergeFlushInterval,omitempty"` // 0=默认 50ms；<0 禁用合并；>0 用该值
+	// CompactionPrefix enables prefix-preserving compaction: trimHistoryToTokenBudget
+	// keeps a head cache anchor, replaces the middle with a tail summary, and
+	// preserves the recent tail verbatim, so prompt-cache breakpoints 1-2
+	// (system+tools) survive compaction (P3.1, prompt caching Step 4).
+	// Default off: with it off, trimHistoryToTokenBudget keeps today's behavior
+	// and the GetSummary head injection is unchanged (byte-identical).
+	CompactionPrefix bool `json:"compactionPrefix,omitempty"`
+	// CacheAnchorTokens caps the head-cache-anchor budget (tokens): the head of
+	// history, counted from index 0, is kept verbatim up to this many tokens so
+	// it participates in the cache prefix. 0 = no anchor (the head is trimmed
+	// like today, the middle is still replaced by the summary). Default 0.
+	CacheAnchorTokens int `json:"cacheAnchorTokens,omitempty"`
 }
 
 func (c *AgentConfig) EffectiveMaxCompletionTokens() int {
@@ -142,6 +154,8 @@ func NewAgentConfig() *AgentConfig {
 		ToolParallelismLimit:     0,
 		StreamBufferSize:         0,
 		ChunkMergeFlushInterval:  0,
+		CompactionPrefix:         false,
+		CacheAnchorTokens:        0,
 	}
 }
 

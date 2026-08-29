@@ -1050,20 +1050,35 @@ func (ae *AgentEngine) prepareMessages(ctx context.Context, input types.AgentInp
 		})
 	}
 
-	// 压缩摘要注入：若 memory 实现了可选 GetSummary 接口且摘要非空，插在
-	// system 之后、history 之前。评审 R3：不改 MemoryProvider 接口体，
-	// 用类型断言探测；L1 记忆在前、摘要在后（Anthropic 合并时顺序稳定）。
+	// 压缩摘要：若 memory 实现了可选 GetSummary 接口，读出摘要字符串。
+	// 注入位置取决于 CompactionPrefix：
+	//   - 关闭（默认）：维持现状 —— 作为 system 消息插在 system 之后、history
+	//     之前（R3 语义：L1 记忆在前、摘要在后）。
+	//   - 开启：不再头部注入（避免双摘要，评审 R1），摘要作为独立 assistant
+	//     消息放在 history 尾部之后、previousRequests 之前 —— 不进 system
+	//     拼接，保 prompt-cache 段1/段2（B2）；参与三段式 trim 时若被折进
+	//     mid 摘要则不再单独注入。
+	hasSummary := false
+	var summaryStr string
 	if ae.memory != nil {
 		if gs, ok := ae.memory.(interface {
 			GetSummary(context.Context) (string, error)
 		}); ok {
 			if summary, sErr := gs.GetSummary(ctx); sErr == nil && summary != "" {
-				messages = append(messages, types.Message{
-					Role:    "system",
-					Content: "Previous conversation summary:\n" + summary,
-				})
+				hasSummary = true
+				summaryStr = summary
 			}
 		}
+	}
+
+	compactionEnabled := config != nil && config.CompactionPrefix
+
+	// CompactionPrefix 关闭：头部 system 摘要注入，与现状逐字节一致。
+	if !compactionEnabled && hasSummary {
+		messages = append(messages, types.Message{
+			Role:    "system",
+			Content: "Previous conversation summary:\n" + summaryStr,
+		})
 	}
 
 	budgetCap := 0
@@ -1084,13 +1099,26 @@ func (ae *AgentEngine) prepareMessages(ctx context.Context, input types.AgentInp
 			}
 		}
 	}
-	if budgetTrim {
+
+	summaryFolded := false
+	if compactionEnabled && budgetTrim {
+		// 三段式 trim：保头（缓存锚）+ 压缩中间（SummaryGenerator）+ 保尾。
+		// existingSummary 折进摘要，避免跨多次压缩的累积摘要丢失（R3）。
+		history, summaryFolded = trimHistoryToTokenBudgetCompaction(
+			history, budgetCap, config, ae.getCompactionOptions(), summaryStr, previousRequests, input)
+	} else if budgetTrim {
 		history = trimHistoryToTokenBudget(history, budgetCap, config, previousRequests, input)
 	}
 	history = repairLLMMessageToolOrdering(history)
 
 	if len(history) > 0 {
 		messages = append(messages, history...)
+	}
+
+	// CompactionPrefix 开启：摘要（assistant）追加在 history 之后、
+	// previousRequests 之前（未折进三段式 trim 时）。
+	if compactionEnabled && hasSummary && !summaryFolded {
+		messages = append(messages, summaryMessage(summaryStr))
 	}
 
 	if len(previousRequests) > 0 {
@@ -1182,38 +1210,6 @@ func repairLLMMessageToolOrdering(history []types.Message) []types.Message {
 		k = tEnd
 	}
 	return out
-}
-
-func trimHistoryToTokenBudget(history []types.Message, maxBudgetTokens int, config *types.AgentConfig, previousRequests []types.ToolCallData, input types.AgentInput) []types.Message {
-	if len(history) == 0 {
-		return history
-	}
-	fixed := 0
-	if config != nil && config.SystemMessage != "" {
-		fixed += types.RoughTokensForMessage(types.Message{Role: "system", Content: config.SystemMessage})
-	}
-	for _, m := range types.MessagesFromToolSteps("", previousRequests) {
-		fixed += types.RoughTokensForMessage(m)
-	}
-	fixed += types.RoughTokensForMessage(input.ToMessage("user"))
-	rem := maxBudgetTokens - fixed
-	if rem <= 0 {
-		return history[len(history)-1:]
-	}
-	used := 0
-	start := len(history)
-	for i := len(history) - 1; i >= 0; i-- {
-		c := types.RoughTokensForMessage(history[i])
-		if used+c > rem {
-			break
-		}
-		used += c
-		start = i
-	}
-	if start >= len(history) {
-		return history[len(history)-1:]
-	}
-	return history[start:]
 }
 
 // executeIteration executes a single iteration

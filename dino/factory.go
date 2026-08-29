@@ -550,6 +550,8 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	agentConfig.TopP = f.config.TopP
 	agentConfig.MaxBudgetTokens = f.config.Memory.MaxBudgetTokens
 	agentConfig.CompactAfterTurns = f.config.Memory.CompactAfterTurns
+	agentConfig.CompactionPrefix = f.config.Memory.CompactionPrefix
+	agentConfig.CacheAnchorTokens = f.config.Memory.CacheAnchorTokens
 	agentConfig.PromptCaching = f.config.PromptCaching.Enabled
 	agentConfig.ToolParallelismLimit = f.config.Tools.MaxToolParallelism
 	agentConfig.StreamBufferSize = f.config.Tools.StreamBufferSize
@@ -576,6 +578,16 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	agentConfig.MemoryCompressThreshold = compressTh
 
 	agent := engine.NewAgentEngine(f.llmProvider, agentConfig)
+	// 三段式前缀保留（P3.1）：SummaryGenerator 由构造方注入确定性压缩闭包，
+	// engine 自身不 import dino/chatstore（评审 BLOCKER B1）。P3.4 换 LLM 摘要
+	// 时只需替换此闭包，engine 侧接口（func(existingSummary, mid)) 不变（R3）。
+	if agentConfig.CompactionPrefix {
+		agent.SetCompactionOptions(&engine.CompactionOptions{
+			SummaryGenerator: func(existingSummary string, mid []types.Message) string {
+				return chatstore.DeterministicCompact(existingSummary, mid, chatstore.DefaultCompactConfig())
+			},
+		})
+	}
 	if f.hooks != nil {
 		agent.SetHooks(ctx, f.hooks)
 	}

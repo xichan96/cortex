@@ -3,6 +3,7 @@ package dino
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -3608,5 +3609,78 @@ func TestRespond_Timeout(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed < 100*time.Millisecond {
 		t.Errorf("Respond returned too fast (%v); expected to block until timeout", elapsed)
+	}
+}
+
+// TestDinoFactory_CompactionPrefixWiring (P3.1 · B1) verifies the factory maps
+// Memory.CompactionPrefix/CacheAnchorTokens into the session agent config and
+// injects the deterministic SummaryGenerator closure (engine never imports
+// dino — the closure carries the chatstore dependency).
+func TestDinoFactory_CompactionPrefixWiring(t *testing.T) {
+	cfg := getTestConfig()
+	cfg.Memory.CompactionPrefix = true
+	cfg.Memory.CacheAnchorTokens = 2048
+	factory, err := NewDinoFactory(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create factory: %v", err)
+	}
+	defer factory.Shutdown(context.Background())
+
+	ctx := context.Background()
+	sess, err := factory.CreateSession(ctx, "compaction-wiring-session")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	defer sess.Close()
+
+	ag := sess.GetAgent()
+	if ag == nil {
+		t.Fatal("session agent is nil")
+	}
+	opts := ag.GetCompactionOptions()
+	if opts == nil {
+		t.Fatal("CompactionOptions not injected when CompactionPrefix=true")
+	}
+	if opts.SummaryGenerator == nil {
+		t.Fatal("SummaryGenerator must be injected (B1): engine never imports dino")
+	}
+	// The closure must produce deterministic compaction output.
+	out := opts.SummaryGenerator("", []types.Message{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "world"},
+	})
+	if out == "" {
+		t.Fatal("SummaryGenerator returned empty output")
+	}
+	if !strings.Contains(out, "scope") {
+		t.Fatalf("SummaryGenerator output should be a DeterministicCompact-style summary, got %q", out)
+	}
+}
+
+// TestDinoFactory_CompactionPrefixOff (default) verifies no options are
+// injected when CompactionPrefix is off (default): existing users see zero
+// behavior change.
+func TestDinoFactory_CompactionPrefixOff(t *testing.T) {
+	cfg := getTestConfig()
+	cfg.Memory.CompactionPrefix = false
+	factory, err := NewDinoFactory(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create factory: %v", err)
+	}
+	defer factory.Shutdown(context.Background())
+
+	ctx := context.Background()
+	sess, err := factory.CreateSession(ctx, "compaction-off-session")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	defer sess.Close()
+
+	ag := sess.GetAgent()
+	if ag == nil {
+		t.Fatal("session agent is nil")
+	}
+	if opts := ag.GetCompactionOptions(); opts != nil {
+		t.Fatalf("CompactionOptions should be nil when CompactionPrefix=false, got %+v", opts)
 	}
 }
