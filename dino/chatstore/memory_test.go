@@ -487,3 +487,70 @@ func TestHybrid_GetMessages_NoSummary(t *testing.T) {
 		t.Fatalf("无摘要时不追加，got %d messages", len(msgs))
 	}
 }
+
+// TestHybrid_SQLite_Roundtrip 验证 SQLite 底层 + Hybrid 包裹的完整压缩链路：
+// 压缩后消息行数回落、尾部保留、摘要经 GetMessages 尾部注入；SQLite.GetMessages
+// 不额外注入摘要（单一注入源）。
+func TestHybrid_SQLite_Roundtrip(t *testing.T) {
+	dir := t.TempDir()
+	cfg := DefaultConfig()
+	cfg.EnableMemoryCompress = false
+	cfg.KeepRecentCount = 2
+	cfg.MaxRecentTailTokens = 8
+	cfg.PersistDirectory = dir
+	cfg.SQLiteFile = "test_sqlite.db"
+
+	base, err := NewSQLite("rt-session", cfg)
+	if err != nil {
+		t.Fatalf("NewSQLite: %v", err)
+	}
+	llm := &mockSummaryLLM{summary: "LLM 压缩摘要"}
+	h := NewHybrid("rt-session", base, llm, cfg)
+
+	addMsgs(t, h, []Message{
+		{Role: "user", Content: strings.Repeat("x", 2000)}, // 超预算 → older
+		{Role: "assistant", Content: "a1"},
+		{Role: "user", Content: "u2"},
+		{Role: "assistant", Content: "a2"},
+		{Role: "user", Content: "u3"},
+		{Role: "assistant", Content: "a3"},
+	})
+
+	if err := h.Compress(context.Background()); err != nil {
+		t.Fatalf("Compress: %v", err)
+	}
+
+	// 摘要写入 Hybrid.summary
+	got, _ := h.GetSummary(context.Background())
+	if got != "LLM 压缩摘要" {
+		t.Fatalf("expected LLM summary, got %q", got)
+	}
+
+	// 消息行数回落：tail 保留（u2,a2,u3,a3 或更多）
+	n, err := base.StoredMessageCount(context.Background())
+	if err != nil {
+		t.Fatalf("StoredMessageCount: %v", err)
+	}
+	if n < 2 || n >= 6 {
+		t.Fatalf("压缩后应保留尾部原文（2≤n<6），got %d", n)
+	}
+
+	// GetMessages 只注入一次 [Summary]（尾部），无 system 头部摘要
+	msgs, err := h.GetMessages(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	sumCount := 0
+	for _, m := range msgs {
+		if strings.HasPrefix(m.Content, SummaryMarker) {
+			sumCount++
+		}
+	}
+	if sumCount != 1 {
+		t.Fatalf("[Summary] 应恰好出现一次，got %d", sumCount)
+	}
+	last := msgs[len(msgs)-1]
+	if last.Role != "user" || !strings.HasPrefix(last.Content, SummaryMarker) {
+		t.Fatalf("最后一项应为 [Summary] user 消息，got role=%q content=%q", last.Role, last.Content)
+	}
+}
