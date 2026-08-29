@@ -114,26 +114,40 @@ func (a *LLMSummaryAdapter) GenerateSummary(ctx context.Context, messages []Mess
 // 直接送会导致摘要调用永久降级。
 func sanitizeSummaryInput(messages []Message) []Message {
 	out := make([]Message, 0, len(messages))
-	openAssistant := false
+	pending := make(map[string]struct{})
 	for _, m := range messages {
 		role := strings.ToLower(m.Role)
 		switch {
 		case role == "tool":
-			// 仅当紧跟一个带 tool_calls 的 assistant 消息时保留，否则丢弃。
-			if !openAssistant || m.ToolCallID == "" {
+			// 仅当 tool 结果匹配一个尚未配对的 tool_use 时才保留。
+			if m.ToolCallID == "" {
 				continue
 			}
+			if _, ok := pending[m.ToolCallID]; !ok {
+				continue
+			}
+			delete(pending, m.ToolCallID)
 		case role == "assistant":
-			openAssistant = len(m.ToolCalls) > 0
-			if !openAssistant {
+			if len(m.ToolCalls) == 0 {
+				// 无 tool_calls 的 assistant：保留原文，但清掉悬空的 pending。
 				m.ToolCalls = nil
+				pending = make(map[string]struct{})
+			} else {
+				np := make(map[string]struct{}, len(m.ToolCalls))
+				for _, tc := range m.ToolCalls {
+					if tc.ID != "" {
+						np[tc.ID] = struct{}{}
+					}
+				}
+				pending = np
 			}
 		default:
-			openAssistant = false
+			// user/system 消息打断 tool 配对链。
+			pending = make(map[string]struct{})
 		}
 		out = append(out, m)
 	}
-	// 丢弃尾部未配对的 assistant(tool_use)。
+	// 丢弃尾部未配对的 assistant(tool_use)（其 tool 结果被切进 tail）。
 	for len(out) > 0 && strings.EqualFold(out[len(out)-1].Role, "assistant") && len(out[len(out)-1].ToolCalls) > 0 {
 		out = out[:len(out)-1]
 	}

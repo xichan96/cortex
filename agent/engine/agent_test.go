@@ -491,6 +491,67 @@ func TestPrepareMessages_NoSummaryWhenEmpty(t *testing.T) {
 	}
 }
 
+// tailSummaryMemory 模拟 Hybrid 尾部单注入的运行时形态：
+// GetSummary 返回空（engine 头部注入被 memoryAdapter 禁用，评审 B1），
+// GetChatHistory 末尾带 [Summary] user 消息（对应 Hybrid.GetMessages 尾部注入）。
+type tailSummaryMemory struct {
+	*providers.SimpleMemoryProvider
+}
+
+func (m *tailSummaryMemory) GetSummary(ctx context.Context) (string, error) {
+	return "", nil
+}
+
+func (m *tailSummaryMemory) GetChatHistory(ctx context.Context) ([]types.Message, error) {
+	hist, err := m.SimpleMemoryProvider.GetChatHistory(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return append(hist, types.Message{Role: "user", Content: "[Summary]\n测试摘要"}), nil
+}
+
+// TestPrepareMessages_SingleSummaryInjection 断言「单一摘要注入」（评审 R6）：
+// 摘要（[Summary] marker）在 prepareMessages 输出中恰好出现一次，且位于 history 末尾
+// （尾部 user 消息），不在 system 段。
+func TestPrepareMessages_SingleSummaryInjection(t *testing.T) {
+	provider := NewMockLLMProvider()
+	config := types.NewAgentConfig()
+	config.SystemMessage = "You are a test assistant."
+	engine := NewAgentEngine(provider, config)
+
+	base := providers.NewSimpleMemoryProvider()
+	_ = base.AddMessage(context.Background(), types.Message{Role: "user", Content: "旧对话1"})
+	_ = base.AddMessage(context.Background(), types.Message{Role: "assistant", Content: "旧回复1"})
+	mem := &tailSummaryMemory{SimpleMemoryProvider: base}
+	engine.SetMemory(context.Background(), mem)
+
+	msgs, err := engine.prepareMessages(context.Background(), types.NewAgentInput("继续"), nil)
+	if err != nil {
+		t.Fatalf("prepareMessages: %v", err)
+	}
+
+	// 恰好一次摘要 marker
+	count := 0
+	for _, m := range msgs {
+		if strings.Contains(m.Content, "[Summary]") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("摘要 marker 应恰好出现一次（单一注入），got %d", count)
+	}
+
+	// 摘要在 history 末尾（input user 之前），不是 system 段
+	last := msgs[len(msgs)-1]
+	if last.Role != "user" || last.Content != "继续" {
+		t.Fatalf("最后一条应为 input user，got %q", last.Content)
+	}
+	prev := msgs[len(msgs)-2]
+	if prev.Role != "user" || !strings.HasPrefix(prev.Content, "[Summary]") {
+		t.Fatalf("倒数第二条应为 [Summary] user 消息，got role=%q content=%q", prev.Role, prev.Content)
+	}
+}
+
 func TestAgentEngine_Stop(t *testing.T) {
 	provider := NewMockLLMProvider()
 	config := types.NewAgentConfig()

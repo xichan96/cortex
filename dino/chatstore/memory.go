@@ -47,6 +47,7 @@ type Config struct {
 	CompressionRatio        float32
 	PersistDirectory        string
 	SQLiteFile              string
+	MaxRecentTailTokens     int // 尾部 user 原文 token 预算；<=0 用 MaxRecentTailTokens 默认
 }
 
 func DefaultConfig() *Config {
@@ -292,6 +293,13 @@ func (m *Hybrid) TailSummaryEnabled() bool {
 	return m.injectSummaryTail
 }
 
+// SetSummaryForTest 测试辅助：直接写入 Hybrid.summary。
+func (m *Hybrid) SetSummaryForTest(s string) {
+	m.summaryMu.Lock()
+	defer m.summaryMu.Unlock()
+	m.summary = s
+}
+
 func (m *Hybrid) GetMessages(ctx context.Context, limit int) ([]Message, error) {
 	messages, err := m.provider.GetMessages(ctx, limit)
 	if err != nil {
@@ -333,7 +341,11 @@ func (m *Hybrid) Compress(ctx context.Context) error {
 	}
 
 	// A) 尾部原文保留：最近 KeepRecentCount 条 + 按 token 预算吸收的 user 原文。
-	tailUser, older := splitTailUserMessages(messages, m.config.KeepRecentCount, MaxRecentTailTokens)
+	tailBudget := m.config.MaxRecentTailTokens
+	if tailBudget <= 0 {
+		tailBudget = MaxRecentTailTokens
+	}
+	tailUser, older := splitTailUserMessages(messages, m.config.KeepRecentCount, tailBudget)
 
 	// B) 前次摘要前置到 older，送 LLM 生成新摘要。
 	m.summaryMu.RLock()
@@ -350,6 +362,7 @@ func (m *Hybrid) Compress(ctx context.Context) error {
 
 	// C) LLM 摘要 + 确定性 fallback（DeterministicCompact 替换 generateBasicSummary）。
 	var summary string
+	usedLLM := false
 	if m.llmProvider != nil {
 		s, sErr := m.llmProvider.GenerateSummary(ctx, older)
 		if sErr != nil {
@@ -361,6 +374,7 @@ func (m *Hybrid) Compress(ctx context.Context) error {
 			summary = DeterministicCompact(existingSummary, older, DefaultCompactConfig())
 		} else {
 			summary = strings.TrimSpace(s)
+			usedLLM = true
 		}
 	} else {
 		summary = DeterministicCompact(existingSummary, older, DefaultCompactConfig())
@@ -369,6 +383,15 @@ func (m *Hybrid) Compress(ctx context.Context) error {
 	m.summaryMu.Lock()
 	m.summary = summary
 	m.summaryMu.Unlock()
+
+	// R5：SummaryLength 观测。压缩后的摘要长度是 D6b（预算裁剪是否裁掉摘要）与
+	// 摘要质量的可观测数据点——GetStats 无生产读点，压缩日志是唯一的观察通道。
+	logger.Info("[Hybrid] Memory compressed",
+		slog.String("session_id", m.sessionID),
+		slog.Int("summary_length", len(summary)),
+		slog.Int("older_messages", len(older)),
+		slog.Int("tail_messages", len(tailUser)),
+		slog.Bool("llm_summary", usedLLM))
 
 	// D) 落盘：清空 → 回写 tailUser（尾部原文）；摘要存 m.summary（GetMessages 尾部注入）。
 	err = m.provider.Clear(ctx)
