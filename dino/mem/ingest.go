@@ -267,14 +267,10 @@ func ingestRuleMatches(rule IngestRule, transcript string, userMsgs int) bool {
 	return hasCond && ok
 }
 
+// getGlobalUserID 解析 session 的归属 user。以 metadata.user_id 为单一事实源
+// （评审 B3 修法）：有归属返回归属，无则 sessionID（per-session 语义）。
 func getGlobalUserID(ctx context.Context, db *sql.DB, sessionID string) string {
-	var userID string
-	err := db.QueryRowContext(ctx,
-		`SELECT value FROM metadata WHERE session_id = ? AND key = 'user_id'`, sessionID).Scan(&userID)
-	if err == nil && userID != "" {
-		return userID
-	}
-	return sessionID
+	return UserIDForSession(ctx, db, sessionID)
 }
 
 func isValidMemoryItem(item IngestExtractItem, f IngestContentFilter) bool {

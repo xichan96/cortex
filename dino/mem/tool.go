@@ -39,6 +39,7 @@ var memoryActions = []string{
 
 type sqliteMemoryTool struct {
 	sessionID            string
+	userID               string // user 全局合并的 uid；空 = 回退 sessionID（per-session）
 	mgr                  memkit.Manager
 	name                 string
 	writeTag             string
@@ -60,6 +61,15 @@ func newSQLiteMemoryTool(sessionID string, mgr memkit.Manager, name, writeTag, d
 		exposeSearchIndexes: exposeSearchIndexes,
 		hideInternalActions: hideInternalActions,
 	}
+}
+
+// uid 返回工具的读写锚点：userID（user 全局合并）优先，空则回退 sessionID。
+// probe 登记始终用 sessionID（usage_feedback.go），不在此替换。
+func (t *sqliteMemoryTool) uid() string {
+	if t.userID != "" {
+		return t.userID
+	}
+	return t.sessionID
 }
 
 func (t *sqliteMemoryTool) Name() string { return t.name }
@@ -212,7 +222,7 @@ func (t *sqliteMemoryTool) Execute(ctx context.Context, input map[string]interfa
 	if t.mgr == nil {
 		return nil, fmt.Errorf("memory manager unavailable")
 	}
-	uid := t.sessionID
+	uid := t.uid()
 	act := strArg(input, "action")
 	if act == "" {
 		return nil, fmt.Errorf("action is required")
@@ -347,6 +357,8 @@ func MemoryTools(opts MemoryToolOptions) []types.Tool {
 		log.Warn("memory tool disabled", "session_id", opts.SessionID, "persist_dir", opts.PersistDir, "error", "nil manager")
 		return tools
 	}
-	tools = append(tools, newSQLiteMemoryTool(opts.SessionID, mgr, name, writeTag, opts.Description, opts.ExposeSearchIndexes, opts.HideInternalActions))
+	tool := newSQLiteMemoryTool(opts.SessionID, mgr, name, writeTag, opts.Description, opts.ExposeSearchIndexes, opts.HideInternalActions).(*sqliteMemoryTool)
+	tool.userID = opts.UserID
+	tools = append(tools, tool)
 	return tools
 }
