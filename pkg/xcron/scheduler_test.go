@@ -3,6 +3,9 @@ package xcron
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,8 +16,18 @@ import (
 	"gorm.io/gorm"
 )
 
+var testDBSeq uint64
+
+// setupTestDB 为每个测试创建唯一文件名的 SQLite DB。文件 DB 才能正确启用
+// WAL + busy_timeout：job 并发执行时 wrapper 的 Get/UpdateStatus 并发读写同一
+// jobs 表，内存 cache=shared DB 的 WAL 不生效会报 "table is locked"
+// （TestScheduler_MaxConcurrent 间歇 Timeout 的根因）。文件 DB + WAL 允许并发读，
+// busy_timeout 让写等待锁。
 func setupTestDB() *gorm.DB {
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	n := atomic.AddUint64(&testDBSeq, 1)
+	dir := os.TempDir()
+	path := filepath.Join(dir, fmt.Sprintf("xcron_test_%d.db", n))
+	db, err := gorm.Open(sqlite.Open(path+"?_journal_mode=WAL&_busy_timeout=5000"), &gorm.Config{})
 	if err != nil {
 		panic(err)
 	}
@@ -534,7 +547,7 @@ func TestScheduler_MaxConcurrent(t *testing.T) {
 	select {
 	case <-done:
 		// success
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(10 * time.Second):
 		t.Fatal("Timeout waiting for concurrent jobs")
 	}
 
