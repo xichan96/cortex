@@ -444,3 +444,37 @@ LongTermMemory: MemLongTermConfig{
 3. 归属是否支持变更（建议 session 创建即固化）
 4. 迁移是否需要 `MigrateNow` 手动触发（现挂 Phase 2）
 5. `DefaultUserID` 是否含 workspace 维度（防多项目串记忆）
+
+---
+
+## 11. 实现备注（2026-08-29，按评审 B1-B4 修正实现）
+
+实现时按 `docs/design/review-user-global-merge.md` 的 4 个 BLOCKER 修正，与本文档原设计的差异如下：
+
+### 与设计 §7 Step 的对应
+
+| 设计 Step | 实现 | 偏差 |
+|---|---|---|
+| Step 1-2 uid 打通 + 检索跨 session | `user.go`（`ResolveUserID`/`UserIDForSession`）、`session.WithUserID`、`SetSessionUser`、factory 归属写入、工具 `WithUserID` | **评审 B3 修正**：工具/L1/ingest 的 uid 不再各自解析，统一以 `metadata.user_id` 为单一事实源（`UserIDForSession` / `SessionUserID`），内存解析值只用于 `SetSessionUser` 首次写入 |
+| Step 3 迁移 | `pkg/memkit/sqlite/migrate_user.go` 挂 Phase 2 | **评审 B2 修正**：preferences 迁移逐条按 `(owner,cat,key)` 冲突消解（updated_at 较新者胜），避免撞 `UNIQUE(user_id, category, key)`；knowledge 迁移后由 `DedupUserKnowledge` 收敛 |
+| Step 4 合并增强 | `DedupUserKnowledge`（`phase2.go`）+ `Add` 去重分支 `updated_at = MAX(updated_at, now)` | **评审 B1/R6/task B2/B3 修正**：`mergeDuplicateKnowledge` 不再走 `reingestUserKnowledge`→`Add` 的「只合并 tags 不删行」路径，改为真去重（保留 updated_at 最新行、tags 并入、删其余行、保留原 updated_at 不刷平） |
+
+### 关键实现决策
+
+1. **真去重取代 Add 副作用**：原设计的「迁移归拢后交给 mergeDuplicateKnowledge 用 Add 收敛」不成立（`Add` 只合并不删行）。新增 `memsqlite.DedupUserKnowledge(ctx, db, userID)` 按 `normalizeContentForDedup` 分组真收敛，`mergeDuplicateKnowledge` 遍历所有 user 调用它。设计 §2.4/§4.4 的「一个 tick 内完成归拢 + 去重」因此成立。
+2. **updated_at 保留**：`DedupUserKnowledge` 保留行取 `updated_at` 最新、tags 并集，且**不刷平**（task B3：`PruneUnused` 按 `updated_at < cutoff AND usage_count=0` 剪枝，刷平会永不剪枝）。`Add` 去重分支改用 `updated_at = MAX(updated_at, now)`——正常新写入同内容刷新新鲜度，但不超过既有值。
+3. **迁移独立于 `Phase2Merge`**（评审 B4）：`Start` 在 `Phase2Merge || UserMergeEnabled` 时启动 loop；`runPhase2Loop` tick 同样按该条件放行。`UserMergeEnabled=true && Phase2Merge=false` 时迁移仍会跑，新写 user 全局、旧数据归拢，不永久碎片化。
+4. **单用户限定**（task B4）：本次只支持 `DefaultUserID`（单用户）。`WithUserID` 透传（`Client.CreateSession` 暴露参数）为后续独立任务；「多租户必须显式 WithUserID、`"default"` 兜底仅限单用户」已写进 `MemLongTermConfig` 文档注释。
+5. **快照恢复走归属**（评审 R3）：`RestoreSessionSnapshot` 在 `UserMergeEnabled` 时给恢复的 session 传 `WithUserID(DefaultUserID)`，避免落进错误 user 桶。
+6. **`SetSessionUser` 失败记日志**（评审 R8）：不再 `_ =` 吞错；失败时工具/L1 因 `SessionUserID` 读不到归属而回退 sessionID（per-session 语义），不分裂。
+
+### 未纳入本次实现的评审建议（RECOMMENDED/OPTIONAL）
+
+- **R1**（SQL/Go 归一化不一致）：`Add` 去重的 SQL `LOWER(REPLACE(...))` 与 Go `normalizeContentForDedup` 对连续空白/首尾空白的处理不一致，写入路径对「double-space」同义内容可能产生瞬时重复。因 Phase 2 的 `DedupUserKnowledge` 用 Go 归一化收敛，终态一致；写入瞬态重复由下一 tick Phase 2 收敛。未改 `Add` SQL（避免改动既有写入路径的查重口径）。
+- **R7**（`search_indexes`/`page_index` 未迁移）：保持设计边界，indexes/page_index 不随 user 归并；`ExposeSearchIndexes=true` 时旧 session index 在 user 全局检索下不可见。已文档说明。
+- **O1**（`llmConflictMerge` 精确重复边界）：既有代码问题，未改。
+
+### 已知边界
+
+- `context` 表不迁移（session 级临时上下文）；`indexes`/`page_index` 不迁移（文档索引）。
+- 迁移只处理「knowledge + preferences 的 user_id 归拢」；`context`/`indexes`/`page_index` 的 `user_id` 保持原样。
