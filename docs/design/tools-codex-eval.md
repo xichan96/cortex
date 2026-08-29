@@ -738,7 +738,21 @@ func classifyToolError(err error) error {
 
 ## 13. 实现备注（落地时相对设计的偏离记录）
 
-> 本设计文档在落地时若与代码不符，在此记录偏离（参照 `tool-pipeline.md` §13 的惯例）。当前为空。
+> 本设计文档在落地时若与代码不符，在此记录偏离（参照 `tool-pipeline.md` §13 的惯例）。
+
+**E1+E2 落地（分支 `tools-codex-impl`，commit 14917c1/99e58f6/9407a9c，2026-08-29）**：
+
+1. **E2 discover 采用机制 A 单一路径（评审 BLOCKER B1）**：`dino/factory.go` 的 `ToolSearchTool.Execute` 闭包调用 `dinoFactory.discoverTool`（Execute 内直接 `agent.AddTools` 注入）。**未实现**机制 B（session tool_result 分支检测 `discovered`）。`DiscoverResult.discovered` 字段保留为纯提示。
+2. **并发安全（评审 BLOCKER B2）**：`sessionDeferredTools`/`sessionDiscoveredTools` 由独立的 `discoverMu` 保护（**不用 `f.mu`** —— CloseSession 持 `f.mu` 关闭 session，若 discover 也用 `f.mu` 会死锁）。discover 幂等：命中即 delete（锁内）。
+3. **上限与生命周期（评审 R1/R2）**：`config.Tools.MaxDiscoveredTools`（默认 32，>0 启用）；`CloseSession`/`CloseAll` 清理两个 map（与 `sessionMailboxes` 同位置）。
+4. **memory 工具流本次不动（评审 R4）**：`MemoryToolsForSession` 工具**不进 registry**，无法被 `GetDeferred` 覆盖；本次保持 Direct 现状，memory Deferred 留作后续。
+5. **`mcp_client` 本次未移除/未降级**：设计 §2.6 的退场留作后续（需确认动态 MCP 接入需求）。
+6. **默认白名单补 `tool_search`**：`PermFromAllowDenyAsk` 在 allowed 非空时追加 `*→deny`，若 `tool_search` 不进 `Allowed`，默认配置下 tool_search 被权限挡掉，E2 默认不可用。已把 `tool_search` 加入 `DefaultConfig().Tools.Allowed`。
+7. **MCP Deferred 用包装器而非改 Metadata**：`pkg/mcp.MCPTool.Metadata()` 返回新值（每次调用构造），直接改字段会丢失；改用 `dinoTools.NewDeferredMCPTool` 包装（转发除 Exposure 外所有方法）。`MCPDeferred` 默认 false 灰度。
+8. **web_search SSE（P1）**：`web/websearch.go` 改为收集全部 `data:` 行合并解析（原实现只读第一个可解析块）；`NewWebSearchToolWithBaseURL` 供 httptest mock。
+9. **grep 无匹配（P1/R6）**：`search/grep.go` exit 1 → 返回空串（非错误）；exit 2 等仍报错。
+
+**遗留待定点**：memory Deferred、`mcp_client` 退场、MCP 名空间前缀（E6 判据改 `ToolType=="mcp"` 后不再依赖名空间）。
 
 ## 14. 与既有设计的关系
 
