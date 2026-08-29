@@ -62,7 +62,11 @@ func (m *subagentMockLLMProvider) ChatWithTools(ctx context.Context, messages []
 func (m *subagentMockLLMProvider) ChatWithToolsStream(ctx context.Context, messages []types.Message, tools []types.Tool) (<-chan types.StreamMessage, error) {
 	m.mu.Lock()
 	m.callCount++
-	content := m.responses[0]
+	if m.responseIdx >= len(m.responses) {
+		m.responseIdx = 0
+	}
+	content := m.responses[m.responseIdx]
+	m.responseIdx++
 	m.mu.Unlock()
 
 	ch := make(chan types.StreamMessage, 1)
