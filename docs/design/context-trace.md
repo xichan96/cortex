@@ -329,3 +329,226 @@ func (o orchestrationObserver) OnEvent(ev *session.Event) {
 - **trace_id 轮转**：子代理每次 `Execute` 调用 = 一个独立 `trace_id`（`subagent.go:160` 每次新 turn），`parent_trace_id` 指向父 trace。S3 `Spawn`（`manager_subagent.go:89-120`）后台执行时同样带 `thread_id` 与 `parent_trace_id`。
 - **归属传递**：`dino/factory.go` 的 `sessionWakeSource`（`:267-321`）等旁路事件不受影响——subagent 的 trace 走引擎钩子，天然带 `ThreadID`。
 - **S3 `InteractionEdge` 等价物**：`spawn_agent`/`wait_agent` 工具的调用/结果会以 `tool_call`/`tool_result` 记录在父 trace 中，`tool_result` payload 里携带子代理 `Result`（含 `task_id`）——离线 reducer 据此配对父子（§6.3）。这是评估报告 13.2⑦ `InteractionEdge` 的轻量等价。
+
+---
+
+## 4. 落盘策略
+
+### 4.1 路径与文件名
+
+```
+<trace_dir>/trace-<session_id>.jsonl          # 主事件日志（不可变 append-only）
+<trace_dir>/.trace-<session_id>.jsonl.tmp     # 写缓冲文件（轮转时用）
+<trace_dir>/payloads/<trace_id>-<seq>.json    # 重 payload 外置（§4.4，默认关）
+```
+
+- **默认 `<trace_dir>`**：`./dino_sessions/traces`（与 `chatstore` 的 `PersistDirectory` 同根，`dino/chatstore/sqlite.go:56` 默认 `./dino_sessions`）。可用 `TRACE_DIR` 或 dino `Config.Trace.Dir` 覆盖（§9.3）。
+- **`session_id` 转义**：sessionID 可能含 `/`（如 `NewIsolatedTaskSessionID` 前缀），文件名替换 `/`→`_`。subagent 与父 session 共用同一文件（§4.2）。
+
+### 4.2 文件组织：subagent 不分文件
+
+Codex 每 rollout 一个文件；cortex 的 `session_id` 是**对话容器**（多 turn 累积），`trace_id` 是**一次执行**（turn 段）。本设计：
+
+- **每 session 一个文件**：`trace-<session_id>.jsonl`，父 turn 与所有子代理执行**追加在同一文件**。
+- 区分靠信封字段：`trace_id`（一次执行）、`thread_id`（子代理路径）、`parent_trace_id`（溯源）。`trace-replay --session <id>` 按 `session_id` 过滤，`--trace <trace_id>` 精确到单次执行。
+
+**为什么不分文件**：cortex 的 session 是进程内多 turn 结构（`dino/session/session.go:100-123`），一次 dino 运行 = 一个 session = 多个 `ExecuteStream` 调用。每个调用开新文件会造成碎片化；同文件 + 信封字段在回放时用 `trace_id` 切割，等价且更易遍历。
+
+### 4.3 写策略：异步批写 + 事件体积控制
+
+**写路径**（`dino/trace/recorder.go`）：
+
+```
+engine/hook 调用 Record() ──非阻塞投递──▶ events chan (容量 Config.QueueSize, 默认 256)
+                                            │
+                                    writer goroutine（1 个）
+                                            ▼
+                              bufio.Writer → 每 Config.FlushInterval(默认 200ms) 或
+                              len(events) ≥ Config.BatchSize(默认 512) 时 Flush
+                                            ▼
+                              os.File.Write + 周期 Sync（每 turn_end 一次 fsync）
+```
+
+**阻塞语义**：`Record()` 用 `select { case ch <- ev: default: }` **非阻塞丢弃 + 计数**——trace 是旁路，绝不能阻塞/拖慢引擎（与 `sendStreamResult` 满则丢同类，但 trace 丢失是**可接受的降级**，因为 10.1 的价值在「大多在、可回放」；§7 风险列了改进项）。`Flush()` 在 `turn_end` 时同步等待 writer drain + fsync，**保证每个已完成的 turn 可读**。
+
+**事件体积控制**（默认全开，避免 JSONL 膨胀到影响 eval 与磁盘）：
+
+| 事件 | 默认 | 开关 | 理由 |
+|---|---|---|---|
+| `llm_call` 的完整 `Messages` | **截断**：每条消息内容 `TruncateString(…, 4096)` + 工具定义只存名字 | `Config.CaptureFullMessages`（默认 false） | 工具输出可 120KB+（`WrapToolResultLimiter`，`dino/factory.go:1176`），全量进 trace 会爆炸 |
+| `tool_result` 的 `Output` | **截断**：`types.TruncateToolResult` 同参数（`agent/types/truncate.go`）+ 存 `original_bytes`/`original_tokens` 计数 | `Config.CaptureFullToolOutput`（默认 false） | 同上；`types.FormatToolResult`/`TruncateToolResult` 已有截断基建 |
+| `llm_chunk` 逐 chunk | **默认关** | `Config.CaptureChunks`（默认 false） | 逐 token 进 trace 体积最大；合并 chunk 有 50ms 缓冲（`agent_execution.go:21-30`）也不够省 |
+| `orchestration` | **全量** | — | session 事件小 |
+
+> 后续要精确回放「模型看到完整工具输出」时再开 `CaptureFullToolOutput`；本轮截断 + 计数已满足 10.2 账本与语义还原。
+
+### 4.4 「先写 payload 后写引用事件」的保证
+
+Codex `rollout-trace/src/writer.rs:97-100` 的核心是**崩溃后回放不指向缺失文件**。cortex 默认单文件 JSONL 下，事件即 payload，无「先写 payload 后写引用」问题。**外置重 payload 时**（`Config.ExternalizePayloads`，默认关）：
+
+1. **先** `os.CreateTemp(payloads/)` → 写入 payload JSON → `fsync` → `os.Rename` 到 `payloads/<trace_id>-<seq>.json`（**原子**）。
+2. **再** 写引用事件（`"payload_ref": "payloads/<trace_id>-<seq>.json"`，`TraceEvent` 加 `PayloadRef string` 可选字段）到主 JSONL。
+3. 回放遇 `payload_ref` 读不到文件 → 明确报「payload 缺失（seq=…）」而不是静默成功。
+
+崩溃窗口内最多丢失**一个未 rename 的 payload 及其引用事件**——主文件永不指向缺失文件（rename 在前）。单文件模式（默认）下，崩溃丢最后一批 `events chan` 里未 flush 的事件，已 flush 的完整可回放。
+
+### 4.5 清理 / 生命周期
+
+| 时机 | 动作 |
+|---|---|
+| `Recorder.Close()`（`dino/factory.go` `CloseSession`/`Shutdown` 调用） | drain chan → flush → fsync → close 文件 |
+| 磁盘水位（`Config.MaxBytes`，默认 512MB/session） | writer 达到后 `Close` 当前文件 → `os.Rename` 为 `<name>.1.jsonl`（原子轮转）→ 开新文件。回放按 `trace-*.jsonl` + `trace-*.1.jsonl` 按 seq 归并 |
+| 长期保留 | 暂不自动清理（Codex 保留在 `~/.codex/sessions`）。后续 eval 归并任务再决定 TTL（§8） |
+| 进程崩溃 | `events chan` 中未写事件丢失（有 `dropped_events` 计数）；已 flush 事件完整。`turn_end` 的 fsync 保证整 turn 可读 |
+
+---
+
+## 5. 零开销（Disabled）设计
+
+### 5.1 核心机制：nil 接口，而非全局开关
+
+Codex 用 `Disabled`/`Enabled` 枚举让热路径不分支（`thread.rs:76-91`）。Go 的等价物是**接口注入 + nil-guard**：
+
+```go
+// 引擎持有：AgentEngine.tracer 类型为 dino_trace.Tracer（接口），默认 nil。
+// 调用点形态（每个记录点）：
+if ae.tracer != nil {
+    ae.tracer.Record(trace.Event{Type: trace.EventLLMCall, Iteration: iteration, Payload: ...})
+}
+```
+
+**为什么不全局开关**（`if enabled` 包全局）：
+
+- 全局开关是**分支**：每个调用点 `if cfg.TraceEnabled` 仍是分支，且**无法在编译期去除**；更糟的是全局开关被测试/并发修改时产生数据竞争。
+- nil 接口的 `if ae.tracer != nil` 是**一次指针比较**（cmp $0, 地址），现代 CPU 上预测分支成本趋近零；`tracer` 字段本身是 nil 指针，**无分配、无锁**。
+- 语义清晰：不 trace 时**引擎里完全没有 recorder 对象**，dino 层也不构造/不开文件/不起 goroutine。
+
+### 5.2 构造侧：只有 dino 层开启
+
+```go
+// dino/factory.go CreateSession
+if f.config.Trace.Enabled {
+    r, err := dino_trace.NewRecorder(f.config.Trace.Dir, sessionID, cfg)
+    if err != nil { logger.Warn(...); /* trace 失败不阻断会话 */ }
+    else {
+        agent.SetTracer(ctx, sessionID, r)         // engine.tracer 非 nil
+        sess.Subscribe(dino_trace.NewOrchestrationObserver(r)) // session 编排事件
+        // recorder 生命周期绑 CloseSession（f.CloseSession / f.Shutdown）
+    }
+}
+```
+
+`NewRecorder` 失败（磁盘不可写）→ 记日志 + 继续（trace 是旁路，失败降级为 Disabled，**绝不阻断 agent 会话**）。
+
+### 5.3 零开销断言（测试）
+
+```go
+// dino/trace/recorder_test.go
+func TestDisabledTracerZeroOverhead(t *testing.T) {
+    eng := engine.NewAgentEngine(mockLLM, types.NewAgentConfig())
+    if eng.tracer != nil { t.Fatal("tracer must default to nil") }
+    // 不调用 SetTracer 跑一轮 ExecuteStream：断言无文件产生、无 goroutine 泄漏
+    // （runtime.NumGoroutine 前后对比）、无分配（testing.AllocsPerRun 或 -benchmem）
+}
+```
+
+---
+
+## 6. 离线回放：`trace-replay` 工具
+
+### 6.1 CLI 形态
+
+```
+go run ./cmd/trace-replay --dir <trace_dir> --session <session_id> [--trace <trace_id>] [--thread <thread_id>] [--format text|json] [--jsonl]
+```
+
+- **默认 `text`**：可读的对话/工具序列（§6.2）。
+- **`--format json`**：语义图（§6.3），供脚本/eval 消费。
+- **`--jsonl`**：原样吐 `TraceEvent` 行（调试用）。
+
+### 6.2 `RenderText`：还原「模型实际看到了什么」
+
+按 `trace_id`（或 session）顺序折叠事件：
+
+```
+════ Turn trace_12345 · session abc · 2 iterations · 3 tools ════
+→ USER   「修复 flaky test」
+  · model: gpt-4o · input_est=8.2k tok
+  · llm_call (iter 0) → output=256 B · usage: prompt=8100/cache=2100/write=6000/comp=280/reason=0 · 1.2s
+  └ TOOL read_file(/tests/e2e_test.go) [call_1] → 2.1s · 4.2KB (orig 9.1KB) · exit=0
+  └ TOOL bash(go test ./...) [call_2] → 12.4s · 3.1KB
+  · llm_call (iter 1) → output=1.8KB · usage: ... · 3.4s
+  → final: "Fixed: added cleanup in teardown."
+════ 总计: 4 calls · prompt=16.3k / comp=2.1k · wall=19.7s ════
+```
+
+**reducer 规则**（语义图轻量版，对应评估报告 10.1「reducer 还原成模型实际看到了什么」）：
+
+1. 每 `llm_call` 用其 `Messages`（或截断后的）还原**该轮上下文**；`llm_call_end` 补充输出/tool_calls。
+2. `tool_call` → `tool_result`/`tool_error` 按 `tool_call_id` 配对；配不上的标 `[dangling]`。
+3. `turn_end` 输出 `final` 行 + 聚合账本。
+4. `orchestration` 事件按时间戳穿插（planner/approval/question 标记）。
+5. **subagent**：`thread_id != ""` 的 `llm_call`/`tool_*` 缩进为子树；`parent_trace_id` 提供 DAG 边（§3.5）。
+
+### 6.3 `JSON` 语义图：eval 消费的结构化还原
+
+```go
+// dino/trace/replay.go
+type ReducedTurn struct {
+    TraceID    string        `json:"trace_id"`
+    SessionID  string        `json:"session_id"`
+    ThreadID   string        `json:"thread_id,omitempty"`
+    ParentTraceID string     `json:"parent_trace_id,omitempty"`
+    Input      string        `json:"input"`
+    FinalOutput string       `json:"final_output"`
+    Iterations []ReducedIteration `json:"iterations"`
+    Usage      types.Usage   `json:"usage"`
+    WallMS     int64         `json:"wall_ms"`
+    StopCause  string        `json:"stop_cause,omitempty"`
+}
+type ReducedIteration struct {
+    Index     int          `json:"index"`
+    LLMCalls  []ReducedLLMCall `json:"llm_calls"`
+    ToolCalls []ReducedToolCall `json:"tool_calls"`
+}
+type ReducedLLMCall struct {
+    Output     string        `json:"output"`
+    Reasoning  string        `json:"reasoning,omitempty"`
+    Usage      types.Usage   `json:"usage"`
+    DurationMS int64         `json:"duration_ms"`
+    Tools      []string      `json:"tools,omitempty"`
+}
+type ReducedToolCall struct {
+    ToolName string `json:"tool_name"`
+    Input    any    `json:"input"`
+    Output   any    `json:"output,omitempty"`
+    Error    string `json:"error,omitempty"`
+    DurationMS int64 `json:"duration_ms"`
+    Cached   bool   `json:"cached,omitempty"`
+}
+```
+
+**这对 eval 的直接价值**：runner（`dino/runner/engine.go`）已有 `TurnSnapshot`/`TaskResult`，但那是运行期快照；`trace-replay --format json` 给出**可跨进程重放**的结构化轨迹，10.2 的「时间花在哪 / 每次推理多少 token」从 `ReducedTurn.Usage` + `ReducedLLMCall.DurationMS` 直接聚合。
+
+---
+
+## 7. 与 chatstore 的关系（明确分工）
+
+```
+┌────────────────────────────┐   ┌──────────────────────────────┐
+│ chatstore.messages 表      │   │ trace JSONL（新增）           │
+│  = 状态层                   │   │  = 记录层                     │
+│  回答问题：下一轮模型看到啥  │   │  回答问题：这一轮实际发生啥    │
+│  写入：SaveContext/memoryAd │   │  写入：engine hooks + session │
+│        adpter（factory.go:96│   │        Observer（§3）         │
+│        -161）              │   │  读取：仅 trace-replay（离线） │
+│  读取：prepareMessages      │   │  删除：磁盘轮转/手动           │
+│        （agent_execution.go│   │  压缩删行：无（不可变）        │
+│        :1024-1031）        │   │                                │
+│  压缩删行：Compress 删旧    │   │                                │
+└────────────────────────────┘   └──────────────────────────────┘
+```
+
+- **不互相读写**：trace 不读 chatstore，chatstore 不读 trace。本设计的分工就是 Codex 的「rollout（trace）≠ state_db（索引）」映射——cortex 的 chatstore 同时扮演了 state_db 的角色（session/thread 归属、queryable 历史），trace 只是补上「不可变事件日志」这一半。
+- **后续可选**：`trace-replay` 反哺——把 `ReducedTurn` 写回 chatstore `metadata`（`sqlite.go:118-123`，key `trace_<trace_id>`）做索引；或崩溃续跑时用 trace 重建 messages（走 `ReplayMessages`）。**本轮不做**，避免破坏「trace 是纯记录」的边界。
+- **评估报告 12.1 的既有问题不影响本设计**：chatstore 双 memory 收敛（`agent/providers` deprecated）与本设计正交。
