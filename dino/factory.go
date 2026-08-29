@@ -27,6 +27,7 @@ import (
 	"github.com/xichan96/cortex/dino/permission"
 	"github.com/xichan96/cortex/dino/session"
 	dinoTools "github.com/xichan96/cortex/dino/tools"
+	dinoTrace "github.com/xichan96/cortex/dino/trace"
 )
 
 func parseShellCommand(cmd string) []string {
@@ -411,6 +412,10 @@ type dinoFactory struct {
 	discoverMu             sync.Mutex
 	sessionDeferredTools   map[string]map[string]types.Tool
 	sessionDiscoveredTools map[string][]string
+
+	// sessionTracers 每 session 一个 trace recorder（context-trace），
+	// Trace.Enabled 时构造。CloseSession 时 Close（drain + fsync）。
+	sessionTracers map[string]hooks.Tracer
 }
 
 // cloneToolTimeouts 深拷贝 ToolTimeouts map，避免 CreateSession 注入 wait_agent
@@ -579,6 +584,7 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 		sessionWakes:     make(map[string]*sessionWakeSource),
 		sessionDeferredTools:   make(map[string]map[string]types.Tool),
 		sessionDiscoveredTools: make(map[string][]string),
+		sessionTracers:         make(map[string]hooks.Tracer),
 	}
 
 	f.subagentManager = dinoAgent.NewSubagentManager(&cfg.Subagent, f)
@@ -772,6 +778,35 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	}
 	if f.hooks != nil {
 		agent.SetHooks(ctx, f.hooks)
+	}
+
+	// context-trace（S3 接线）：Trace.Enabled 时构造 session recorder + 注入引擎
+	// + 订阅 session 编排事件。recorder 生命周期绑定 CloseSession/Shutdown。
+	// NewRecorder 失败（磁盘不可写）→ 记日志 + 降级为 Disabled（不阻断会话）。
+	if f.config.Trace.Enabled {
+		traceCfg := dinoTrace.DefaultConfig()
+		traceCfg.Dir = f.config.Trace.Dir
+		if traceCfg.Dir == "" {
+			traceCfg.Dir = defaultTraceDir(f.config)
+		}
+		traceCfg.QueueSize = f.config.Trace.QueueSize
+		if f.config.Trace.FlushIntervalMs > 0 {
+			traceCfg.FlushInterval = time.Duration(f.config.Trace.FlushIntervalMs) * time.Millisecond
+		}
+		traceCfg.CaptureFullMessages = f.config.Trace.CaptureFullMessages
+		traceCfg.CaptureFullToolOutput = f.config.Trace.CaptureFullToolOutput
+		traceCfg.CaptureChunks = f.config.Trace.CaptureChunks
+
+		rec, err := dinoTrace.NewRecorder(traceCfg.Dir, sessionID, traceCfg)
+		if err != nil {
+			logger.Warn("[DinoFactory] Trace enabled but recorder failed; disabling", slog.String("error", err.Error()))
+		} else {
+			agent.SetTracer(rec)
+			f.mu.Lock()
+			f.sessionTracers[sessionID] = rec
+			f.mu.Unlock()
+			logger.Info("[DinoFactory] Trace recorder enabled", slog.String("session_id", sessionID), slog.String("dir", traceCfg.Dir))
+		}
 	}
 
 	// E1：注册与模型可见性解耦。初始工具列表只取 Direct 工具；Deferred 工具
@@ -1007,11 +1042,34 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	}
 
 	sess := session.NewSession(sessionID, agent, f, ctx, cfg, plannerHelper, f.budget, wake)
+
+	// context-trace: orchestration events (planner/approval/question/subagent)
+	// flow to the recorder via the session observer (design §3.3).
+	// CreateSession already holds f.mu (write lock), so read the map directly.
+	if rec, ok := f.sessionTracers[sessionID]; ok {
+		sess.Subscribe(session.ObserverFunc(func(ev *session.Event) {
+			if ev == nil {
+				return
+			}
+			rec.Record(hooks.TraceEvent{Type: dinoTrace.EventOrchestration, Payload: ev})
+		}))
+	}
+
 	f.sessions[sessionID] = sess
 
 	sess.Start()
 
 	return sess, nil
+}
+
+// defaultTraceDir returns the default trace output directory: the chatstore
+// persist root with a "traces" sibling (design §4.1). Falls back to
+// "./dino_sessions/traces" when memory persistence is off.
+func defaultTraceDir(cfg *Config) string {
+	if cfg != nil && cfg.Memory.PersistDirectory != "" {
+		return filepath.Join(cfg.Memory.PersistDirectory, "traces")
+	}
+	return filepath.Join(".", "dino_sessions", "traces")
 }
 
 func (f *dinoFactory) GetSession(sessionID string) *session.Session {
@@ -1050,6 +1108,11 @@ func (f *dinoFactory) CloseSession(sessionID string) {
 	delete(f.sessionDeferredTools, sessionID)
 	delete(f.sessionDiscoveredTools, sessionID)
 	f.discoverMu.Unlock()
+	// context-trace：recorder 生命周期绑 CloseSession（drain + fsync + close）。
+	if tr, exists := f.sessionTracers[sessionID]; exists {
+		_ = tr.Close()
+		delete(f.sessionTracers, sessionID)
+	}
 	// S3/B1 铺路（评审 B2 BLOCKER）：释放该 session 派生的所有子代理 cancel。
 	// S1 阶段无 spawn，此钩子是接口预留；S3 spawn_agent 落地后生效。
 	if f.subagentManager != nil {
@@ -1078,6 +1141,11 @@ func (f *dinoFactory) CloseAll() {
 	f.sessionDeferredTools = make(map[string]map[string]types.Tool)
 	f.sessionDiscoveredTools = make(map[string][]string)
 	f.discoverMu.Unlock()
+	// context-trace：全部 recorder 一并关闭。
+	for sid, tr := range f.sessionTracers {
+		_ = tr.Close()
+		delete(f.sessionTracers, sid)
+	}
 }
 
 func (f *dinoFactory) GetTools() []types.Tool {

@@ -38,6 +38,20 @@ type Config struct {
 	LongTermMemory        MemLongTermConfig      `yaml:"long_term_memory"`
 	Subagent              agent.SubagentConfig   `yaml:"subagent"`
 	MCP                   MCPConfig              `yaml:"mcp"`
+	Trace                 TraceConfig            `yaml:"trace"`
+}
+
+// TraceConfig controls the context-trace event log (docs/design/context-trace.md).
+// Enabled=false (default) means no recorder is constructed at all — the engine's
+// tracer stays nil (zero overhead).
+type TraceConfig struct {
+	Enabled              bool   `yaml:"enabled"`
+	Dir                  string `yaml:"dir,omitempty"` // default "./dino_sessions/traces"
+	QueueSize            int    `yaml:"queue_size,omitempty"`
+	FlushIntervalMs      int    `yaml:"flush_interval_ms,omitempty"`
+	CaptureFullMessages  bool   `yaml:"capture_full_messages,omitempty"`
+	CaptureFullToolOutput bool  `yaml:"capture_full_tool_output,omitempty"`
+	CaptureChunks        bool   `yaml:"capture_chunks,omitempty"`
 }
 
 type MemoryConfig struct {
@@ -287,6 +301,9 @@ func DefaultConfig() *Config {
 		MCP: MCPConfig{
 			Enabled: false,
 			Servers: make(map[string]MCPServerConfig),
+		},
+		Trace: TraceConfig{
+			Enabled: false, // context-trace default off (zero overhead)
 		},
 	}
 }
