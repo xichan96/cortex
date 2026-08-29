@@ -484,3 +484,34 @@ type CompactionOptions struct {
 3. **摘要 role**：本方案定 `assistant`（不进 system，保段 1 缓存）。若你担心模型把摘要当「新回复」，可改为 `user` + 摘要前缀——但 user 摘要会在末尾与 input 交替上更接近，且 `mergeConsecutiveRoles` 可能把它并进前一条 user；`assistant` 是更稳的选择，待验证。
 4. **是否把 langchain provider 摘要路径（§8 Step 4）纳入本轮**：P3.1 聚焦 dino；agent 直连（非 dino）用户若也用长会话 + prompt caching，需要同一套处理。
 5. **P3.4 排期**：本方案不阻塞、也不被 P3.4 阻塞。若你想先要「LLM 摘要质量」再上「前缀保留」，可等 P3.4 后再做 Step 1-2（接口已对齐）；若想先拿缓存收益，现在即可按 §8 落地。
+
+---
+
+## 12. 实现备注（P3.1 落地，branch `p3-impl-compaction`）
+
+> 按实现纪律记录：仅记录与设计/评审的偏差与落地事实，不改动上文设计与评审结论。
+
+### 12.1 BLOCKER 修正落地
+
+- **B1（依赖方向）**：按评审修复。`agent/engine/compaction.go` 新增 `CompactionOptions{ SummaryGenerator func(existingSummary string, mid []types.Message) string }`，engine **只调 `cfg.SummaryGenerator`**；`nil` 时三段式降级为「丢 mid，保 head+tail」。`dino/factory.go` 在 `CompactionPrefix=true` 时用 `SetCompactionOptions` 注入闭包 `func(existing, mid) string { return chatstore.DeterministicCompact(existing, mid, chatstore.DefaultCompactConfig()) }`。engine 确认仍不 import 任何 dino 包。
+- **B2（验收口径）**：目标统一为「段1/2 跨 compaction 存活」。集成单测 `TestCompaction_CachePrefixStableAcrossCalls` 断言**头部缓存前缀跨调用字节相等**（非段3 跨 compaction 存活）。段3 定义为「compaction 后新请求冷建立的锚定基础」（tail 原文 + 摘要 assistant 可被 `markHistoryBreakpoints` 锚定）。
+
+### 12.2 与设计的偏差
+
+1. **Step 1+2 合并为一次提交**（评审 REC-1）：`508137d`。无「双摘要」中间态。`Hybrid.GetMessages` 头部注入已移除（§4.2）；engine `prepareMessages` 关闭时保持现状头部 system 注入（字节级一致，T1 回归锁定）。
+2. **注入机制（评审 REC-4c）**：`CompactionPrefix`/`CacheAnchorTokens` 走 `types.AgentConfig`（§5.1）；`SummaryGenerator` 用 `SetCompactionOptions` setter 注入（engine 新增 `agent_config.go` 的 setter + `GetCompactionOptions` getter）。`CompactionOptions` 只含 `SummaryGenerator` 一个字段（Enabled/Anchor 从 config 读，避免双源）。
+3. **摘要位置细节**：`prepareMessages` 三段式摘要未折进时，追加**一条 assistant 消息（带 `[CONVERSATION COMPACTED ...]` 头）** 在 history 之后、previousRequests 之前。**不**进 system 拼接，段1/段2 缓存不因摘要变化失效。`GetSummary` 非空但 `budgetTrim=false` 时也走该尾部注入（同款 assistant 消息）。
+4. **`SummaryGenerator` 签名（评审 REC-3）**：`func(existingSummary string, mid []types.Message) string`，`existingSummary` = `GetSummary` 返回值，折进摘要避免累积丢失。与设计 §4.4(a) 一致。
+5. **预算实现**：摘要从 tail 预算中**预留**（`rem - headTokens - summaryTokens` 后重扫 tail），聚合 `msgSumTokens` 复检；任何溢出回退 legacy `trimHistoryTailOnly` —— 恒不超 `rem`（除 legacy 自带的「至少留一条最近消息」退化，与现状一致）。
+
+### 12.3 测试落地
+
+- `agent/engine/compaction_test.go`：T1（disabled==legacy 回归）、T2（三段式 head/summary/tail）、T3（预算不超，多组合）、T4（摘要超预算降级）、T5（锚点挤压尾部）、B1 降级（nil generator）、T7 扩展（tool 配对缺口，评审 REC-2）、T8（缓存前缀跨调用稳定）、T9/T10（prepareMessages 尾部注入 + 预算）、空 history 摘要保留。
+- `dino/dino_test.go`：`TestDinoFactory_CompactionPrefixWiring`（配置映射 + 闭包注入）、`TestDinoFactory_CompactionPrefixOff`（默认关闭零注入）。
+- 验证：`go build ./...` + `go test ./agent/engine/... ./dino/... ./agent/types/... ./agent/providers/... ./agent/llm/...` 全绿。（`pkg/xcron` 的 `TestScheduler_MaxConcurrent` 是与本任务无关的既有 timing 型 flaky，隔离运行可过。）
+
+### 12.4 遗留
+
+- I1 真实 API 集成（`//go:build integration`，需 Anthropic key）未做，留给后续。
+- langchain provider 摘要路径（§8 Step 4）未动。
+- `CacheAnchorTokens` 建议值（≤30% 预算，评审 REC-5）在 config 注释记录，未做运行时约束。
