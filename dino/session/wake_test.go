@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -123,7 +124,7 @@ func TestSession_NoWakeByDefault(t *testing.T) {
 	defer s.Close()
 
 	// 发一个用户输入，turn 应正常完成（EventTypeDone）。
-	done := make(chan struct{})
+	done := make(chan struct{}, 8)
 	id := s.Subscribe(ObserverFunc(func(ev *Event) {
 		if ev.IsDone() {
 			select {
@@ -151,7 +152,7 @@ func TestSession_WakeFiresTurn(t *testing.T) {
 	s.Start()
 	defer s.Close()
 
-	done := make(chan struct{})
+	done := make(chan struct{}, 8)
 	id := s.Subscribe(ObserverFunc(func(ev *Event) {
 		if ev.IsDone() {
 			select {
@@ -190,6 +191,74 @@ func TestSession_WakeFiresTurn(t *testing.T) {
 	}
 }
 
+// TestSession_WakeTurn_EventSource：唤醒注入 turn 的 display echo EventTypeMessage 带
+// Source=subagent；用户 turn 的 echo 带 Source=user（S4/B2，subagent-s3s4 §7.7 + 评审
+// O-3：消费方折叠幽灵消息的依据）。按内容筛选 echo 事件（stream chunk 也是 message，无 Source）。
+func TestSession_WakeTurn_EventSource(t *testing.T) {
+	prov := &streamProvider{}
+	src := newFakeWakeSource()
+	s := NewSession("wake-src", newTestEngine(prov), fakeFactory{}, context.Background(), DefaultConfig(), nil, nil, src)
+	s.Start()
+	defer s.Close()
+
+	type msgEv struct{ source EventSource }
+	msgCh := make(chan msgEv, 16)
+	id := s.Subscribe(ObserverFunc(func(ev *Event) {
+		if ev.Type == EventTypeMessage && (ev.Content == "hello" || ev.Content == subagentCompletionDisplay) {
+			msgCh <- msgEv{source: ev.Source}
+		}
+	}))
+	defer s.Unsubscribe(id)
+
+	// 用户 turn：echo "hello" 应为默认 user 源。
+	s.Input() <- "hello"
+	select {
+	case m := <-msgCh:
+		if m.source != EventSourceUser {
+			t.Errorf("expected user message source %q, got %q", EventSourceUser, m.source)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no user echo message event")
+	}
+
+	// 唤醒 turn：echo [subagent-completion] 应为 subagent 源。
+	src.fire(WakePayload{TaskID: "t1", Text: "wake payload"})
+	select {
+	case m := <-msgCh:
+		if m.source != EventSourceSubagent {
+			t.Errorf("expected subagent message source %q, got %q", EventSourceSubagent, m.source)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no subagent echo message event")
+	}
+}
+
+// TestObserveUserTurn_FoldsSubagentSource：ObserveOneUserTurn 把 Source=subagent 的
+// 消息从 AssistantText 折叠掉（评审 O-3 消费方同步）。
+func TestObserveUserTurn_FoldsSubagentSource(t *testing.T) {
+	prov := &streamProvider{}
+	src := newFakeWakeSource()
+	s := NewSession("obs-fold", newTestEngine(prov), fakeFactory{}, context.Background(), DefaultConfig(), nil, nil, src)
+	s.Start()
+	defer s.Close()
+
+	obs, ok, err := ObserveOneUserTurn(context.Background(), s, types.NewAgentInput("user turn"))
+	if err != nil {
+		t.Fatalf("ObserveOneUserTurn: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected turn observed")
+	}
+	// AssistantText 应含用户 turn 的回复，但不应含唤醒注入的幽灵文本。
+	if strings.Contains(obs.AssistantText, subagentCompletionDisplay) {
+		t.Errorf("subagent source message leaked into AssistantText: %q", obs.AssistantText)
+	}
+	// 用户 turn 的输出应被计入（streamProvider 回显 "processed: ..."）。
+	if obs.AssistantText == "" {
+		t.Error("expected assistant text from user turn")
+	}
+}
+
 // TestWakeAdapter_CollectDrainsOnce：Collect 取走全部后重复调用为空（§10.2 #20 语义）。
 func TestWakeAdapter_CollectDrainsOnce(t *testing.T) {
 	src := newFakeWakeSource()
@@ -212,13 +281,10 @@ func TestSession_UserInputPriority(t *testing.T) {
 	s.Start()
 	defer s.Close()
 
-	done := make(chan struct{})
+	done := make(chan struct{}, 8)
 	id := s.Subscribe(ObserverFunc(func(ev *Event) {
 		if ev.IsDone() {
-			select {
-			case done <- struct{}{}:
-			default:
-			}
+			done <- struct{}{}
 		}
 	}))
 	defer s.Unsubscribe(id)

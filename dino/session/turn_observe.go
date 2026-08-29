@@ -84,6 +84,10 @@ func ObserveOneUserTurn(ctx context.Context, s *Session, in types.AgentInput) (*
 
 		switch ev.Type {
 		case EventTypeMessage:
+			// S4/B2（评审 O-3）：唤醒注入 turn 的幽灵消息不累计进 AssistantText。
+			if ev.Source == EventSourceSubagent {
+				break
+			}
 			if userEchoLeft > 0 {
 				userEchoLeft--
 				break

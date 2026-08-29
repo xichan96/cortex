@@ -38,8 +38,22 @@ type Event struct {
 	Usage      *Usage         `json:"usage,omitempty"`
 	Plan       *Plan          `json:"plan,omitempty"`
 	StopCause  string         `json:"stop_cause,omitempty"`
-	Timestamp  time.Time      `json:"timestamp"`
+	// Source 事件来源（S4/B2，subagent-s3s4 §7.7）。默认 "user"（向后兼容，
+	// 缺失字段 = user）。唤醒注入 turn = "subagent"，供消费方（client.go /
+	// turn_observe.go）识别并折叠，避免"幽灵用户消息"喷到 UI 与 assistant-text。
+	Source    EventSource `json:"source,omitempty"`
+	Timestamp time.Time   `json:"timestamp"`
 }
+
+// EventSource 事件来源标记（S4/B2）。默认 user 保持现有行为。
+type EventSource string
+
+const (
+	// EventSourceUser 用户输入触发的 turn（默认）。
+	EventSourceUser EventSource = "user"
+	// EventSourceSubagent 子代理完成唤醒注入的 turn。
+	EventSourceSubagent EventSource = "subagent"
+)
 
 type Plan struct {
 	Goal      string     `json:"goal,omitempty"`

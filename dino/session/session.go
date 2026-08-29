@@ -327,9 +327,14 @@ func (s *Session) onSubagentCompletion() {
 				slog.String("task_id", p.TaskID))
 			continue
 		}
-		s.processInputWithAgentInput(types.NewAgentInput(p.Text))
+		s.executeWithInput(s.ctx, types.NewAgentInput(p.Text), subagentCompletionDisplay)
 	}
 }
+
+// subagentCompletionDisplay 唤醒 turn 的 displayContent 标记（S4/B2，subagent-s3s4 §7.7）。
+// executeWithInput 用它在 EventTypeMessage 上打 Source=subagent，消费方（client.go /
+// turn_observe.go）据此折叠，避免"幽灵用户消息"喷到 UI 与 assistant-text 统计。
+const subagentCompletionDisplay = "[subagent-completion]"
 
 func (s *Session) processQueueItem(item *dinoQueue.Item) {
 	startTime := time.Now()
@@ -398,10 +403,18 @@ func (s *Session) executeWithInput(ctx context.Context, agentInput types.AgentIn
 		}
 	}
 
-	s.emit(&Event{
+	msgEv := &Event{
 		Type:    EventTypeMessage,
 		Content: displayContent,
-	})
+		// S4/B2（subagent-s3s4 §7.7）：Source 默认 user；唤醒注入 turn 打 subagent
+		// 供消费方折叠（评审 O-3）。JSON omitempty："" 不序列化（旧消费方兼容），
+		// 显式 user 序列化为 "user"（语义一致）。
+		Source: EventSourceUser,
+	}
+	if displayContent == subagentCompletionDisplay {
+		msgEv.Source = EventSourceSubagent
+	}
+	s.emit(msgEv)
 
 	if s.factory != nil {
 		if result := s.factory.Detect(turnCtx, s.id, agentutils.LoopDetectAction{Type: "input", Content: displayContent}); result != nil {
