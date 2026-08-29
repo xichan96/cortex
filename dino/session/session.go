@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/xichan96/cortex/agent/engine"
+	"github.com/xichan96/cortex/agent/tools/builtin/runtime"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/logger"
 
@@ -177,6 +178,32 @@ func (s *Session) Input() chan<- interface{} {
 	return s.input
 }
 
+// AnswerQuestion 把用户对 question 工具的回答注入为下一条输入（question-reflow
+// §2.2）。toolCallID 与 EventTypeQuestion 事件的 ToolCallID 对应
+// （client.go onQuestion 回调）。注入走 s.input 通道，session 循环消费后作为
+// 新 turn 执行；回答的 displayContent 标记为 questionAnswerDisplay，UI 折叠显示。
+func (s *Session) AnswerQuestion(toolCallID, answer string) error {
+	if s == nil {
+		return errors.New("question: nil session")
+	}
+	if toolCallID == "" {
+		return errors.New("question: tool_call_id is required")
+	}
+	text := fmt.Sprintf("[question answer for %s] %s", toolCallID, answer)
+	select {
+	case s.input <- &questionAnswerInput{text: text}:
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	}
+	return nil
+}
+
+// questionAnswerInput 是 AnswerQuestion 注入的输入载体（内部类型，避免与普通
+// user 输入混淆）。session 循环 type-switch 识别后走 questionAnswerDisplay 标记。
+type questionAnswerInput struct {
+	text string
+}
+
 func (s *Session) Output() <-chan *Event {
 	return s.output
 }
@@ -297,6 +324,8 @@ func (s *Session) run() {
 			switch in := input.(type) {
 			case types.AgentInput:
 				s.processInputWithAgentInput(in)
+			case *questionAnswerInput:
+				s.executeWithInput(s.ctx, types.NewAgentInput(in.text), questionAnswerDisplay)
 			case string:
 				s.processInput(in)
 			default:
@@ -346,6 +375,11 @@ func (s *Session) onSubagentCompletion() {
 // executeWithInput 用它在 EventTypeMessage 上打 Source=subagent，消费方（client.go /
 // turn_observe.go）据此折叠，避免"幽灵用户消息"喷到 UI 与 assistant-text 统计。
 const subagentCompletionDisplay = "[subagent-completion]"
+
+// questionAnswerDisplay 是 AnswerQuestion 注入 turn 的 displayContent 标记
+// （question-reflow §2.2 / 评审 R3）。与 subagent-completion 同理，用它把注入的
+// 回答从「用户消息回声」中折叠，避免 UI 噪音与 ObserveOneUserTurn 的统计污染。
+const questionAnswerDisplay = "[question-answer]"
 
 func (s *Session) processQueueItem(item *dinoQueue.Item) {
 	startTime := time.Now()
@@ -422,7 +456,7 @@ func (s *Session) executeWithInput(ctx context.Context, agentInput types.AgentIn
 		// 显式 user 序列化为 "user"（语义一致）。
 		Source: EventSourceUser,
 	}
-	if displayContent == subagentCompletionDisplay {
+	if displayContent == subagentCompletionDisplay || displayContent == questionAnswerDisplay {
 		msgEv.Source = EventSourceSubagent
 	}
 	s.emit(msgEv)
@@ -656,24 +690,25 @@ func generateUUID() string {
 }
 
 // questionFromOutput 从 question 工具输出提取提问内容（P2.1）。
-// SentinelQuestionResult 可能以 struct 或 JSON 反序列化后的 map 形态出现，
-// 用反射兼容两种形态；非 question sentinel 返回空串。
+// SentinelQuestionResult 可能以命名 struct 或 JSON 反序列化后的 map 形态出现；
+// 非 question sentinel 返回空串。
+//
+// 评审 B1（question-reflow）：struct 分支必须断言命名类型
+// runtime.SentinelQuestionResult —— Go 的类型断言对「命名类型 vs 匿名 struct」
+// 要求类型同一性，匿名 struct 断言对命名类型永不命中（此前 P2.1 的
+// EventTypeQuestion 因此在真实流中从未触发）。
 func questionFromOutput(output interface{}) string {
 	if output == nil {
 		return ""
 	}
-	// struct 形态：agent/tools/builtin/runtime.SentinelQuestionResult
-	if v, ok := output.(struct {
-		Ok       bool   `json:"ok"`
-		Question string `json:"question"`
-		AskUser  bool   `json:"ask_user"`
-	}); ok {
+	// struct 形态：命名类型 runtime.SentinelQuestionResult。
+	if v, ok := output.(runtime.SentinelQuestionResult); ok {
 		if v.AskUser {
 			return v.Question
 		}
 		return ""
 	}
-	// map 形态（工具结果经 FormatToolResult 后）。
+	// map 形态（工具结果经 FormatToolResult / JSON round-trip 后）。
 	if m, ok := output.(map[string]interface{}); ok {
 		if ask, ok := m["ask_user"].(bool); ok && ask {
 			if q, ok := m["question"].(string); ok {
