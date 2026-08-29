@@ -38,11 +38,14 @@ func (s *SQLiteKnowledgeStore) Add(ctx context.Context, entry KnowledgeEntry) er
 		`SELECT id FROM knowledge WHERE user_id = ? AND LOWER(REPLACE(REPLACE(REPLACE(REPLACE(content, ' ', ' '), '\t', ' '), '\n', ' '), '\r', ' ')) = ?`,
 		entry.UserID, normalized).Scan(&existingID)
 	if err == nil && existingID != "" {
-		// 找到重复，更新 tags
+		// 找到重复，更新 tags。updated_at 取 MAX(现有, now)：正常新写入同内容
+		// 应刷新新鲜度（L1 按 updated_at DESC 选条），但不超过既有值——
+		// 避免 reingest/迁移路径把历史条目刷平（task B3：不刷平才能让
+		// PruneUnused 按 updated_at < cutoff 剪枝）。
 		existingTags := s.getTagsByIDNoError(ctx, existingID)
 		mergedTags := mergeTags(existingTags, entry.Tags)
 		_, err = s.db.ExecContext(ctx,
-			`UPDATE knowledge SET tags = ?, updated_at = ? WHERE id = ?`,
+			`UPDATE knowledge SET tags = ?, updated_at = MAX(updated_at, ?) WHERE id = ?`,
 			joinTags(mergedTags), time.Now(), existingID)
 		return err
 	}

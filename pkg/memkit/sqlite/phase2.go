@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"sort"
 	"time"
 )
 
@@ -89,4 +90,89 @@ func PruneUnused(ctx context.Context, db *sql.DB, maxUnusedDays int) error {
 		return err
 	}
 	return nil
+}
+
+// DedupUserKnowledge 对一个 user 的内容级重复条目做真收敛（评审 B1 修法）。
+//
+// 按 normalizeContentForDedup 分组的精确重复条目：
+//   - 保留 updated_at 最新的一行（评审 R6 / task B2：保留行取最新、tags 并集）；
+//   - 其余行的 tags 并入保留行（评审 B1：行数真正收敛为 1，不再依赖 Add 的副作用）；
+//   - 保留行原 updated_at / usage_count / last_usage 不动（task B3：不刷平，
+//     PruneUnused 仍能按 updated_at < cutoff 剪枝）；
+//   - 删除其余重复行。
+//
+// 返回删除的行数。须在 Phase 2 全局锁内调用（Phase2Merge 迁移后收敛用）。
+func DedupUserKnowledge(ctx context.Context, db *sql.DB, userID string) (int, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT id, content, tags, updated_at FROM knowledge WHERE user_id = ?`,
+		userID)
+	if err != nil {
+		return 0, err
+	}
+	type krow struct {
+		id, content, tags string
+		updatedAt         sql.NullTime
+	}
+	var items []krow
+	for rows.Next() {
+		var r krow
+		if err := rows.Scan(&r.id, &r.content, &r.tags, &r.updatedAt); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		items = append(items, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	// 按 normalized content 分组（与 Add 的去重口径一致：同 user 同内容合并，
+	// 不比较 category）。
+	groups := make(map[string][]krow)
+	for _, it := range items {
+		key := normalizeContentForDedup(it.content)
+		groups[key] = append(groups[key], it)
+	}
+
+	deleted := 0
+	for _, group := range groups {
+		if len(group) <= 1 {
+			continue
+		}
+		// 保留 updated_at 最新；同时间戳保最小 id（稳定，避免抖动）。
+		sort.SliceStable(group, func(i, j int) bool {
+			ti, tj := group[i].updatedAt, group[j].updatedAt
+			switch {
+			case ti.Valid && tj.Valid && !ti.Time.Equal(tj.Time):
+				return ti.Time.After(tj.Time)
+			case ti.Valid && !tj.Valid:
+				return true
+			case !ti.Valid && tj.Valid:
+				return false
+			}
+			return group[i].id < group[j].id
+		})
+		keep := group[0]
+		drops := group[1:]
+
+		var allTags []string
+		for _, d := range drops {
+			allTags = append(allTags, parseTagsFromDB(d.tags)...)
+		}
+		merged := mergeTags(parseTagsFromDB(keep.tags), allTags)
+		if joinTags(merged) != joinTags(parseTagsFromDB(keep.tags)) {
+			if _, err := db.ExecContext(ctx,
+				`UPDATE knowledge SET tags = ? WHERE id = ?`, joinTags(merged), keep.id); err != nil {
+				return deleted, err
+			}
+		}
+		for _, d := range drops {
+			if _, err := db.ExecContext(ctx, `DELETE FROM knowledge WHERE id = ?`, d.id); err != nil {
+				return deleted, err
+			}
+			deleted++
+		}
+	}
+	return deleted, nil
 }
