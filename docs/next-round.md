@@ -136,9 +136,10 @@
 
 ---
 
-## Question 回答回流 `AnswerQuestion`（工具管线 F7 · 专项）—— ⏳ 待办
+## Question 回答回流 `AnswerQuestion`（工具管线 F7 · 专项）—— ✅ 已完成（2026-08-29，分支 question-reflow）
 
-> 状态：**2026-08-29 评估为下一专项**（与 F7 合并，跨 engine+dino 两层，需先写设计再实现，参照 context-trace 流程）。设计出处：`tool-pipeline.md` §7（F7 方案 A）+ `tools-codex-eval.md` §8.9 question 行。
+> 状态：**已完成（2026-08-29）**。设计 `docs/design/question-reflow.md` + 评审 `review-question-reflow.md`，分支 `question-reflow` 合并进 dev。
+> **评审发现既有 BUG**：P2.1 的 `questionFromOutput` 用匿名 struct 断言，对命名类型 `SentinelQuestionResult` 永不命中 → `EventTypeQuestion` 真实流从未触发。已修（改断言命名类型）。
 
 - **现状**（P2.1 已落地部分）：
   - `QuestionTool.Execute` 返回 `SentinelQuestionResult{ok:true, ask_user:true}`（`runtime/question.go:57-71`）——非 fatal，作为 tool_result 喂回模型。
