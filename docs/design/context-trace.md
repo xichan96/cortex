@@ -342,7 +342,7 @@ func (o orchestrationObserver) OnEvent(ev *session.Event) {
 <trace_dir>/payloads/<trace_id>-<seq>.json    # 重 payload 外置（§4.4，默认关）
 ```
 
-- **默认 `<trace_dir>`**：`./dino_sessions/traces`（与 `chatstore` 的 `PersistDirectory` 同根，`dino/chatstore/sqlite.go:56` 默认 `./dino_sessions`）。可用 `TRACE_DIR` 或 dino `Config.Trace.Dir` 覆盖（§9.3）。
+- **默认 `<trace_dir>`**：`./dino_sessions/traces`（与 `chatstore` 的 `PersistDirectory` 同根，`dino/chatstore/sqlite.go:56` 默认 `./dino_sessions`）。可用 `TRACE_DIR` 或 dino `Config.Trace.Dir` 覆盖（§11 文件清单 / §13 待定点 1）。
 - **`session_id` 转义**：sessionID 可能含 `/`（如 `NewIsolatedTaskSessionID` 前缀），文件名替换 `/`→`_`。subagent 与父 session 共用同一文件（§4.2）。
 
 ### 4.2 文件组织：subagent 不分文件
@@ -640,7 +640,7 @@ type TurnProfile struct {
 | `agent/hooks/hooks.go` | 修改 | 新增 `Tracer` 接口（或新建 `agent/hooks/trace.go`） |
 | `agent/engine/agent.go` | 修改 | `AgentEngine.tracer` 字段 + `SetTracer` |
 | `agent/engine/agent_execution.go` | 修改 | §3.2③ 调用点（`turn_start/turn_end/llm_call/llm_call_end/tool_*/compaction/memory_save/error`） |
-| `agent/engine/agent_config.go` | 修改 | `AgentConfig.TraceEnabled bool`（或放 dino config，§9.3） |
+| `agent/engine/agent_config.go` | 修改 | `AgentConfig.TraceEnabled bool`（或放 dino config，§13 待定点 1） |
 | `dino/factory.go` | 修改 | `CreateSession` 接线 + `CloseSession`/`Shutdown` 关闭 recorder |
 | `dino/config.go` | 修改 | `Config.Trace.TraceConfig`（`Enabled/Dir/QueueSize/FlushInterval/Capture*`） |
 | `dino/types.go` | 修改 | （可选）export `Trace` 相关类型 |
