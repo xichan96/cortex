@@ -96,9 +96,13 @@ func (t *CommandTool) Execute(ctx context.Context, input map[string]interface{})
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// Memory hard cap on captured output (P2, tools-codex-eval §8.3): an
+	// unbounded command could bloat process memory. The engine's F1 truncation
+	// already caps what feeds the model; this caps what's buffered in RAM.
 	sh := shell.NewShell(&shell.Options{
-		WorkingDir: wd,
-		Env:        shell.EnvironNonInteractive(),
+		WorkingDir:     wd,
+		Env:            shell.EnvironNonInteractive(),
+		MaxOutputBytes: 4 << 20, // 4MB per stream
 	})
 	stdout, stderr, err := sh.Exec(execCtx, command)
 
