@@ -50,14 +50,23 @@ type McpSearchResponse struct {
 }
 
 type WebSearchTool struct {
-	client *http.Client
+	client  *http.Client
+	baseURL string // 可注入（测试用 httptest mock SSE）；空 = apiBaseURL
 }
 
 func NewWebSearchTool() types.Tool {
 	return &WebSearchTool{
-		client: &http.Client{
-			Timeout: 25 * time.Second,
-		},
+		client:  &http.Client{Timeout: 25 * time.Second},
+		baseURL: apiBaseURL,
+	}
+}
+
+// NewWebSearchToolWithBaseURL returns a web_search tool that talks to the given
+// base URL (used by tests to mock the SSE stream).
+func NewWebSearchToolWithBaseURL(baseURL string) types.Tool {
+	return &WebSearchTool{
+		client:  &http.Client{Timeout: 25 * time.Second},
+		baseURL: baseURL,
 	}
 }
 
@@ -158,7 +167,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, input map[string]interface{
 		return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", apiBaseURL+apiEndpoint, bytes.NewBuffer(requestBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", t.baseURL+apiEndpoint, bytes.NewBuffer(requestBody))
 	if err != nil {
 		return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(err)
 	}
@@ -176,23 +185,32 @@ func (t *WebSearchTool) Execute(ctx context.Context, input map[string]interface{
 		return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(fmt.Errorf("search error (%d)", resp.StatusCode))
 	}
 
-	// Similar to the TS implementation, we'd need to handle SSE response here.
-	// For simplicity, we'll assume a single JSON response for now.
-	// In a real implementation, you would need a proper SSE parser.
+	// SSE 完整解析：exa MCP 的搜索结果可能横跨多条 `data:` 块（评估报告 11.1
+	// 点名的脆弱点 —— 旧实现只读第一个可解析的 data 行就 return，丢后续结果）。
+	// 这里收集全部 data: 块，逐块尝试解析为 McpSearchResponse，并把所有
+	// content[].text 拼接起来（每条 data 可能是完整结果，也可能是片段）。
+	//
+	// 兼容性：只认 `data: ` 前缀行（非标准 SSE / 其他前缀行忽略），无 content
+	// 的结果视为「无匹配」，返回空结果而非错误。
+	var outputParts []string
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.HasPrefix(line, "data: ") {
-			data := line[6:]
-			var mcpResponse McpSearchResponse
-			if err := json.Unmarshal([]byte(data), &mcpResponse); err == nil {
-				if len(mcpResponse.Result.Content) > 0 {
-					return map[string]interface{}{
-						"output":   mcpResponse.Result.Content[0].Text,
-						"title":    fmt.Sprintf("Web search: %s", query),
-						"metadata": map[string]interface{}{},
-					}, nil
-				}
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := line[6:]
+		if data == "" {
+			continue
+		}
+		var mcpResponse McpSearchResponse
+		if err := json.Unmarshal([]byte(data), &mcpResponse); err != nil {
+			// 单块解析失败：继续扫其余块，避免一个坏块丢掉整批结果。
+			continue
+		}
+		for _, c := range mcpResponse.Result.Content {
+			if strings.TrimSpace(c.Text) != "" {
+				outputParts = append(outputParts, c.Text)
 			}
 		}
 	}
@@ -201,10 +219,18 @@ func (t *WebSearchTool) Execute(ctx context.Context, input map[string]interface{
 		return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(err)
 	}
 
+	if len(outputParts) == 0 {
+		return map[string]interface{}{
+			"output":   "No search results found. Please try a different query.",
+			"title":    fmt.Sprintf("Web search: %s", query),
+			"metadata": map[string]interface{}{},
+		}, nil
+	}
+
 	return map[string]interface{}{
-		"output":   "No search results found. Please try a different query.",
+		"output":   strings.Join(outputParts, "\n\n"),
 		"title":    fmt.Sprintf("Web search: %s", query),
-		"metadata": map[string]interface{}{},
+		"metadata": map[string]interface{}{"result_count": len(outputParts)},
 	}, nil
 }
 
