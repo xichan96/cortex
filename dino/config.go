@@ -317,6 +317,16 @@ func init() {
 	})
 }
 
+// builtinProviders 是框架内置、已知需要显式 model 的 provider。
+// 自定义/通过 RegisterLLMProvider 注册的 provider 自行决定是否需要 model，
+// 校验不强制（代理/网关可能用 header/baseURL 路由，不依赖 DefaultModel）。
+var builtinProviders = map[string]struct{}{
+	"openai":    {},
+	"anthropic": {},
+	"deepseek":  {},
+	"volce":     {},
+}
+
 // ValidateConfig 在构造 DinoFactory 前做配置校验，让配置错误尽早、清晰暴露
 // （而不是等到 createLLMProvider 时才报笼统的 provider not found）。
 func ValidateConfig(cfg *Config) error {
@@ -337,9 +347,9 @@ func ValidateConfig(cfg *Config) error {
 			cfg.Provider.Type, strings.Join(GetRegisteredProviders(), ", "))
 	}
 
-	// DefaultModel 必须设置——各 provider client 虽有权重默认，但自定义
-	// provider（代理/网关）通常需要显式模型，空值易造成"以为配了实际走默认"。
-	if cfg.DefaultModel == "" {
+	// 内置 provider 的 client 直接消费 cfg.DefaultModel，空值会静默走 client
+	// 默认模型，容易"以为配了实际走默认"——这里强制显式设置。
+	if _, builtin := builtinProviders[cfg.Provider.Type]; builtin && cfg.DefaultModel == "" {
 		return fmt.Errorf("config validation: default model is empty (set dino.Config.DefaultModel)")
 	}
 
