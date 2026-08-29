@@ -531,10 +531,34 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	if len(f.cortexSkills) > 0 {
 		systemPrompt += agentskills.BuildSystemPromptInjectionWithTriggers(f.cortexSkills)
 	}
+	// 长期记忆 user 全局合并（P3.2）：
+	//   - UserMergeEnabled=true 时，把 session 归属到 user（WithUserID > DefaultUserID
+	//     > "default"），写 metadata 'user_id'（INSERT OR IGNORE 固化）；失败仅记日志，
+	//     不影响会话（评审 R8：不吞错，记日志便于排查双源漂移）。
+	//   - 工具/L1 的 uid 一律读 metadata.user_id（SessionUserID / UserIDForSession
+	//     单一事实源，评审 B3 修法），未开启或读不到时回退 sessionID（per-session
+	//     语义不变）。
+	userID := ""
+	if f.longTermMem != nil && f.config.LongTermMemory.UserMergeEnabled {
+		resolved := dinoMem.ResolveUserID(cfg.UserID, f.config.LongTermMemory.DefaultUserID)
+		if err := f.longTermMem.SetSessionUser(ctx, sessionID, resolved); err != nil {
+			logger.Warn("[DinoFactory] set session user",
+				slog.String("session_id", sessionID),
+				slog.String("user_id", resolved),
+				slog.String("error", err.Error()))
+		}
+		userID = f.longTermMem.SessionUserID(ctx, sessionID)
+	}
+
 	// 长期记忆 L1 分层披露：session 级快照，CreateSession 时计算一次，
-	// 不随 turn 刷新（评审 R7）。uid = sessionID（per-session 语义，评审 B1）。
+	// 不随 turn 刷新（评审 R7）。uid = userID（user 全局合并）或 sessionID
+	// （per-session，UserMergeEnabled=false 时 userID 为空）。
 	if f.longTermMem != nil {
-		if l1 := f.longTermMem.BuildLayeredPrompt(ctx, sessionID); l1 != "" {
+		l1UID := userID
+		if l1UID == "" {
+			l1UID = sessionID
+		}
+		if l1 := f.longTermMem.BuildLayeredPrompt(ctx, l1UID); l1 != "" {
 			systemPrompt += "\n\n" + l1
 		}
 	}
@@ -595,9 +619,11 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	sessionTools := f.tools.GetAll()
 
 	// 长期记忆工具：与 f.longTermMem.Manager() 复用同一进程内单例，不会开第二个连接。
+	// uid = userID（user 全局合并，metadata 单一事实源）或回退 sessionID。
 	if f.longTermMem != nil {
 		ltmTools := f.longTermMem.MemoryToolsForSession(sessionID,
-			dinoMem.WithToolNameOverride("memory"))
+			dinoMem.WithToolNameOverride("memory"),
+			dinoMem.WithUserID(userID))
 		sessionTools = append(sessionTools, ltmTools...)
 		logger.Info("[DinoFactory] Added long-term memory tools", slog.Int("count", len(ltmTools)))
 	}
@@ -834,7 +860,14 @@ func (f *dinoFactory) RestoreSessionSnapshot(ctx context.Context, sessionID stri
 	f.mu.RUnlock()
 	if s == nil {
 		var cerr error
-		s, cerr = f.CreateSession(ctx, sessionID)
+		// 快照恢复同样走归属写入（评审 R3）：UserMergeEnabled 时把恢复的 session
+		// 归到 DefaultUserID/"default"，避免落进错误的 user 桶。
+		var opts []session.Option
+		if f.longTermMem != nil && f.config.LongTermMemory.UserMergeEnabled {
+			resolved := dinoMem.ResolveUserID("", f.config.LongTermMemory.DefaultUserID)
+			opts = append(opts, session.WithUserID(resolved))
+		}
+		s, cerr = f.CreateSession(ctx, sessionID, opts...)
 		if cerr != nil {
 			return cerr
 		}

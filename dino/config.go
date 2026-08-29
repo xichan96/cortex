@@ -253,6 +253,8 @@ func DefaultConfig() *Config {
 			Phase2LLMMerge:      false,
 			MaxUnusedDays:       30,
 			UseSameLLMForIngest: true,
+			UserMergeEnabled:    false,
+			DefaultUserID:       "",
 		},
 		Subagent: agent.SubagentConfig{
 			Enabled:            true,

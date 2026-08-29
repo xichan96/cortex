@@ -107,7 +107,7 @@ func (l *LongTermMem) Start() context.CancelFunc {
 			},
 		})
 	}()
-	if l.cfg.Phase2Merge {
+	if l.cfg.Phase2Merge || l.cfg.UserMergeEnabled {
 		l.wg.Add(1)
 		go func() {
 			defer l.wg.Done()
@@ -178,6 +178,42 @@ func WithOmitTimeTool(v bool) MemoryToolOption {
 // WithToolNameOverride 覆盖默认工具名。
 func WithToolNameOverride(name string) MemoryToolOption {
 	return func(o *MemoryToolOptions) { o.ToolName = name }
+}
+
+// WithUserID 指定记忆工具的 uid（user 全局合并）。空 = 工具回退 sessionID
+// （per-session 语义）。工具构造时由 factory 从 metadata 解析后传入（评审 B3：
+// 与 ingest 同源，避免双源漂移）。
+func WithUserID(userID string) MemoryToolOption {
+	return func(o *MemoryToolOptions) { o.UserID = userID }
+}
+
+// SetSessionUser 把一个 session 归属到 userID，写 metadata 表的 `user_id` 键。
+// INSERT OR IGNORE：已有归属的 session 不覆盖（归属在创建时固化，不动态变更）。
+func (l *LongTermMem) SetSessionUser(ctx context.Context, sessionID, userID string) error {
+	if l == nil || l.mgr == nil {
+		return nil
+	}
+	db, err := mgrDB(ctx, l.mgr)
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO metadata (session_id, key, value) VALUES (?, 'user_id', ?)`,
+		sessionID, userID)
+	return err
+}
+
+// SessionUserID 读回一个 session 的归属 user（metadata.user_id 单一事实源）。
+// 无归属（未写入/写失败）返回 sessionID（per-session 语义）。
+func (l *LongTermMem) SessionUserID(ctx context.Context, sessionID string) string {
+	if l == nil || l.mgr == nil {
+		return sessionID
+	}
+	db, err := mgrDB(ctx, l.mgr)
+	if err != nil {
+		return sessionID
+	}
+	return UserIDForSession(ctx, db, sessionID)
 }
 
 // BuildLayeredPrompt 构造分层披露的 L1 摘要块（总是加载）。
@@ -319,7 +355,10 @@ func runPhase2Loop(ctx context.Context, log *slog.Logger, mgr memkit.Manager, ne
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if !cfg.Phase2Merge {
+			// 评审 B4：迁移依赖全局锁，但不应被 Phase2Merge 开关错误耦合。
+			// UserMergeEnabled=true 而 Phase2Merge=false 时，本 loop 仍需跑
+			// 迁移钩子（runPhase2Merge 内按开关各自独立）。
+			if !cfg.Phase2Merge && !cfg.UserMergeEnabled {
 				continue
 			}
 			if err := runPhase2Merge(ctx, log, mgr, newLLM, cfg); err != nil {
@@ -349,13 +388,25 @@ func runPhase2Merge(ctx context.Context, log *slog.Logger, mgr memkit.Manager, n
 		_ = memsqlite.ReleasePhase2(ctx, db, holder)
 	}()
 
+	// 评审 B4 / 设计 §4.4：UserMergeEnabled 时先把旧 per-session 数据归拢到
+	// 归属 user，再剪枝/去重，一个 tick 内完成「归拢 + 收敛」。迁移失败只记
+	// 日志继续——剪枝/合并下一 tick 重试，不因迁移问题阻断合并。
+	if cfg.UserMergeEnabled {
+		n, err := memsqlite.MigrateLegacySessionKnowledge(ctx, db)
+		if err != nil {
+			log.Warn("memory_phase2: migrate legacy session knowledge", "error", err)
+		} else if n > 0 {
+			log.Info("memory_phase2: migrated legacy session knowledge", "count", n)
+		}
+	}
+
 	if cfg.MaxUnusedDays > 0 {
 		if err := memsqlite.PruneUnused(ctx, db, cfg.MaxUnusedDays); err != nil {
 			return err
 		}
 	}
 
-	if err := mergeDuplicateKnowledge(ctx, db, mgr); err != nil {
+	if err := mergeDuplicateKnowledge(ctx, db); err != nil {
 		return err
 	}
 
@@ -493,66 +544,20 @@ func mgrKnowledgeDB(ctx context.Context, mgr memkit.Manager) *sql.DB {
 	return nil
 }
 
-// mergeDuplicateKnowledge 对每 user 的内容级重复条目做标签合并。
-// 依赖 memkit 的 Add 内容级去重：重写已存在的重复条目时合并 tags。
-func mergeDuplicateKnowledge(ctx context.Context, db *sql.DB, mgr memkit.Manager) error {
-	rows, err := db.QueryContext(ctx,
-		`SELECT DISTINCT user_id FROM knowledge ORDER BY user_id`)
+// mergeDuplicateKnowledge 对每 user 的内容级重复条目做真收敛（评审 B1 修法）。
+// 不再依赖 Add 的「只合并 tags、不删重复行」副作用——直接走
+// memsqlite.DedupUserKnowledge：保留 updated_at 最新行、tags 并入、删除其余。
+// 保留行原 updated_at 不动（task B3：不刷平，PruneUnused 仍可剪枝）。
+func mergeDuplicateKnowledge(ctx context.Context, db *sql.DB) error {
+	users, err := listKnowledgeUsers(ctx, db)
 	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	var users []string
-	for rows.Next() {
-		var u string
-		if err := rows.Scan(&u); err != nil {
-			continue
-		}
-		users = append(users, u)
-	}
-	if err := rows.Err(); err != nil {
 		return err
 	}
 	for _, u := range users {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if err := reingestUserKnowledge(ctx, db, mgr, u); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// reingestUserKnowledge 把一个 user 的全部知识条目重写一遍，利用 memkit 的
-// Add 内容级去重（相同 normalized content 只合并 tags，不覆盖 content）来收敛重复。
-func reingestUserKnowledge(ctx context.Context, db *sql.DB, mgr memkit.Manager, uid string) error {
-	rows, err := db.QueryContext(ctx,
-		`SELECT id, category, content, tags FROM knowledge WHERE user_id = ? ORDER BY updated_at DESC`,
-		uid)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	type row struct {
-		id, cat, content string
-		tags             []string
-	}
-	var items []row
-	for rows.Next() {
-		var r row
-		var tagsStr string
-		if err := rows.Scan(&r.id, &r.cat, &r.content, &tagsStr); err != nil {
-			continue
-		}
-		r.tags = parseTagsFromDB(tagsStr)
-		items = append(items, r)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for _, it := range items {
-		if err := mgr.AddKnowledgeWithCategory(ctx, uid, it.content, it.cat, it.tags...); err != nil {
+		if _, err := memsqlite.DedupUserKnowledge(ctx, db, u); err != nil {
 			return err
 		}
 	}

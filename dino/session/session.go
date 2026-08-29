@@ -31,6 +31,9 @@ type Config struct {
 	PlannerEnabled     bool
 	PlannerPrompt      string
 	PlannerAutoApprove bool
+	// UserID 显式归属的 user；空 = 未显式指定（回退配置 DefaultUserID，再回退 "default"）。
+	// P3.2 user 全局合并：归属在 session 创建时固化（INSERT OR IGNORE），不动态变更。
+	UserID string
 }
 
 func DefaultConfig() *Config {
@@ -73,6 +76,14 @@ func WithPlannerEnabled(enabled bool, prompt string, autoApprove bool) Option {
 		c.PlannerEnabled = enabled
 		c.PlannerPrompt = prompt
 		c.PlannerAutoApprove = autoApprove
+	}
+}
+
+// WithUserID 显式归属一个 session 到 userID（多租户隔离用）。
+// 未传时由 factory 回退配置 DefaultUserID / 常量 "default"。
+func WithUserID(userID string) Option {
+	return func(c *Config) {
+		c.UserID = userID
 	}
 }
 

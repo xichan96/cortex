@@ -55,6 +55,18 @@ type MemLongTermConfig struct {
 	Phase2LLMMerge      bool          `yaml:"phase2_llm_merge"`               // LLM 冲突消解，默认 false
 	MaxUnusedDays       int           `yaml:"max_unused_days"`                // 保留/遗忘，默认 30
 	UseSameLLMForIngest bool          `yaml:"use_same_llm_for_ingest"`        // 默认 true
+
+	// UserMergeEnabled 默认 false。开启 user 全局合并：未显式归属（WithUserID）
+	// 的 session 归 DefaultUserID（空则 "default"），Phase 2 迁移旧 per-session 数据
+	// 到归属 user 并跨 session 去重收敛。默认关 = 行为与 per-session 现状一致。
+	//
+	// 单用户部署设 DefaultUserID 一个固定 uid，所有 session 共享记忆空间。
+	// 多租户必须显式 WithUserID 隔离，"default" 兜底仅限单用户——同一进程内
+	// 多个 user 共用 "default" 会串记忆。WithUserID 透传是后续独立任务。
+	UserMergeEnabled bool `yaml:"user_merge_enabled"`
+	// DefaultUserID 默认 ""：未显式 WithUserID 的 session 归属到该值；为空回退
+	// 常量 "default"。仅 UserMergeEnabled=true 时生效。
+	DefaultUserID string `yaml:"default_user_id"`
 }
 
 type MemoryToolOptions struct {
@@ -71,4 +83,7 @@ type MemoryToolOptions struct {
 	// HideInternalActions 隐藏内部 action（当前仅 build_system_prompt 已从 enum 移除，
 	// 保留该字段以便将来内部 action 扩展）。默认 false。
 	HideInternalActions bool
+	// UserID 工具的 uid（user 全局合并）。空 = 回退 sessionID（per-session 语义）。
+	// 工具构造时从 metadata 读一次缓存到这里（评审 B3：与 ingest 同源）。
+	UserID string
 }
