@@ -3,7 +3,7 @@
 > 整理日期：2026-08-28
 > 来源：4 个 P0 实现分支（prompt caching / 工具管线 / 长期记忆 / 子代理）完成并合并到 dev 后，各设计文档「实现备注」章的遗留待定点。
 > 参考：评估报告 [`docs/optimization-review-vs-codex.md`](optimization-review-vs-codex.md) 的落地优先级表。
-> 状态：**大部分已完成（2026-08-29）**。已完成：P1.1 / P1.2 / P2.2 / P3.1 / P3.2 / P3.3 / P3.4 / P3.5 / P4.1 / P4.2。剩余见下方「待办」标记。
+> 状态：**几乎全部完成（2026-08-29）**。已完成：P1.1 / P1.2 / P2.2 / P3.1 / P3.2 / P3.3 / P3.4 / P3.5 / P4.1 / P4.2 + context-trace 专项 S1-S5 + tools-codex-eval 的 E6/E7。剩余见下方「待办」标记。
 > 参考：评估报告 [`docs/optimization-review-vs-codex.md`](optimization-review-vs-codex.md) 的落地优先级表。
 
 ---
