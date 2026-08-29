@@ -2678,9 +2678,10 @@ func TestQueue_EnqueueBatch(t *testing.T) {
 
 func TestQueue_EnqueueFull(t *testing.T) {
 	cfg := &queue.Config{
-		MaxSize:    2,
-		MaxPending: 10,
-		Timeout:    5 * time.Minute,
+		MaxSize:          2,
+		MaxPending:       10,
+		Timeout:          5 * time.Minute,
+		DisableProcessor: true, // 禁用 run() 消费协程，稳定验证 MaxSize 满语义（避免 flaky）
 	}
 
 	q := queue.New(cfg)
