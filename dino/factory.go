@@ -509,6 +509,11 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 		cfg = DefaultConfig()
 	}
 
+	// 配置早校验：provider 类型/model 在构造前暴露清晰错误。
+	if err := ValidateConfig(cfg); err != nil {
+		return nil, err
+	}
+
 	llmProvider, err := createLLMProvider(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create LLM provider: %w", err)

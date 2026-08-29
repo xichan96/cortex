@@ -1,6 +1,8 @@
 package dino
 
 import (
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -313,6 +315,35 @@ func init() {
 			Model:   cfg.DefaultModel,
 		})
 	})
+}
+
+// ValidateConfig 在构造 DinoFactory 前做配置校验，让配置错误尽早、清晰暴露
+// （而不是等到 createLLMProvider 时才报笼统的 provider not found）。
+func ValidateConfig(cfg *Config) error {
+	if cfg == nil {
+		return nil
+	}
+
+	// Provider.Type 必须设置且已注册（列出支持列表帮助排错）。
+	if cfg.Provider.Type == "" {
+		return fmt.Errorf("config validation: llm provider type is empty (set dino.Config.Provider.Type; supported: %s)",
+			strings.Join(GetRegisteredProviders(), ", "))
+	}
+	registryMu.RLock()
+	_, exists := providerRegistry[cfg.Provider.Type]
+	registryMu.RUnlock()
+	if !exists {
+		return fmt.Errorf("config validation: unknown llm provider type %q (supported: %s)",
+			cfg.Provider.Type, strings.Join(GetRegisteredProviders(), ", "))
+	}
+
+	// DefaultModel 必须设置——各 provider client 虽有权重默认，但自定义
+	// provider（代理/网关）通常需要显式模型，空值易造成"以为配了实际走默认"。
+	if cfg.DefaultModel == "" {
+		return fmt.Errorf("config validation: default model is empty (set dino.Config.DefaultModel)")
+	}
+
+	return nil
 }
 
 func createLLMProvider(cfg *Config) (types.LLMProvider, error) {
