@@ -36,6 +36,10 @@ type DelegateResult struct {
 	Usage types.Usage `json:"usage"`
 	// TimestampMS 完成时刻 unix 毫秒。
 	TimestampMS int64 `json:"timestamp_ms"`
+	// AgentPath 子代理在委派树中的路径（/root/<agent>，S3 铺路，subagent-s3s4 §9）。
+	AgentPath string `json:"agent_path,omitempty"`
+	// ParentPath 父代理路径（委派发起方，S3 铺路）。
+	ParentPath string `json:"parent_path,omitempty"`
 }
 
 // 信封状态常量。
@@ -111,8 +115,18 @@ func (r *DelegateResult) Truncated(maxRunes int) string {
 
 	var b strings.Builder
 	b.WriteString("Message Type: FINAL_ANSWER\n")
-	b.WriteString("Task name: /root\n")
-	b.WriteString("Sender: /root/" + r.Agent + "\n")
+	// 评审 RECOMMENDED-4：Sender/Task name 优先用 AgentPath/ParentPath 字段，
+	// 兜底回退 /root/<agent> 硬编码形态（S1 老信封无路径字段时保持文本不变）。
+	taskName := r.ParentPath
+	if taskName == "" {
+		taskName = "/root"
+	}
+	sender := r.AgentPath
+	if sender == "" {
+		sender = "/root/" + r.Agent
+	}
+	b.WriteString("Task name: " + taskName + "\n")
+	b.WriteString("Sender: " + sender + "\n")
 	b.WriteString("Status: " + r.Status + "\n")
 	b.WriteString("Payload:\n")
 

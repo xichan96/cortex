@@ -254,6 +254,70 @@ func (t *delegateParentMemoryTool) Execute(ctx context.Context, input map[string
 	return t.inner.Execute(ctx, input)
 }
 
+// sessionWakeSource 订阅 mailbox 完成通知，转成 session.WakeSource（S4/B2，subagent-s3s4 §7.2）。
+//
+// 评审 BLOCKER-2 修正：SubscribeAll 回调**只发信号、不 DrainAll**（回调里 select+drop
+// 非阻塞投递 dirty，不阻塞 notifier / 子代理 goroutine——评审 RECOMMENDED-2）。session
+// 在 onSubagentCompletion（idle）里调 Collect() 才 DrainAll + Truncated，与 wait_agent
+// 的 Drain(taskID) 结构互斥（turn 内 session 不在 select 循环）。
+//
+// 无后台 goroutine（信号在回调里同步投递，payload 由 session 拉取）→ 无需 Close 停 goroutine；
+// Close 只反注册 SubscribeAll（评审 RECOMMENDED-7：生命周期跟随 session）。
+type sessionWakeSource struct {
+	mb       *dinoAgent.Mailbox
+	maxRunes int
+	dirty    chan struct{}
+	subID    string
+}
+
+func newSessionWakeSource(mb *dinoAgent.Mailbox, maxRunes int) *sessionWakeSource {
+	if mb == nil {
+		return nil
+	}
+	s := &sessionWakeSource{
+		mb:       mb,
+		maxRunes: maxRunes,
+		dirty:    make(chan struct{}, 1),
+	}
+	s.subID = mb.SubscribeAll(func() {
+		// 非阻塞信号：buffer 1，完成密集时只留一个信号（payload 不丢，仍在 mailbox）。
+		select {
+		case s.dirty <- struct{}{}:
+		default:
+		}
+	})
+	return s
+}
+
+func (s *sessionWakeSource) Wake() <-chan struct{} { return s.dirty }
+
+// Collect 取走全部未读完成并截断（session idle 时调用）。
+func (s *sessionWakeSource) Collect() []session.WakePayload {
+	if s == nil || s.mb == nil {
+		return nil
+	}
+	envs := s.mb.DrainAll()
+	if len(envs) == 0 {
+		return nil
+	}
+	payloads := make([]session.WakePayload, 0, len(envs))
+	for _, env := range envs {
+		payloads = append(payloads, session.WakePayload{
+			TaskID: env.TaskID,
+			Text:   env.Truncated(s.maxRunes),
+		})
+	}
+	return payloads
+}
+
+// Close 反注册订阅（session 关闭时由 factory CloseSession 调用）。
+func (s *sessionWakeSource) Close() {
+	if s == nil || s.mb == nil || s.subID == "" {
+		return
+	}
+	s.mb.UnsubscribeAll(s.subID)
+}
+
 type toolEventSenderAdapter struct {
 	sender StreamEventSender
 }
@@ -326,6 +390,30 @@ type dinoFactory struct {
 	longTermMem          *dinoMem.LongTermMem // 长期记忆子系统句柄（nil = 未启用）
 	sessionToolsProvider func(sessionID string) []types.Tool
 	hooks                hooks.Hooks
+
+	// —— S3/S4 mailbox（subagent-s3s4 §4/§7.2）——
+	// bus 实例级事件总线（notifier 旁路事件用，评审 BLOCKER-1：factory 层注入回调，
+	// dino/agent 不引根包）。每个 factory 一个实例，避免 GetGlobalBus 多会话串扰。
+	bus *Bus
+	// notifier 完成通知（mailbox.Put + bus 旁路事件），跨 session 共享一份。
+	notifier *dinoAgent.CompletionNotifier
+	// sessionMailboxes 每 session 一个 mailbox，key = sessionID。CloseSession Drop + 删除。
+	sessionMailboxes map[string]*dinoAgent.Mailbox
+	// sessionWakes 每 session 一个唤醒适配器（S4a，WakeOnCompletion 时构造）。
+	sessionWakes map[string]*sessionWakeSource
+}
+
+// cloneToolTimeouts 深拷贝 ToolTimeouts map，避免 CreateSession 注入 wait_agent
+// 超时污染共享的 cfg.ToolTimeouts（评审 BLOCKER-3 改的是 per-session agentConfig）。
+func cloneToolTimeouts(src map[string]time.Duration) map[string]time.Duration {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]time.Duration, len(src)+1)
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 func (f *dinoFactory) LoopDetector() agentutils.LoopDetector {
@@ -452,13 +540,36 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 			MaxRepeats:          cfg.LoopDetection.MaxRepeats,
 			SimilarityThreshold: cfg.LoopDetection.SimilarityThreshold,
 		}),
-		budget:        NewBudget(&cfg.Budget),
-		cortexSkills:  loadedCortexSkills,
-		approvalStore: approvalStore,
-		sessions:      make(map[string]*session.Session),
+		budget:           NewBudget(&cfg.Budget),
+		cortexSkills:     loadedCortexSkills,
+		approvalStore:    approvalStore,
+		sessions:         make(map[string]*session.Session),
+		bus:              NewBus(),
+		sessionMailboxes: make(map[string]*dinoAgent.Mailbox),
+		sessionWakes:     make(map[string]*sessionWakeSource),
 	}
 
 	f.subagentManager = dinoAgent.NewSubagentManager(&cfg.Subagent, f)
+	if f.subagentManager != nil {
+		// S3/S4 接线（评审 BLOCKER-1：notifier 拆成纯数据 + factory 注入回调，
+		// dino/agent 不引根 dino 包）。
+		subCfg := cfg.Subagent
+		f.subagentManager.SetMaxConcurrentSpawns(subCfg.MaxConcurrentSpawns)
+		f.notifier = dinoAgent.NewCompletionNotifier(
+			// getMailbox：按父 session 取 mailbox。
+			func(sessionID string) *dinoAgent.Mailbox {
+				f.mu.RLock()
+				defer f.mu.RUnlock()
+				return f.sessionMailboxes[sessionID]
+			},
+			// publish：实例级 Bus 旁路事件（subagent.completed），UI/审计用，不进 LLM 上下文。
+			func(eventType string, sessionID string, data interface{}) {
+				f.bus.Publish(eventType, sessionID, data)
+			},
+			subCfg.NotifyCompletion,
+		)
+		f.subagentManager.SetNotifier(f.notifier)
+	}
 
 	if cfg.MCP.Enabled {
 		f.mcpManager = dinoTools.NewMCPManager()
@@ -566,7 +677,16 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	agentConfig.MaxIterations = f.config.MaxIterations
 	agentConfig.Timeout = f.config.Timeout
 	agentConfig.ToolExecutionTimeout = f.config.ToolExecutionTimeout
-	agentConfig.ToolTimeouts = f.config.ToolTimeouts
+	agentConfig.ToolTimeouts = cloneToolTimeouts(f.config.ToolTimeouts)
+	// 评审 BLOCKER-3：wait_agent 内部默认 30s，engine 外壳必须配得更高，否则
+	// engine ToolExecutionTimeout(60s)/ToolTimeouts 先 cancel → 父代理拿 tool error
+	// 而非 {timed_out:true} 信封。这里抬高外壳到 200s（wait 内部 30s 先返回）。
+	if agentConfig.ToolTimeouts == nil {
+		agentConfig.ToolTimeouts = make(map[string]time.Duration)
+	}
+	if _, ok := agentConfig.ToolTimeouts["wait_agent"]; !ok {
+		agentConfig.ToolTimeouts["wait_agent"] = dinoAgent.WaitAgentToolShellTimeout
+	}
 	agentConfig.ToolTimeoutCalculator = f.config.ToolTimeoutCalculator
 	agentConfig.DoomLoopThreshold = f.config.LoopDetection.MaxRepeats
 	agentConfig.Temperature = f.config.Temperature
@@ -690,6 +810,31 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 		wrapped = dinoTools.WrapLoopDetection(wrapped, sessionID, f.loopDetector, senderAdapter)
 		wrappedTools = append(wrappedTools, wrapped)
 		logger.Info("[DinoFactory] Adding tool", slog.String("tool", registerDelegate.Name()))
+
+		// —— S3：spawn_agent / wait_agent 工具族（subagent-s3s4 §3/§5.2）——
+		// 每 session 一个 mailbox，工具用闭包注入（不持 session 状态，实例可复用）。
+		mb := dinoAgent.NewMailbox(dinoAgent.DefaultMailboxCap, 0)
+		f.sessionMailboxes[sessionID] = mb
+
+		spawnTool := dinoAgent.NewSpawnAgentTool(f.subagentManager,
+			func() *dinoAgent.Mailbox { return f.sessionMailbox(sessionID) },
+			func() dinoAgent.AgentPath { return dinoAgent.RootAgentPath() },
+			func() string { return sessionID })
+		waitTool := dinoAgent.NewWaitAgentTool(f.subagentManager,
+			func() *dinoAgent.Mailbox { return f.sessionMailbox(sessionID) },
+			dinoAgent.DefaultWaitAgentTimeout)
+
+		registerSpawn := types.Tool(spawnTool)
+		registerWait := types.Tool(waitTool)
+		// 与 delegate 同包装链：limiter + nonFatal（wait 的 {timed_out} 信封是正常结果，
+		// nonFatal 不会吞；spawn 的 {task_id} 同理）。
+		for _, t := range []types.Tool{registerSpawn, registerWait} {
+			wrapped := dinoTools.WrapToolResultLimiter(t, f.config.Tools.ResultLimiterMaxBytes, f.config.Tools.ResultLimiterMaxStringBytes)
+			wrapped = dinoTools.WrapNonFatalTool(wrapped)
+			wrapped = dinoTools.WrapLoopDetection(wrapped, sessionID, f.loopDetector, senderAdapter)
+			wrappedTools = append(wrappedTools, wrapped)
+			logger.Info("[DinoFactory] Adding tool", slog.String("tool", t.Name()))
+		}
 	}
 
 	logger.Info("[DinoFactory] Total tools added to agent", slog.Int("count", len(wrappedTools)))
@@ -761,7 +906,17 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 		toolSchemas,
 	)
 
-	sess := session.NewSession(sessionID, agent, f, ctx, cfg, plannerHelper, f.budget)
+	// S4/B2（评审 RECOMMENDED-1 灰度开关）：WakeOnCompletion=true 才构造唤醒适配器。
+	// 默认 false → NoWakeSource（nil 行为，不动调度）。唯一动 Session.run 的一刀。
+	var wake session.WakeSource = session.NoWakeSource()
+	if f.config.Subagent.WakeOnCompletion {
+		if mb := f.sessionMailboxes[sessionID]; mb != nil {
+			wake = newSessionWakeSource(mb, f.config.Subagent.CompletionMaxRunes)
+			f.sessionWakes[sessionID] = wake.(*sessionWakeSource)
+		}
+	}
+
+	sess := session.NewSession(sessionID, agent, f, ctx, cfg, plannerHelper, f.budget, wake)
 	f.sessions[sessionID] = sess
 
 	sess.Start()
@@ -775,6 +930,13 @@ func (f *dinoFactory) GetSession(sessionID string) *session.Session {
 	return f.sessions[sessionID]
 }
 
+// sessionMailbox 返回指定 session 的 mailbox（工具闭包用；读锁保护）。
+func (f *dinoFactory) sessionMailbox(sessionID string) *dinoAgent.Mailbox {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.sessionMailboxes[sessionID]
+}
+
 func (f *dinoFactory) CloseSession(sessionID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -782,6 +944,16 @@ func (f *dinoFactory) CloseSession(sessionID string) {
 	if sess, exists := f.sessions[sessionID]; exists {
 		sess.Close()
 		delete(f.sessions, sessionID)
+	}
+	// S3（评审 R5）：session 关闭 → mailbox Drop（显式回收孤儿结果）。
+	if mb, exists := f.sessionMailboxes[sessionID]; exists {
+		mb.Drop()
+		delete(f.sessionMailboxes, sessionID)
+	}
+	// S4（评审 RECOMMENDED-7）：唤醒适配器反注册 SubscribeAll。
+	if w, exists := f.sessionWakes[sessionID]; exists {
+		w.Close()
+		delete(f.sessionWakes, sessionID)
 	}
 	// S3/B1 铺路（评审 B2 BLOCKER）：释放该 session 派生的所有子代理 cancel。
 	// S1 阶段无 spawn，此钩子是接口预留；S3 spawn_agent 落地后生效。
@@ -798,6 +970,14 @@ func (f *dinoFactory) CloseAll() {
 		sess.Close()
 	}
 	f.sessions = make(map[string]*session.Session)
+	for sid, mb := range f.sessionMailboxes {
+		mb.Drop()
+		delete(f.sessionMailboxes, sid)
+	}
+	for sid, w := range f.sessionWakes {
+		w.Close()
+		delete(f.sessionWakes, sid)
+	}
 }
 
 func (f *dinoFactory) GetTools() []types.Tool {

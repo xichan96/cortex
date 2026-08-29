@@ -3,6 +3,7 @@ package agent
 import (
 	"embed"
 	"strings"
+	"time"
 
 	"github.com/xichan96/cortex/dino/permission"
 )
@@ -150,7 +151,24 @@ type SubagentConfig struct {
 	// （result.Output，S1 之前的兼容形态）。string 模式下 FilesChanged/Status/Usage
 	// 等信息不进工具返回值，是纯兼容开关。非法值/空串回退 envelope。
 	DelegateReturnMode string `yaml:"delegate_return_mode"`
+
+	// —— spawn_agent（S3，subagent-s3s4 §3.2/§9）——
+	// MaxConcurrentSpawns spawn 并发上限（channel semaphore，默认 4，对齐 codex）。
+	MaxConcurrentSpawns int `yaml:"max_concurrent_spawns"`
+	// SpawnTimeout spawn watchdog 默认超时（默认 3min）。
+	SpawnTimeout time.Duration `yaml:"spawn_timeout"`
+	// WakeOnCompletion S4 灰度开关：true 时 mailbox 到达 → 父代理自动开新 turn
+	// 消费（B2 唤醒）。默认 false（评审 RECOMMENDED-1：唯一动调度的功能默认关）。
+	WakeOnCompletion bool `yaml:"wake_on_completion"`
 }
+
+// spawn 默认值常量（S3，subagent-s3s4 §3.2）。
+const (
+	// DefaultMaxConcurrentSpawns spawn 并发 semaphore 默认上限（对齐 codex）。
+	DefaultMaxConcurrentSpawns = 4
+	// DefaultSpawnTimeout spawn watchdog 默认超时。
+	DefaultSpawnTimeout = 3 * time.Minute
+)
 
 // DelegateReturnMode 合法值（设计 §14 遗留点 1，P2.2）。
 const (

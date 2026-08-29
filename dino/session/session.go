@@ -112,6 +112,8 @@ type Session struct {
 	config  *Config
 	planner *PlannerHelper
 	budget  budgetChecker
+	// wake B2 唤醒源（S4，subagent-s3s4 §7）。nil = 无唤醒，行为同现状。
+	wake WakeSource
 
 	observers   map[string]Observer
 	observersMu sync.RWMutex
@@ -135,7 +137,7 @@ func (f ObserverFunc) OnEvent(event *Event) {
 // ranging Session.Output() so slow consumers do not block emit.
 type OutputObserver = Observer
 
-func NewSession(id string, agent *engine.AgentEngine, factory SessionFactory, ctx context.Context, cfg *Config, planner *PlannerHelper, budget interface{ CanExecute(sessionID string) bool }) *Session {
+func NewSession(id string, agent *engine.AgentEngine, factory SessionFactory, ctx context.Context, cfg *Config, planner *PlannerHelper, budget interface{ CanExecute(sessionID string) bool }, wake WakeSource) *Session {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
 	queue := dinoQueue.New(&dinoQueue.Config{
@@ -157,6 +159,7 @@ func NewSession(id string, agent *engine.AgentEngine, factory SessionFactory, ct
 		config:    cfg,
 		planner:   planner,
 		budget:    budget,
+		wake:      wake,
 		observers: make(map[string]Observer),
 	}
 }
@@ -274,6 +277,12 @@ func (s *Session) run() {
 		return nil
 	}()
 
+	// 新增（S4/B2，subagent-s3s4 §7.3）：mailbox 到达唤醒源。nil = 无唤醒，行为同现状。
+	var wakeCh <-chan struct{}
+	if s.wake != nil {
+		wakeCh = s.wake.Wake()
+	}
+
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -298,9 +307,45 @@ func (s *Session) run() {
 				return
 			}
 			s.processQueueItem(item)
+		case _, ok := <-wakeCh:
+			if !ok {
+				return
+			}
+			s.onSubagentCompletion()
 		}
 	}
 }
+
+// onSubagentCompletion（S4/B2，subagent-s3s4 §7.5）：收到唤醒信号 → 从唤醒源 Collect
+// 全部未读完成 → 每个 payload 注入一个新 turn（父代理自主继续，非用户输入响应）。
+// 评审修正：
+//   - 只在 idle 时可达（turn 内 select 循环不服务本分支；wait_agent 只在 turn 内阻塞）
+//     → Collect（DrainAll）与 wait_agent 的 Drain(taskID) 结构互斥（BLOCKER-2）。
+//   - 唤醒可重入：payload 由 Collect 从 mailbox 取走，若预算耗尽被跳过，消息已消费，
+//     不重复注入（评审 RECOMMENDED-6：注入前查 budget，避免刷屏）。
+func (s *Session) onSubagentCompletion() {
+	if s.wake == nil || !s.IsRunning() {
+		return
+	}
+	payloads := s.wake.Collect()
+	if len(payloads) == 0 {
+		return
+	}
+	for _, p := range payloads {
+		if s.budget != nil && !s.budget.CanExecute(s.id) {
+			logger.Warn("[session] subagent completion skipped: budget exhausted",
+				slog.String("session_id", s.id),
+				slog.String("task_id", p.TaskID))
+			continue
+		}
+		s.executeWithInput(s.ctx, types.NewAgentInput(p.Text), subagentCompletionDisplay)
+	}
+}
+
+// subagentCompletionDisplay 唤醒 turn 的 displayContent 标记（S4/B2，subagent-s3s4 §7.7）。
+// executeWithInput 用它在 EventTypeMessage 上打 Source=subagent，消费方（client.go /
+// turn_observe.go）据此折叠，避免"幽灵用户消息"喷到 UI 与 assistant-text 统计。
+const subagentCompletionDisplay = "[subagent-completion]"
 
 func (s *Session) processQueueItem(item *dinoQueue.Item) {
 	startTime := time.Now()
@@ -369,10 +414,18 @@ func (s *Session) executeWithInput(ctx context.Context, agentInput types.AgentIn
 		}
 	}
 
-	s.emit(&Event{
+	msgEv := &Event{
 		Type:    EventTypeMessage,
 		Content: displayContent,
-	})
+		// S4/B2（subagent-s3s4 §7.7）：Source 默认 user；唤醒注入 turn 打 subagent
+		// 供消费方折叠（评审 O-3）。JSON omitempty："" 不序列化（旧消费方兼容），
+		// 显式 user 序列化为 "user"（语义一致）。
+		Source: EventSourceUser,
+	}
+	if displayContent == subagentCompletionDisplay {
+		msgEv.Source = EventSourceSubagent
+	}
+	s.emit(msgEv)
 
 	if s.factory != nil {
 		if result := s.factory.Detect(turnCtx, s.id, agentutils.LoopDetectAction{Type: "input", Content: displayContent}); result != nil {
