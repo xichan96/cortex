@@ -4,11 +4,12 @@ import (
 	"strings"
 )
 
+// truncateText truncates a single string field preserving its middle (via
+// TruncateMiddle) so nested fields inside a tool result keep both ends. The
+// byte budget includes the omission marker; UTF-8 safe.
 func truncateText(s string, maxLen int) string {
-	if maxLen <= 0 || len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "\n…(truncated)…"
+	out, _ := TruncateMiddle(s, maxLen)
+	return out
 }
 
 func sanitizeToolResultValue(v interface{}, maxTextLen int) interface{} {

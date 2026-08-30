@@ -36,6 +36,7 @@ type SessionOption = session.Option
 
 type Event = session.Event
 type EventType = session.EventType
+type EventSource = session.EventSource
 type Usage = session.Usage
 type Observer = session.Observer
 type ObserverFunc = session.ObserverFunc
@@ -59,6 +60,7 @@ const (
 	EventTypeApproval   = session.EventTypeApproval
 	EventTypePlan       = session.EventTypePlan
 	EventTypePlanStep   = session.EventTypePlanStep
+	EventTypeQuestion   = session.EventTypeQuestion
 
 	StreamEventContent    = session.EventTypeMessage
 	StreamEventReasoning  = session.EventTypeThinking
@@ -67,6 +69,9 @@ const (
 	StreamEventError      = session.EventTypeError
 	StreamEventDone       = session.EventTypeDone
 	StreamEventApproval   = session.EventTypeApproval
+
+	EventSourceUser    = session.EventSourceUser
+	EventSourceSubagent = session.EventSourceSubagent
 )
 
 type StreamEvent = session.Event

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/dino/permission"
 )
 
 type subagentMockLLMProvider struct {
@@ -47,13 +48,12 @@ func (m *subagentMockLLMProvider) Chat(ctx context.Context, messages []types.Mes
 }
 
 func (m *subagentMockLLMProvider) ChatStream(ctx context.Context, messages []types.Message) (<-chan types.StreamMessage, error) {
-	ch := make(chan types.StreamMessage, 1)
-	ch <- types.StreamMessage{
-		Type:    "chunk",
-		Content: m.responses[0],
-	}
-	close(ch)
-	return ch, nil
+	return m.ChatWithToolsStream(ctx, messages, nil)
+}
+
+// usage 返回每次调用固定的 mock token 用量（供结构化采集断言）。
+func (m *subagentMockLLMProvider) usage() types.Usage {
+	return types.Usage{PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30}
 }
 
 func (m *subagentMockLLMProvider) ChatWithTools(ctx context.Context, messages []types.Message, tools []types.Tool) (types.Message, error) {
@@ -61,7 +61,31 @@ func (m *subagentMockLLMProvider) ChatWithTools(ctx context.Context, messages []
 }
 
 func (m *subagentMockLLMProvider) ChatWithToolsStream(ctx context.Context, messages []types.Message, tools []types.Tool) (<-chan types.StreamMessage, error) {
-	return m.ChatStream(ctx, messages)
+	m.mu.Lock()
+	m.callCount++
+	if m.responseIdx >= len(m.responses) {
+		m.responseIdx = 0
+	}
+	content := m.responses[m.responseIdx]
+	m.responseIdx++
+	m.mu.Unlock()
+
+	ch := make(chan types.StreamMessage, 1)
+	u := m.usage()
+	ch <- types.StreamMessage{
+		Type:    "chunk",
+		Content: content,
+		Usage:   &u,
+	}
+	close(ch)
+	return ch, nil
+}
+
+// callCountSafe 返回累计调用次数（测试断言用，加锁读）。
+func (m *subagentMockLLMProvider) callCountSafe() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.callCount
 }
 
 func (m *subagentMockLLMProvider) GetModelName() string {
@@ -72,9 +96,14 @@ func (m *subagentMockLLMProvider) GetModelMetadata() types.ModelMetadata {
 	return types.ModelMetadata{Name: "mock-model"}
 }
 
-type subagentMockFactory struct{}
+type subagentMockFactory struct {
+	llm types.LLMProvider // 可选覆盖，nil 时用默认 mock
+}
 
 func (f *subagentMockFactory) GetLLMProvider() types.LLMProvider {
+	if f != nil && f.llm != nil {
+		return f.llm
+	}
 	return newSubagentMockLLMProvider([]string{"mock response"})
 }
 
@@ -87,67 +116,12 @@ func (f *subagentMockFactory) GetAgent(name string) (*Info, bool) {
 	return info, exists
 }
 
-type mockEventEmitter struct {
-	events []SubagentEvent
+func (f *subagentMockFactory) GetParentRuleset() permission.Ruleset {
+	// 测试默认不限制（返回空 ruleset，restrict-only 不生效）。
+	return nil
 }
 
-func (e *mockEventEmitter) Emit(event *SubagentEvent) {
-	e.events = append(e.events, *event)
-}
-
-func (e *mockEventEmitter) GetEvents() []SubagentEvent {
-	return e.events
-}
-
-func TestShouldDelegate_KeywordMatch(t *testing.T) {
-	config := &SubagentConfig{
-		Enabled:          true,
-		TriggerOnKeyword: true,
-		Triggers: []SubagentTrigger{
-			{
-				AgentName: "general",
-				Keywords:  []string{"research", "analyze"},
-				Priority:  5,
-			},
-		},
-	}
-
-	manager := NewSubagentManager(config, &subagentMockFactory{})
-	if manager == nil {
-		t.Fatal("expected manager to be created")
-	}
-
-	tests := []struct {
-		name      string
-		input     string
-		wantAgent string
-	}{
-		{"research keyword", "research about the codebase", "general"},
-		{"analyze keyword", "analyze the code quality", "general"},
-		{"no match", "just a simple greeting", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := manager.ShouldDelegate(tt.input)
-			if tt.wantAgent == "" {
-				if result != nil {
-					t.Errorf("expected no delegation, got %s", result.AgentName)
-				}
-			} else {
-				if result == nil {
-					t.Errorf("expected delegation to %s, got nil", tt.wantAgent)
-				} else if result.AgentName != tt.wantAgent {
-					t.Errorf("expected agent %s, got %s", tt.wantAgent, result.AgentName)
-				}
-			}
-		})
-	}
-
-	manager.Close()
-}
-
-func TestShouldDelegate_Disabled(t *testing.T) {
+func TestNewSubagentManager_Disabled(t *testing.T) {
 	config := &SubagentConfig{
 		Enabled: false,
 	}
@@ -158,51 +132,9 @@ func TestShouldDelegate_Disabled(t *testing.T) {
 	}
 }
 
-func TestShouldDelegate_NilConfig(t *testing.T) {
+func TestNewSubagentManager_NilConfig(t *testing.T) {
 	manager := NewSubagentManager(nil, &subagentMockFactory{})
 	if manager != nil {
 		t.Error("expected nil manager for nil config")
 	}
-}
-
-func TestSubagentHandler_ProcessInput(t *testing.T) {
-	config := &SubagentConfig{
-		Enabled:          true,
-		TriggerOnKeyword: true,
-		Triggers: []SubagentTrigger{
-			{
-				AgentName: "general",
-				Keywords:  []string{"research"},
-				Priority:  5,
-			},
-		},
-	}
-
-	manager := NewSubagentManager(config, &subagentMockFactory{})
-	if manager == nil {
-		t.Fatal("expected manager to be created")
-	}
-
-	handler := NewSubagentHandler(manager, nil)
-	if handler == nil {
-		t.Fatal("expected handler to be created")
-	}
-
-	handled, err := handler.ProcessInput(nil, "research about files")
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-	if !handled {
-		t.Error("expected input to be handled")
-	}
-
-	handled, err = handler.ProcessInput(nil, "hello")
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-	if handled {
-		t.Error("expected input not to be handled")
-	}
-
-	manager.Close()
 }

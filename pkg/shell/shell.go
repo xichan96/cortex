@@ -56,6 +56,40 @@ type Shell struct {
 	mu         sync.Mutex
 	logger     Logger
 	blockFuncs []BlockFunc
+	maxOutput  int
+}
+
+// boundedBuffer is an io.Writer that stops accumulating past max bytes, keeping
+// memory bounded even if a command writes an unbounded stream. It tracks whether
+// output was truncated so callers can append a marker.
+type boundedBuffer struct {
+	buf       bytes.Buffer
+	max       int
+	truncated bool
+}
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	if b.max <= 0 {
+		return b.buf.Write(p)
+	}
+	room := b.max - b.buf.Len()
+	if room <= 0 {
+		b.truncated = true
+		return len(p), nil // consume without storing; command keeps running
+	}
+	if len(p) > room {
+		b.truncated = true
+		b.buf.Write(p[:room])
+		return len(p), nil
+	}
+	return b.buf.Write(p)
+}
+
+func (b *boundedBuffer) String() string {
+	if b.truncated {
+		return b.buf.String() + "\n... (output truncated)"
+	}
+	return b.buf.String()
 }
 
 // Options for creating a new shell
@@ -64,6 +98,12 @@ type Options struct {
 	Env        []string
 	Logger     Logger
 	BlockFuncs []BlockFunc
+	// MaxOutputBytes caps each command's captured stdout/stderr. 0 = unbounded
+	// (legacy). When a stream exceeds the cap the buffer stops growing, the
+	// command keeps running to completion, and a "(output truncated)" marker
+	// is appended. (tools-codex-eval §8.3 P2 — prevents an unbounded command
+	// from bloating process memory.)
+	MaxOutputBytes int
 }
 
 // nonInteractiveEnvOverrides lists KEY=value pairs merged on top of [os.Environ].
@@ -132,6 +172,7 @@ func NewShell(opts *Options) *Shell {
 		env:        env,
 		logger:     logger,
 		blockFuncs: opts.BlockFuncs,
+		maxOutput:  opts.MaxOutputBytes,
 	}
 }
 
@@ -327,7 +368,8 @@ func (s *Shell) execCommon(ctx context.Context, command string, stdout, stderr i
 
 // exec executes commands using a cross-platform shell interpreter.
 func (s *Shell) exec(ctx context.Context, command string) (string, string, error) {
-	var stdout, stderr bytes.Buffer
+	stdout := boundedBuffer{max: s.maxOutput}
+	stderr := boundedBuffer{max: s.maxOutput}
 	err := s.execCommon(ctx, command, &stdout, &stderr)
 	return stdout.String(), stderr.String(), err
 }

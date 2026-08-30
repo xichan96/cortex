@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // CompactConfig controls the deterministic compaction behavior.
@@ -22,7 +23,8 @@ func DefaultCompactConfig() CompactConfig {
 }
 
 // EstimateTokens provides a rough token count estimate.
-// ~4 chars per token for ASCII, ~2 tokens per char for non-ASCII.
+// ASCII ~4 chars per token; non-ASCII ~2 tokens per rune（对齐 agent/types.RoughTokenEstimate，评审 §5.1）。
+// CJK（UTF-8 3 字节/rune）按 rune 计非 ASCII → *2，比字节级保守但单调，够作预算用。
 func EstimateTokens(text string) int {
 	if len(text) == 0 {
 		return 0
@@ -33,8 +35,55 @@ func EstimateTokens(text string) int {
 			asciiCount++
 		}
 	}
-	nonASCII := len(text) - asciiCount
-	return asciiCount/4 + nonASCII*2/4 + 1
+	nonASCII := utf8.RuneCountInString(text) - asciiCount
+	return asciiCount/4 + nonASCII*2 + 1
+}
+
+// MaxRecentTailTokens 尾部 user 原文 token 预算（对齐 Codex COMPACT_USER_MESSAGE_MAX_TOKENS = 20_000）。
+const MaxRecentTailTokens = 20_000
+
+// splitTailUserMessages 从 messages 尾部回溯，把对话切成 (tail, older)：
+//   - tail：最近 KeepRecentCount 条消息（所有 role，原文）+ 往前继续吸收 user 消息原文，
+//     直到累积 token 预算 maxTailTokens 或消息耗尽（取并集的尾部）；
+//   - older：送 LLM 摘要的旧段。
+//
+// 规则（对齐 Codex compact.rs:586-642 / 657-733 精神）：
+//  1. 以最后一条消息为锚，tail 至少包含最近 KeepRecentCount 条消息（兼容现有语义）；
+//  2. 向前吸收更多 user 消息原文，直到累计 EstimateTokens >= maxTailTokens；
+//  3. 切割点落在完整消息边界（tail = messages[split:]，older = messages[:split]）；
+//  4. tail 保持原文结构（含 tool_calls 完整配对，避免 repairLLMMessageToolOrdering 修复成本）。
+func splitTailUserMessages(messages []Message, keepRecent int, maxTailTokens int) (tail []Message, older []Message) {
+	if maxTailTokens <= 0 {
+		maxTailTokens = MaxRecentTailTokens
+	}
+	if keepRecent <= 0 {
+		keepRecent = 1
+	}
+
+	total := len(messages)
+	if total <= keepRecent {
+		return messages, nil
+	}
+
+	split := total - keepRecent
+	budget := maxTailTokens
+
+	// 从 split 处继续向前吸收 user 消息原文，直到 token 预算耗尽或到达第 1 条。
+	for i := split - 1; i >= 0; i-- {
+		msg := messages[i]
+		if !strings.EqualFold(msg.Role, "user") {
+			continue
+		}
+		tok := EstimateTokens(msg.Content)
+		if tok > budget {
+			// 单条消息超预算：仍保留该条（切割点不能落在消息中间），不再往前。
+			break
+		}
+		budget -= tok
+		split = i
+	}
+
+	return messages[split:], messages[:split]
 }
 
 // DeterministicCompact produces a structured summary of older messages

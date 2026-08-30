@@ -235,6 +235,9 @@ func CoalesceDinoFromHost(in *dino.Config, host *HostAppConfig, brand *HostDinoB
 		out.Memory.PersistFileName = chatstore.DefaultSharedDBFile
 	}
 	out.Memory.EnableCompress = true
+	if host != nil && host.Server.Cortex.Memory.EnableLLMCompress != nil {
+		out.Memory.EnableLLMCompress = *host.Server.Cortex.Memory.EnableLLMCompress
+	}
 	if host != nil && host.Server.Cortex.Memory.MaxBudgetTokens > 0 {
 		out.Memory.MaxBudgetTokens = host.Server.Cortex.Memory.MaxBudgetTokens
 	}

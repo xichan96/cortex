@@ -3,6 +3,7 @@ package agent
 import (
 	"embed"
 	"strings"
+	"time"
 
 	"github.com/xichan96/cortex/dino/permission"
 )
@@ -136,16 +137,54 @@ func floatPtr(v float64) *float64 {
 }
 
 type SubagentConfig struct {
-	Enabled              bool              `yaml:"enabled"`
-	TriggerOnKeyword     bool              `yaml:"trigger_on_keyword"`
-	ReplayToParentMemory bool              `yaml:"replay_to_parent_memory"`
-	MaxHistoryMessages   int               `yaml:"max_history_messages"`
-	Triggers             []SubagentTrigger `yaml:"triggers"`
+	Enabled              bool `yaml:"enabled"`
+	ReplayToParentMemory bool `yaml:"replay_to_parent_memory"`
+	MaxHistoryMessages   int  `yaml:"max_history_messages"`
+
+	// —— 结果结构化/完成通知（设计 §5.4，S1 引入；B 阶段字段见 S3）——
+	// NotifyCompletion B 阶段：完成是否写 mailbox + 发事件，默认 true。
+	NotifyCompletion bool `yaml:"notify_completion"`
+	// CompletionMaxRunes 信封截断上限，默认 2000（≈1000 tokens）。
+	CompletionMaxRunes int `yaml:"completion_max_runes"`
+	// DelegateReturnMode delegate_to_agent 返回形态（设计 §14 遗留点 1，P2.2）：
+	// "envelope"（默认）返回 *DelegateResult 信封；"string" 返回裸字符串
+	// （result.Output，S1 之前的兼容形态）。string 模式下 FilesChanged/Status/Usage
+	// 等信息不进工具返回值，是纯兼容开关。非法值/空串回退 envelope。
+	DelegateReturnMode string `yaml:"delegate_return_mode"`
+
+	// —— spawn_agent（S3，subagent-s3s4 §3.2/§9）——
+	// MaxConcurrentSpawns spawn 并发上限（channel semaphore，默认 4，对齐 codex）。
+	MaxConcurrentSpawns int `yaml:"max_concurrent_spawns"`
+	// SpawnTimeout spawn watchdog 默认超时（默认 3min）。
+	SpawnTimeout time.Duration `yaml:"spawn_timeout"`
+	// WakeOnCompletion S4 灰度开关：true 时 mailbox 到达 → 父代理自动开新 turn
+	// 消费（B2 唤醒）。默认 false（评审 RECOMMENDED-1：唯一动调度的功能默认关）。
+	WakeOnCompletion bool `yaml:"wake_on_completion"`
 }
 
-type SubagentTrigger struct {
-	AgentName string   `yaml:"agent_name"`
-	Keywords  []string `yaml:"keywords"`
-	Patterns  []string `yaml:"patterns"`
-	Priority  int      `yaml:"priority"`
+// spawn 默认值常量（S3，subagent-s3s4 §3.2）。
+const (
+	// DefaultMaxConcurrentSpawns spawn 并发 semaphore 默认上限（对齐 codex）。
+	DefaultMaxConcurrentSpawns = 4
+	// DefaultSpawnTimeout spawn watchdog 默认超时。
+	DefaultSpawnTimeout = 3 * time.Minute
+)
+
+// DelegateReturnMode 合法值（设计 §14 遗留点 1，P2.2）。
+const (
+	// DelegateReturnModeEnvelope 返回 *DelegateResult 信封（S1 起的默认行为）。
+	DelegateReturnModeEnvelope = "envelope"
+	// DelegateReturnModeString 返回裸字符串 result.Output（S1 之前的兼容行为）。
+	DelegateReturnModeString = "string"
+)
+
+// DelegateReturnModeOrDefault 解析 DelegateReturnMode 配置，空串/非法值回退 envelope
+// （防御：旧配置没有该字段，或手写 YAML 拼错时保持 S1 行为不炸）。
+func DelegateReturnModeOrDefault(mode string) string {
+	switch mode {
+	case DelegateReturnModeEnvelope, DelegateReturnModeString:
+		return mode
+	default:
+		return DelegateReturnModeEnvelope
+	}
 }

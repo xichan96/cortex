@@ -18,6 +18,84 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// chunkMerge defaults for the F6 second-stage chunk coalescing.
+const (
+	// chunkMergeFlushInterval is how long a chunk is held in the merge buffer
+	// before being flushed as one merged chunk. Streaming feels synchronous for
+	// the consumer while cutting event volume on high-throughput streams.
+	chunkMergeFlushInterval = 50 * time.Millisecond
+	// chunkMergeMaxBytes bounds the pending merged chunk. Reached, the buffer
+	// flushes immediately instead of growing unboundedly (128KB ~ 32k tokens).
+	chunkMergeMaxBytes = 128 * 1024
+)
+
+// chunkMerger coalesces consecutive "chunk" stream results into one larger
+// "chunk", flushing on a time interval, on a size cap, or on an explicit
+// Flush. It is single-goroutine by construction (owned by one
+// executeStreamIteration), so it needs no locking or background timer.
+//
+// Time-based flushing is self-paced: each Add checks how long the current
+// merge has been building and flushes when the interval elapses. On a
+// real-time LLM stream the fragments arrive spread over time, so this bounds
+// how late the first fragment of a merge can arrive (≈ the interval) exactly
+// like a timer would — with zero goroutines and no lock. On a synthetic
+// stream that floods instantly, the size cap takes over.
+//
+// The merged stream result is sent through the same guarded send path as
+// ordinary chunk results (sendStreamResult with the caller's turn ctx), so
+// cancellation semantics are unchanged: a full channel blocks, and ctx
+// cancellation aborts the flush — nothing is leaked or silently dropped.
+type chunkMerger struct {
+	flushInterval time.Duration
+	sender        func(types.StreamResult) bool
+
+	sb         strings.Builder
+	lastFlush  time.Time
+}
+
+// newChunkMerger creates a merger that flushes every flushInterval and sends
+// flushed chunks through sender.
+func newChunkMerger(flushInterval time.Duration, sender func(types.StreamResult) bool) *chunkMerger {
+	return &chunkMerger{
+		flushInterval: flushInterval,
+		sender:        sender,
+		lastFlush:     time.Now(),
+	}
+}
+
+// Add appends a chunk fragment, flushing first when the pending merge has
+// grown past the byte cap or been building longer than the flush interval.
+// It reports whether the stream may continue (false when a flush send failed,
+// i.e. the turn ctx was cancelled).
+func (m *chunkMerger) Add(content string) bool {
+	if m.sb.Len() > 0 {
+		overBytes := m.sb.Len()+len(content) > chunkMergeMaxBytes
+		overTime := time.Since(m.lastFlush) >= m.flushInterval
+		if overBytes || overTime {
+			if !m.Flush() {
+				return false
+			}
+		}
+	}
+	m.sb.WriteString(content)
+	if m.sb.Len() >= chunkMergeMaxBytes {
+		return m.Flush()
+	}
+	return true
+}
+
+// Flush sends the pending merged chunk, if any, and returns whether the send
+// succeeded (false when the turn ctx was cancelled mid-flush).
+func (m *chunkMerger) Flush() bool {
+	if m.sb.Len() == 0 {
+		return true
+	}
+	ok := m.sender(types.StreamResult{Type: "chunk", Content: m.sb.String()})
+	m.sb.Reset()
+	m.lastFlush = time.Now()
+	return ok
+}
+
 func (ae *AgentEngine) getConfig() *types.AgentConfig {
 	ae.mu.RLock()
 	defer ae.mu.RUnlock()
@@ -70,6 +148,32 @@ func toolCallData(tool string, toolInput interface{}, toolCallID, typeStr, obser
 	}
 }
 
+// sendStreamResult sends a result to the stream channel, unblocking when the
+// caller's turn ctx is cancelled so a stuck consumer (stopped range / slow UI)
+// cannot deadlock the engine. It reports whether the result was actually sent.
+// The channel is never closed before this returns, so a blocking send is safe.
+// A nil ctx is treated as a background ctx (no cancellation guard).
+func sendStreamResult(ctx context.Context, ch chan<- types.StreamResult, result types.StreamResult) bool {
+	// Terminal error results must never be dropped: the consumer relies on them
+	// to learn about cancellation/failure (e.g. subagents folding ctx cancel
+	// into a "cancelled" status). With a cancelled ctx the select below would
+	// randomly drop the send, so force-deliver error results.
+	if result.Error != nil {
+		ch <- result
+		return true
+	}
+	if ctx == nil {
+		ch <- result
+		return true
+	}
+	select {
+	case ch <- result:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func toolObservationError(err error, toolName string, cached bool, maxLen int) string {
 	if maxLen <= 0 {
 		maxLen = types.ToolErrorMaxLen
@@ -86,6 +190,18 @@ func toolObservationError(err error, toolName string, cached bool, maxLen int) s
 		return fmt.Sprintf("Tool '%s' authorization denied%s: %s", toolName, suffix, detail)
 	}
 	return fmt.Sprintf("Tool '%s' execution failed%s: %s", toolName, suffix, detail)
+}
+
+// isFatalToolError reports whether err is a fatal tool error (F3): unrecoverable
+// by retrying the same input, so it must surface to the engine and unwind the
+// iteration rather than being fed back to the model as a recoverable {ok:false}
+// result. nonFatalTool (dino/tools/tool_wrappers.go) mirrors this check; the
+// engine uses it to short-circuit the errgroup and to refuse to swallow a fatal
+// error coming from the tool cache. FatalToolErrorKindOf unwraps %w chains, so
+// the veto/loop errors from dino (which implement FatalToolErrorKind) are caught
+// here too. (P4.2)
+func isFatalToolError(err error) bool {
+	return types.IsFatalToolError(err)
 }
 
 type stepResult struct {
@@ -270,10 +386,33 @@ func (ae *AgentEngine) buildToolCallResults(sortedToolCalls []types.ToolCall, ex
 		truncationLength := ae.getToolTruncationLength(name)
 		sanitized := types.SanitizeToolResult(r.result, truncationLength)
 		formatted := types.FormatToolResult(sanitized)
-		observation, _, _ := types.TruncateToolResult(formatted, truncationLength, writeDir)
+		header := ae.buildOutputHeader(toolCall, name, r, formatted)
+		observation, _ := types.TruncateToolResult(formatted, truncationLength, writeDir, header)
 		intermediateSteps = append(intermediateSteps, toolCallData(name, args, toolCall.ID, toolCall.Type, observation))
 	}
 	return toolCalls, intermediateSteps
+}
+
+// buildOutputHeader assembles the structured header for a tool observation.
+// ExitCode is probed from bash/command-style results (map with exit_code).
+func (ae *AgentEngine) buildOutputHeader(toolCall types.ToolCall, name string, r stepResult, formatted string) types.OutputHeader {
+	h := types.OutputHeader{
+		ChunkID:        toolCall.ID,
+		WallTime:       r.duration,
+		OriginalBytes:  len(formatted),
+		OriginalTokens: types.RoughTokenEstimate(formatted),
+	}
+	if lines := strings.Count(formatted, "\n"); lines > 0 {
+		h.TotalLines = lines + 1
+	}
+	if m, ok := r.result.(map[string]interface{}); ok {
+		if ec, ok := m["exit_code"]; ok {
+			if code, ok := ec.(int); ok {
+				h.ExitCode = &code
+			}
+		}
+	}
+	return h
 }
 
 func (ae *AgentEngine) getToolByName(name string) (types.Tool, bool) {
@@ -291,6 +430,12 @@ func (ae *AgentEngine) getToolByName(name string) (types.Tool, bool) {
 }
 
 func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls []types.ToolCall, timeout time.Duration) (exists []bool, results []stepResult) {
+	return ae.runToolCallsByLayerIter(ctx, sortedToolCalls, timeout, -1)
+}
+
+// runToolCallsByLayerIter is runToolCallsByLayer with an iteration hint for
+// tracing (Iteration=-1 when the caller has no meaningful iteration).
+func (ae *AgentEngine) runToolCallsByLayerIter(ctx context.Context, sortedToolCalls []types.ToolCall, timeout time.Duration, iteration int) (exists []bool, results []stepResult) {
 	n := len(sortedToolCalls)
 	tools := make([]types.Tool, n)
 	exists = make([]bool, n)
@@ -317,8 +462,16 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 	// Get hooks
 	hookRunner := hooks.NewRunner(ae.getHooks(), "", "")
 
+	// Global concurrency cap across all layers: parallel bash/MCP calls (same
+	// layer, no dependencies) are bounded, dependent calls in later layers wait
+	// for earlier layers to release their slots. This is a wall-time throttle
+	// only — correctness is unchanged (errgroup already waits for every call).
+	limit := ae.getToolParallelismLimit()
 	for _, layer := range layers {
 		g, gctx := errgroup.WithContext(ctx)
+		if limit > 0 {
+			g.SetLimit(limit)
+		}
 		for _, idx := range layer {
 			if !exists[idx] {
 				continue
@@ -333,6 +486,19 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 			}
 			g.Go(func() error {
 				start := time.Now()
+				toolCallStart := nowMillis()
+
+				// context-trace: tool_call start recorded at dispatch (B2).
+				ae.recordTrace(hooks.TraceEvent{
+					Type:      traceToolCall,
+					Iteration: traceIterationPtr(iteration),
+					Payload: traceToolCallPayload{
+						ToolName:    tool.Name(),
+						ToolCallID:  toolCallID,
+						Input:       args,
+						StartWallMS: toolCallStart,
+					},
+				})
 
 				// Emit tool call event and call OnBeforeToolCall hook
 				if callback != nil {
@@ -342,12 +508,27 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 				hookRunner.BeforeToolCall(tool.Name(), args)
 
 				if err := schema.ValidateInput(tool.Schema(), args, tool.Name()); err != nil {
-					results[idx] = stepResult{err: err, cached: false, duration: 0}
+					// Input validation failure is fatal (F3): retrying the same
+					// arguments cannot succeed, and running the other parallel
+					// calls with the model's broken inputs is wasted work. Mark
+					// it fatal and cancel the same-layer siblings via the
+					// errgroup so this iteration unwinds quickly.
+					results[idx] = stepResult{err: &types.FatalToolError{Err: err, Reason: "tool input validation failed"}, cached: false, duration: 0}
+					ae.recordTrace(hooks.TraceEvent{
+						Type:      traceToolError,
+						Iteration: traceIterationPtr(iteration),
+						Payload: traceToolErrorPayload{
+							ToolName:   tool.Name(),
+							ToolCallID: toolCallID,
+							Error:      err.Error(),
+							DurationMS: time.Since(start).Milliseconds(),
+						},
+					})
 					if callback != nil {
 						callback.OnToolInputEnd(tool.Name(), toolCallID, args)
 						callback.OnToolError(tool.Name(), toolCallID, err)
 					}
-					return nil
+					return err
 				}
 				canonicalName := tool.Name()
 				// Check for no_cache flag in metadata
@@ -370,6 +551,40 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 							callback.OnToolInputEnd(tool.Name(), toolCallID, args)
 							callback.OnToolResult(tool.Name(), toolCallID, toolResult)
 						}
+						// A cached fatal error (e.g. a rejected approval cached by an
+						// earlier nonFatal wrap) must not be swallowed as a cached
+						// "error result": nonFatalTool would convert it to {ok:false}
+						// and the model would retry the vetoed tool. Unwind like the
+						// fresh-execution fatal path. (P4.2)
+						if err != nil && isFatalToolError(err) {
+							ae.recordTrace(hooks.TraceEvent{
+								Type:      traceToolError,
+								Iteration: traceIterationPtr(iteration),
+								Payload: traceToolErrorPayload{
+									ToolName:   tool.Name(),
+									ToolCallID: toolCallID,
+									Error:      err.Error(),
+									DurationMS: 0,
+								},
+							})
+							if callback != nil {
+								callback.OnToolError(tool.Name(), toolCallID, err)
+							}
+							return err
+						}
+						// context-trace: cached hit is a normal tool_result path
+						// (B2 — cache is the common case, must not be missed).
+						ae.recordTrace(hooks.TraceEvent{
+							Type:      traceToolResult,
+							Iteration: traceIterationPtr(iteration),
+							Payload: traceToolResultPayload{
+								ToolName:   tool.Name(),
+								ToolCallID: toolCallID,
+								Output:     toolResult,
+								DurationMS: 0,
+								Cached:     true,
+							},
+						})
 						return nil
 					}
 				}
@@ -390,6 +605,17 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 					toolResult, err = ae.executeToolWithTimeout(gctx, tool, args, toolTimeout)
 					if err == nil {
 						results[idx] = stepResult{result: toolResult, cached: false, duration: time.Since(start)}
+						ae.recordTrace(hooks.TraceEvent{
+							Type:      traceToolResult,
+							Iteration: traceIterationPtr(iteration),
+							Payload: traceToolResultPayload{
+								ToolName:   tool.Name(),
+								ToolCallID: toolCallID,
+								Output:     toolResult,
+								DurationMS: time.Since(start).Milliseconds(),
+								Cached:     false,
+							},
+						})
 						if !noCache {
 							ae.setCachedToolResult(canonicalName, args, toolResult, nil)
 						}
@@ -400,6 +626,29 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 						return nil
 					}
 					lastErr = err
+					// Fatal errors (schema, user veto, loop) are not retryable and
+					// must short-circuit the iteration: retrying the same input
+					// cannot succeed and running the remaining same-layer calls is
+					// wasted work. Cancelling the errgroup releases the sibling
+					// goroutines. (F3/P4.2)
+					if isFatalToolError(err) {
+						results[idx] = stepResult{err: err, cached: false, duration: time.Since(start)}
+						ae.recordTrace(hooks.TraceEvent{
+							Type:      traceToolError,
+							Iteration: traceIterationPtr(iteration),
+							Payload: traceToolErrorPayload{
+								ToolName:   tool.Name(),
+								ToolCallID: toolCallID,
+								Error:      err.Error(),
+								DurationMS: time.Since(start).Milliseconds(),
+							},
+						})
+						if callback != nil {
+							callback.OnToolError(tool.Name(), toolCallID, err)
+						}
+						hookRunner.AfterToolCall(tool.Name(), nil, err)
+						return err
+					}
 					if attempt < attempts-1 && errors.IsRetryable(err) {
 						timer := time.NewTimer(retryDelay)
 						defer timer.Stop()
@@ -413,6 +662,16 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 					}
 				}
 				results[idx] = stepResult{err: lastErr, cached: false, duration: time.Since(start)}
+				ae.recordTrace(hooks.TraceEvent{
+					Type:      traceToolError,
+					Iteration: traceIterationPtr(iteration),
+					Payload: traceToolErrorPayload{
+						ToolName:   tool.Name(),
+						ToolCallID: toolCallID,
+						Error:      lastErr.Error(),
+						DurationMS: time.Since(start).Milliseconds(),
+					},
+				})
 				if callback != nil {
 					callback.OnToolError(tool.Name(), toolCallID, lastErr)
 				}
@@ -490,6 +749,19 @@ func (ae *AgentEngine) saveToMemoryAndMaybeCompress(ctx context.Context, inputMa
 	if compressThreshold <= 0 && compactTurns <= 0 {
 		return
 	}
+
+	// context-trace: memory_save (evidence for eval accounting).
+	role := ""
+	if v, ok := inputMap["role"].(string); ok {
+		role = v
+	}
+	ae.recordTrace(hooks.TraceEvent{
+		Type: traceMemorySave,
+		Payload: traceMemorySavePayload{
+			InputRole:         role,
+			CompressTriggered: false,
+		},
+	})
 
 	byTurn := false
 	if compactTurns > 0 {
@@ -642,6 +914,9 @@ func (ae *AgentEngine) Execute(ctx context.Context, input types.AgentInput, prev
 		totalUsage.PromptTokens += result.Usage.PromptTokens
 		totalUsage.CompletionTokens += result.Usage.CompletionTokens
 		totalUsage.TotalTokens += result.Usage.TotalTokens
+		totalUsage.CachedTokens += result.Usage.CachedTokens
+		totalUsage.CacheCreationTokens += result.Usage.CacheCreationTokens
+		totalUsage.ReasoningTokens += result.Usage.ReasoningTokens
 		finalResult = result
 		finalResult.Usage = totalUsage
 		allIntermediateSteps = append(allIntermediateSteps, result.IntermediateSteps...)
@@ -706,6 +981,22 @@ func (ae *AgentEngine) Execute(ctx context.Context, input types.AgentInput, prev
 		}, memoryOutputMap(finalResult, allIntermediateSteps))
 	}
 
+	if finalResult != nil {
+		ae.recordTrace(hooks.TraceEvent{
+			Type: traceTurnEnd,
+			Payload: traceTurnEndPayload{
+				Output:     finalResult.Output,
+				Usage:      finalResult.Usage,
+				Iterations: iteration + 1,
+				StopCause:  finalResult.StopCause,
+				WallMS:     time.Since(startTime).Milliseconds(),
+			},
+		})
+		if t := ae.getTracer(); t != nil {
+			_ = t.Flush()
+		}
+	}
+
 	return finalResult, nil
 }
 
@@ -724,15 +1015,20 @@ func (ae *AgentEngine) ExecuteStream(ctx context.Context, input types.AgentInput
 		return nil, errors.EC_AGENT_BUSY
 	}
 
-	resultChan := make(chan types.StreamResult, types.DefaultChannelBuffer)
+	resultChan := make(chan types.StreamResult, ae.getStreamBufferSize())
 
-	// Set result sender for tool events
+	// Set result sender for tool events. It must honor the caller's turn ctx
+	// (NOT ae.ctx, which is the engine-lifetime ctx and is never cancelled by
+	// ExecuteStream): when the channel is full the send blocks so tool events
+	// are never silently dropped, and it unblocks when the turn is cancelled so
+	// a stuck consumer (stopped range / slow UI) cannot deadlock the engine.
+	turnCtx := ctx
 	ae.mu.Lock()
 	ae.resultSender = func(result types.StreamResult) {
 		select {
 		case resultChan <- result:
-		default:
-			// Channel full, skip event
+		case <-turnCtx.Done():
+		case <-ae.ctx.Done():
 		}
 	}
 	ae.mu.Unlock()
@@ -776,22 +1072,35 @@ func (ae *AgentEngine) ExecuteStream(ctx context.Context, input types.AgentInput
 		startTime := time.Now()
 		logger.LogExecution("ExecuteStream", 0, "Starting stream execution", slog.String("input", types.TruncateString(input.String(), 100)), slog.Int("previousRequests", len(previousRequests)))
 
+		// context-trace: turn_start before OnBeforeStart (review B1 — a hook
+		// failure must still leave a turn_start record).
+		ae.recordTrace(hooks.TraceEvent{
+			Type: traceTurnStart,
+			Payload: traceTurnStartPayload{
+				Input:           input,
+				Model:           ae.getModelName(),
+				SystemPromptLen: len(ae.getSystemMessage()),
+				MaxIterations:   ae.getMaxIterations(),
+				ToolNames:       ae.getToolNames(),
+			},
+		})
+
 		// Call OnBeforeStart hook
 		if err := hookRunner.BeforeStart(&input); err != nil {
 			logger.LogError("ExecuteStream", err, slog.String("phase", "on_before_start"))
-			resultChan <- types.StreamResult{
+			sendStreamResult(ctx, resultChan, types.StreamResult{
 				Type:  "error",
 				Error: errors.NewError(errors.EC_HOOK_FAILED.Code, "hook OnBeforeStart failed").Wrap(err),
-			}
+			})
 			return
 		}
 
 		if err := ae.waitRateLimit(ctx); err != nil {
 			logger.LogError("ExecuteStream", err, slog.String("phase", "rate_limit"))
-			resultChan <- types.StreamResult{
+			sendStreamResult(ctx, resultChan, types.StreamResult{
 				Type:  "error",
 				Error: errors.NewError(errors.EC_SYSTEM_OVERLOAD.Code, "rate limit exceeded").Wrap(err),
-			}
+			})
 			return
 		}
 
@@ -799,10 +1108,10 @@ func (ae *AgentEngine) ExecuteStream(ctx context.Context, input types.AgentInput
 			if r := recover(); r != nil {
 				logger.LogError("ExecuteStream", fmt.Errorf("panic recovered: %v", r))
 				hookRunner.OnError(fmt.Errorf("panic: %v", r))
-				resultChan <- types.StreamResult{
+				sendStreamResult(ctx, resultChan, types.StreamResult{
 					Type:  "error",
 					Error: errors.NewError(errors.EC_STREAM_PANIC.Code, "panic in stream execution").Wrap(fmt.Errorf("%v", r)),
-				}
+				})
 			}
 		}()
 
@@ -810,11 +1119,11 @@ func (ae *AgentEngine) ExecuteStream(ctx context.Context, input types.AgentInput
 		messages, err := ae.prepareMessages(ctx, input, previousRequests)
 		if err != nil {
 			logger.LogError("ExecuteStream", err, slog.String("phase", "prepare_messages"))
-			resultChan <- types.StreamResult{
+			sendStreamResult(ctx, resultChan, types.StreamResult{
 				Type:      "error",
 				Error:     errors.NewError(errors.EC_PREPARE_MESSAGES_FAILED.Code, "failed to prepare messages").Wrap(err),
 				StopCause: types.StopCauseFromChatError(err),
-			}
+			})
 			return
 		}
 
@@ -866,6 +1175,37 @@ func (ae *AgentEngine) prepareMessages(ctx context.Context, input types.AgentInp
 		})
 	}
 
+	// 压缩摘要：若 memory 实现了可选 GetSummary 接口，读出摘要字符串。
+	// 注入位置取决于 CompactionPrefix：
+	//   - 关闭（默认）：维持现状 —— 作为 system 消息插在 system 之后、history
+	//     之前（R3 语义：L1 记忆在前、摘要在后）。
+	//   - 开启：不再头部注入（避免双摘要，评审 R1），摘要作为独立 assistant
+	//     消息放在 history 尾部之后、previousRequests 之前 —— 不进 system
+	//     拼接，保 prompt-cache 段1/段2（B2）；参与三段式 trim 时若被折进
+	//     mid 摘要则不再单独注入。
+	hasSummary := false
+	var summaryStr string
+	if ae.memory != nil {
+		if gs, ok := ae.memory.(interface {
+			GetSummary(context.Context) (string, error)
+		}); ok {
+			if summary, sErr := gs.GetSummary(ctx); sErr == nil && summary != "" {
+				hasSummary = true
+				summaryStr = summary
+			}
+		}
+	}
+
+	compactionEnabled := config != nil && config.CompactionPrefix
+
+	// CompactionPrefix 关闭：头部 system 摘要注入，与现状逐字节一致。
+	if !compactionEnabled && hasSummary {
+		messages = append(messages, types.Message{
+			Role:    "system",
+			Content: "Previous conversation summary:\n" + summaryStr,
+		})
+	}
+
 	budgetCap := 0
 	budgetTrim := false
 	if config != nil {
@@ -884,13 +1224,48 @@ func (ae *AgentEngine) prepareMessages(ctx context.Context, input types.AgentInp
 			}
 		}
 	}
-	if budgetTrim {
+
+	summaryFolded := false
+	beforeCount := len(history)
+	trimmed := false
+	if compactionEnabled && budgetTrim {
+		// 三段式 trim：保头（缓存锚）+ 压缩中间（SummaryGenerator）+ 保尾。
+		// existingSummary 折进摘要，避免跨多次压缩的累积摘要丢失（R3）。
+		history, summaryFolded = trimHistoryToTokenBudgetCompaction(
+			history, budgetCap, config, ae.getCompactionOptions(), summaryStr, previousRequests, input)
+		trimmed = true
+	} else if budgetTrim {
 		history = trimHistoryToTokenBudget(history, budgetCap, config, previousRequests, input)
+		trimmed = true
 	}
 	history = repairLLMMessageToolOrdering(history)
+	if trimmed {
+		// context-trace: compaction event (evidence for eval accounting).
+		mode := "tail_only"
+		if compactionEnabled {
+			mode = "three_phase"
+		}
+		ae.recordTrace(hooks.TraceEvent{
+			Type: traceCompaction,
+			Payload: traceCompactionPayload{
+				BeforeCount:   beforeCount,
+				AfterCount:    len(history),
+				BudgetTokens:  budgetCap,
+				SummaryFolded: summaryFolded,
+				HasSummary:    hasSummary,
+				Mode:          mode,
+			},
+		})
+	}
 
 	if len(history) > 0 {
 		messages = append(messages, history...)
+	}
+
+	// CompactionPrefix 开启：摘要（assistant）追加在 history 之后、
+	// previousRequests 之前（未折进三段式 trim 时）。
+	if compactionEnabled && hasSummary && !summaryFolded {
+		messages = append(messages, summaryMessage(summaryStr))
 	}
 
 	if len(previousRequests) > 0 {
@@ -984,38 +1359,6 @@ func repairLLMMessageToolOrdering(history []types.Message) []types.Message {
 	return out
 }
 
-func trimHistoryToTokenBudget(history []types.Message, maxBudgetTokens int, config *types.AgentConfig, previousRequests []types.ToolCallData, input types.AgentInput) []types.Message {
-	if len(history) == 0 {
-		return history
-	}
-	fixed := 0
-	if config != nil && config.SystemMessage != "" {
-		fixed += types.RoughTokensForMessage(types.Message{Role: "system", Content: config.SystemMessage})
-	}
-	for _, m := range types.MessagesFromToolSteps("", previousRequests) {
-		fixed += types.RoughTokensForMessage(m)
-	}
-	fixed += types.RoughTokensForMessage(input.ToMessage("user"))
-	rem := maxBudgetTokens - fixed
-	if rem <= 0 {
-		return history[len(history)-1:]
-	}
-	used := 0
-	start := len(history)
-	for i := len(history) - 1; i >= 0; i-- {
-		c := types.RoughTokensForMessage(history[i])
-		if used+c > rem {
-			break
-		}
-		used += c
-		start = i
-	}
-	if start >= len(history) {
-		return history[len(history)-1:]
-	}
-	return history[start:]
-}
-
 // executeIteration executes a single iteration
 // Processes one round of LLM calling and tool execution, supporting caching and error handling
 // Parameters:
@@ -1045,11 +1388,61 @@ func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Me
 		return nil, false, errors.NewError(errors.EC_LLM_CALL_FAILED.Code, "LLM model provider is nil")
 	}
 
+	// context-trace: llm_call before the model call (messages captured here),
+	// llm_call_end after with usage/duration.
+	toolNames := make([]string, 0, len(tools))
+	for _, t := range tools {
+		toolNames = append(toolNames, t.Name())
+	}
+	estIn := 0
+	for _, m := range messages {
+		estIn += types.RoughTokensForMessage(m)
+	}
+	ae.recordTrace(hooks.TraceEvent{
+		Type:      traceLLMCall,
+		Iteration: traceIterationPtr(iteration),
+		Payload: traceLLMCallPayload{
+			Messages:    messages,
+			Tools:       toolNames,
+			EstTokensIn: estIn,
+		},
+	})
+
+	llmStart := time.Now()
 	response, err := ae.model.ChatWithTools(ctx, messages, tools)
 	if err != nil {
+		ae.recordTrace(hooks.TraceEvent{
+			Type:      traceLLMCallEnd,
+			Iteration: traceIterationPtr(iteration),
+			Payload: traceLLMCallEndPayload{
+				DurationMS: time.Since(llmStart).Milliseconds(),
+				HasError:   true,
+				Error:      err.Error(),
+			},
+		})
 		logger.LogError("executeIteration", err, slog.Int("iteration", iteration))
 		return nil, false, errors.NewError(errors.EC_CHAT_FAILED.Code, "failed to chat with tools").Wrap(err)
 	}
+
+	toolCallRequests := make([]types.ToolCallRequest, 0, len(response.ToolCalls))
+	for _, tc := range response.ToolCalls {
+		toolCallRequests = append(toolCallRequests, types.ToolCallRequest{
+			Tool:       tc.Function.Name,
+			ToolInput:  tc.Function.Arguments,
+			ToolCallID: tc.ID,
+			Type:       tc.Type,
+		})
+	}
+	ae.recordTrace(hooks.TraceEvent{
+		Type:      traceLLMCallEnd,
+		Iteration: traceIterationPtr(iteration),
+		Payload: traceLLMCallEndPayload{
+			Usage:      response.Usage,
+			DurationMS: time.Since(llmStart).Milliseconds(),
+			OutputLen:  len(response.Content),
+			ToolCalls:  toolCallRequests,
+		},
+	})
 
 	result := &types.AgentResult{
 		Output: response.Content,
@@ -1070,7 +1463,7 @@ func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Me
 		}
 
 		sortedToolCalls, _ := ae.prepareToolCalls(response.ToolCalls)
-		exists, results := ae.runToolCallsByLayer(ctx, sortedToolCalls, toolExecutionTimeout)
+		exists, results := ae.runToolCallsByLayerIter(ctx, sortedToolCalls, toolExecutionTimeout, iteration)
 		cfg := ae.getConfig()
 		writeDir := ""
 		if cfg != nil {
@@ -1087,6 +1480,11 @@ func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Me
 			slog.Int("tool_calls", len(toolCalls)),
 			slog.Duration("duration", time.Since(startTime)))
 
+		// question 工具哨兵 → 结束本轮（回答会作为新输入回流，question-reflow §2.1）。
+		if hasQuestionSentinel(intermediateSteps) {
+			return result, false, nil
+		}
+
 		return result, len(intermediateSteps) > 0, nil
 	}
 
@@ -1098,6 +1496,7 @@ func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Me
 func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialMessages []types.Message, resultChan chan<- types.StreamResult) {
 	messages := initialMessages
 	finalResult := &types.AgentResult{}
+	turnStartTime := time.Now()
 	maxIterations := ae.getMaxIterations()
 	estimatedToolCalls := maxIterations * 3
 	toolCalls := make([]types.ToolCallRequest, 0, estimatedToolCalls)
@@ -1126,11 +1525,11 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 		select {
 		case <-ctx.Done():
 			hookRunner.OnError(ctx.Err())
-			resultChan <- types.StreamResult{
+			sendStreamResult(ctx, resultChan, types.StreamResult{
 				Type:      "error",
 				Error:     ctx.Err(),
 				StopCause: types.StopCauseFromChatError(ctx.Err()),
-			}
+			})
 			return
 		default:
 		}
@@ -1143,11 +1542,11 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 		if err != nil {
 			logger.LogError("executeStreamWithIterations", err, slog.Int("iteration", iteration+1))
 			hookRunner.OnError(err)
-			resultChan <- types.StreamResult{
+			sendStreamResult(ctx, resultChan, types.StreamResult{
 				Type:      "error",
 				Error:     errors.NewError(errors.EC_STREAM_ITERATION_FAILED.Code, fmt.Sprintf("iteration %d failed", iteration+1)).Wrap(err),
 				StopCause: types.StopCauseFromChatError(err),
-			}
+			})
 			return
 		}
 		lastHasMore = hasMore
@@ -1156,6 +1555,8 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 		finalResult.Usage.PromptTokens += iterationResult.Usage.PromptTokens
 		finalResult.Usage.CompletionTokens += iterationResult.Usage.CompletionTokens
 		finalResult.Usage.TotalTokens += iterationResult.Usage.TotalTokens
+		finalResult.Usage.CachedTokens += iterationResult.Usage.CachedTokens
+		finalResult.Usage.CacheCreationTokens += iterationResult.Usage.CacheCreationTokens
 		toolCalls = append(toolCalls, iterationResult.ToolCalls...)
 		intermediateSteps = append(intermediateSteps, iterationResult.IntermediateSteps...)
 
@@ -1212,6 +1613,8 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 	ae.totalUsage.PromptTokens += finalResult.Usage.PromptTokens
 	ae.totalUsage.CompletionTokens += finalResult.Usage.CompletionTokens
 	ae.totalUsage.TotalTokens += finalResult.Usage.TotalTokens
+	ae.totalUsage.CachedTokens += finalResult.Usage.CachedTokens
+	ae.totalUsage.CacheCreationTokens += finalResult.Usage.CacheCreationTokens
 	ae.mu.Unlock()
 
 	logger.LogExecution("executeStreamWithIterations", 0, "Stream execution completed successfully",
@@ -1222,10 +1625,26 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 	// Call OnAfterEnd hook
 	hookRunner.AfterEnd(finalResult)
 
-	resultChan <- types.StreamResult{
+	// context-trace: turn_end after the end event; finalResult is in scope here
+	// (review B1 — the ExecuteStream defer has no finalResult).
+	ae.recordTrace(hooks.TraceEvent{
+		Type: traceTurnEnd,
+		Payload: traceTurnEndPayload{
+			Output:     finalResult.Output,
+			Usage:      finalResult.Usage,
+			Iterations: iteration + 1,
+			StopCause:  finalResult.StopCause,
+			WallMS:     time.Since(turnStartTime).Milliseconds(),
+		},
+	})
+	if t := ae.getTracer(); t != nil {
+		_ = t.Flush() // guarantee the completed turn is readable
+	}
+
+	sendStreamResult(ctx, resultChan, types.StreamResult{
 		Type:   "end",
 		Result: finalResult,
-	}
+	})
 }
 
 // executeStreamIteration executes a single streaming iteration
@@ -1263,14 +1682,72 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 	// Call OnBeforeLLMCall hook
 	hookRunner.BeforeLLMCall(messages)
 
+	// context-trace: llm_call before the stream call.
+	toolNames := make([]string, 0, len(tools))
+	for _, t := range tools {
+		toolNames = append(toolNames, t.Name())
+	}
+	estIn := 0
+	for _, m := range messages {
+		estIn += types.RoughTokensForMessage(m)
+	}
+	ae.recordTrace(hooks.TraceEvent{
+		Type:      traceLLMCall,
+		Iteration: traceIterationPtr(iteration),
+		Payload: traceLLMCallPayload{
+			Messages:    messages,
+			Tools:       toolNames,
+			EstTokensIn: estIn,
+		},
+	})
+
+	llmStart := time.Now()
 	stream, err := ae.model.ChatWithToolsStream(ctx, messages, tools)
 	if err != nil {
+		ae.recordTrace(hooks.TraceEvent{
+			Type:      traceLLMCallEnd,
+			Iteration: traceIterationPtr(iteration),
+			Payload: traceLLMCallEndPayload{
+				DurationMS: time.Since(llmStart).Milliseconds(),
+				HasError:   true,
+				Error:      err.Error(),
+			},
+		})
 		hookRunner.OnError(err)
 		return nil, false, errors.NewError(errors.EC_STREAM_CHAT_FAILED.Code, "failed to chat with tools stream").Wrap(err)
 	}
 
 	var outputBuilder strings.Builder
 	outputBuilder.Grow(2048)
+
+	// F6 second-stage chunk coalescing. Only "chunk" fragments are buffered;
+	// reasoning/tool_event/end/error bypass the buffer and are delivered
+	// immediately. A flush interval <0 disables merging (each fragment sent
+	// as-is, preserving the previous behavior).
+	flushInterval := chunkMergeFlushInterval
+	if c := ae.getConfig(); c != nil && c.ChunkMergeFlushInterval != 0 {
+		flushInterval = c.ChunkMergeFlushInterval
+	}
+	var merged *chunkMerger
+	if flushInterval >= 0 {
+		merged = newChunkMerger(flushInterval, func(r types.StreamResult) bool {
+			return sendStreamResult(ctx, resultChan, r)
+		})
+	}
+	// Flush buffered text on every exit path so no fragment is dropped. A
+	// cancelled turn makes the guarded send abort (returns false) — the caller
+	// then delivers the terminal error, so the fragment is simply not sent.
+	if merged != nil {
+		defer func() { merged.Flush() }()
+	}
+	// flushText flushes buffered text; reports false when the turn was
+	// cancelled mid-flush (the caller should abort the iteration).
+	flushText := func() bool {
+		if merged == nil {
+			return true
+		}
+		return merged.Flush()
+	}
 
 	for msg := range stream {
 		if msg.Usage != nil {
@@ -1279,14 +1756,25 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 		switch msg.Type {
 		case "chunk":
 			outputBuilder.WriteString(msg.Content)
-			resultChan <- types.StreamResult{
+			// Buffer the fragment into the merge window instead of sending one
+			// StreamResult per token; the merged chunk preserves order and the
+			// consumer sees far fewer events on high-throughput streams.
+			if merged != nil {
+				if !merged.Add(msg.Content) {
+					return nil, false, ctx.Err()
+				}
+			} else if !sendStreamResult(ctx, resultChan, types.StreamResult{
 				Type:    "chunk",
 				Content: msg.Content,
+			}) {
+				return nil, false, ctx.Err()
 			}
 		case "reasoning":
-			resultChan <- types.StreamResult{
+			if !sendStreamResult(ctx, resultChan, types.StreamResult{
 				Type:    "reasoning",
 				Content: msg.Reasoning,
+			}) {
+				return nil, false, ctx.Err()
 			}
 		case "tool_calls":
 			for _, tc := range msg.ToolCalls {
@@ -1304,6 +1792,29 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 		}
 	}
 
+	// context-trace: llm_call_end after the stream. Data source is result.Usage
+	// (the per-round usage accumulated in the loop); output_len is the builder's
+	// length (review R2).
+	streamToolCalls := make([]types.ToolCallRequest, 0, len(result.ToolCalls))
+	for _, tc := range result.ToolCalls {
+		streamToolCalls = append(streamToolCalls, types.ToolCallRequest{
+			Tool:       tc.Tool,
+			ToolInput:  tc.ToolInput,
+			ToolCallID: tc.ToolCallID,
+			Type:       tc.Type,
+		})
+	}
+	ae.recordTrace(hooks.TraceEvent{
+		Type:      traceLLMCallEnd,
+		Iteration: traceIterationPtr(iteration),
+		Payload: traceLLMCallEndPayload{
+			Usage:      result.Usage,
+			DurationMS: time.Since(llmStart).Milliseconds(),
+			OutputLen:  outputBuilder.Len(),
+			ToolCalls:  streamToolCalls,
+		},
+	})
+
 	// Call OnAfterLLMCall hook with the response
 	responseMsg := &types.Message{
 		Content: outputBuilder.String(),
@@ -1313,6 +1824,13 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 	result.Output = outputBuilder.String()
 
 	if len(result.ToolCalls) > 0 {
+		// Flush buffered text BEFORE tool execution: tool events are emitted by
+		// runToolCallsByLayer and must arrive strictly after the assistant text
+		// that precedes them. Without this, the deferred flush would deliver
+		// text chunks after tool_events, reordering the stream.
+		if !flushText() {
+			return nil, false, ctx.Err()
+		}
 		logger.LogExecution("executeStreamIteration", iteration, "Processing tool calls",
 			slog.Int("tool_count", len(result.ToolCalls)))
 
@@ -1335,7 +1853,7 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 		}
 
 		sortedToolCalls, _ := ae.prepareToolCalls(toolCallsForSorting)
-		existsStream, resultsStream := ae.runToolCallsByLayer(ctx, sortedToolCalls, toolExecutionTimeout)
+		existsStream, resultsStream := ae.runToolCallsByLayerIter(ctx, sortedToolCalls, toolExecutionTimeout, iteration)
 		cfg := ae.getConfig()
 		writeDir := ""
 		if cfg != nil {
@@ -1349,6 +1867,11 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 		logger.LogExecution("executeStreamIteration", iteration, "Tool execution completed",
 			slog.Int("executed_tools", len(streamToolCalls)),
 			slog.Int("intermediate_steps", len(intermediateSteps)))
+
+		// question 工具哨兵 → 结束本轮（回答会作为新输入回流，question-reflow §2.1）。
+		if hasQuestionSentinel(intermediateSteps) {
+			return result, false, nil
+		}
 
 		return result, len(intermediateSteps) > 0, nil
 	}

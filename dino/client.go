@@ -345,18 +345,27 @@ func (cs *ClientSession) forwardOutput() {
 type EventHandler func(event *Event)
 
 type HandlerBuilder struct {
-	session      *ClientSession
-	onMessage    func(content string)
-	onThinking   func(thinking string)
-	onToolCall   func(toolName string, input map[string]interface{})
-	onToolResult func(toolName string, output interface{})
-	onError      func(err string)
-	onDone       func()
-	onApproval   func(toolName string, approved bool)
+	session           *ClientSession
+	onMessage         func(content string)
+	onSubagentMessage func(content string) // S4/B2：Source=subagent 的幽灵消息，按需折叠
+	onThinking        func(thinking string)
+	onToolCall        func(toolName string, input map[string]interface{})
+	onToolResult      func(toolName string, output interface{})
+	onError           func(err string)
+	onDone            func()
+	onApproval        func(toolName string, approved bool)
+	onQuestion        func(question string, toolCallID string)
 }
 
 func (hb *HandlerBuilder) OnMessage(fn func(content string)) *HandlerBuilder {
 	hb.onMessage = fn
+	return hb
+}
+
+// OnSubagentMessage 注册子代理完成唤醒注入消息的回调（S4/B2）。不注册时这些
+// "幽灵消息"被折叠（默认不喷 UI）；注册后由调用方决定如何展示。
+func (hb *HandlerBuilder) OnSubagentMessage(fn func(content string)) *HandlerBuilder {
+	hb.onSubagentMessage = fn
 	return hb
 }
 
@@ -390,10 +399,25 @@ func (hb *HandlerBuilder) OnApproval(fn func(toolName string, approved bool)) *H
 	return hb
 }
 
+// OnQuestion 注册 question 工具提问回调（P2.1）。question 工具被调用且返回
+// SentinelQuestionResult 时触发，调用方可把问题展示给用户。
+func (hb *HandlerBuilder) OnQuestion(fn func(question string, toolCallID string)) *HandlerBuilder {
+	hb.onQuestion = fn
+	return hb
+}
+
 func (hb *HandlerBuilder) Build() string {
 	handler := func(event *Event) {
 		switch event.Type {
 		case EventTypeMessage:
+			// S4/B2（评审 O-3）：唤醒注入 turn 以 Source=subagent 标记，onMessage
+			// 消费方按需折叠（幽灵用户消息不喷 UI）。默认源（user）行为不变。
+			if event.Source == EventSourceSubagent {
+				if hb.onSubagentMessage != nil {
+					hb.onSubagentMessage(event.Content)
+				}
+				break
+			}
 			if hb.onMessage != nil {
 				hb.onMessage(event.Content)
 			}
@@ -420,6 +444,10 @@ func (hb *HandlerBuilder) Build() string {
 		case EventTypeApproval, EventTypeApproved:
 			if hb.onApproval != nil {
 				hb.onApproval(event.ToolName, event.Approved)
+			}
+		case EventTypeQuestion:
+			if hb.onQuestion != nil {
+				hb.onQuestion(event.Question, event.ToolCallID)
 			}
 		}
 	}

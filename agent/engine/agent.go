@@ -9,7 +9,6 @@ import (
 	"github.com/xichan96/cortex/agent/hooks"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/agent/utils"
-	"github.com/xichan96/cortex/pkg/logger"
 )
 
 // Agent agent engine interface
@@ -92,6 +91,17 @@ type AgentEngine struct {
 
 	// Hooks for lifecycle events
 	hooks hooks.Hooks
+
+	// compaction holds prefix-preserving compaction options (P3.1). nil means
+	// disabled. Injected via SetCompactionOptions by the constructor
+	// (dino/factory.go) so agent/engine never imports dino (B1).
+	compaction *CompactionOptions
+
+	// tracer is the trace handle (context-trace). nil = disabled (zero
+	// overhead: recording points are nil-guarded pointer compares). Injected by
+	// dino/factory via SetTracer; the interface lives in agent/hooks so
+	// agent/engine never imports dino (design §3.2④).
+	tracer hooks.Tracer
 }
 
 // ResultSender is a function type for sending stream results
@@ -123,10 +133,10 @@ func NewAgentEngine(model types.LLMProvider, config *types.AgentConfig) *AgentEn
 		rateLimiter:   utils.NewTokenBucket(10, 10),
 	}
 
-	// Propagate logger to model if supported
-	if provider, ok := model.(interface{ SetLogger(*logger.Logger) }); ok {
-		provider.SetLogger(logger.GetLogger())
-	}
+	// Propagate logger + prompt caching to the provider before the engine is
+	// shared. dino never calls SetConfig, so construction-time propagation is
+	// the only path that guarantees prompt caching is actually enabled (R4).
+	ae.propagateConfigLocked()
 
 	return ae
 }
@@ -155,6 +165,47 @@ func (ae *AgentEngine) MemoryTurnCounter() uint32 {
 
 func (ae *AgentEngine) RestoreMemoryTurnCounter(v uint32) {
 	ae.memoryCompletedTurns.Store(v)
+}
+
+// SetTracer injects (or clears, with nil) the trace handle. Called by the dino
+// layer at session construction; the engine stays ignorant of dino.
+func (ae *AgentEngine) SetTracer(t hooks.Tracer) {
+	ae.mu.Lock()
+	defer ae.mu.Unlock()
+	ae.tracer = t
+}
+
+// getTracer returns the current trace handle (nil when disabled).
+func (ae *AgentEngine) getTracer() hooks.Tracer {
+	ae.mu.RLock()
+	defer ae.mu.RUnlock()
+	return ae.tracer
+}
+
+func (ae *AgentEngine) getModelName() string {
+	ae.mu.RLock()
+	defer ae.mu.RUnlock()
+	if ae.model != nil {
+		return ae.model.GetModelName()
+	}
+	return ""
+}
+
+func (ae *AgentEngine) getSystemMessage() string {
+	if c := ae.getConfig(); c != nil {
+		return c.SystemMessage
+	}
+	return ""
+}
+
+func (ae *AgentEngine) getToolNames() []string {
+	ae.mu.RLock()
+	defer ae.mu.RUnlock()
+	names := make([]string, 0, len(ae.tools))
+	for _, t := range ae.tools {
+		names = append(names, t.Name())
+	}
+	return names
 }
 
 // Stop stops the agent engine

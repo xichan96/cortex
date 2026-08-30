@@ -4,13 +4,38 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
+	stderrors "errors"
 	"strings"
 
 	"github.com/xichan96/cortex/agent/types"
 	agentutils "github.com/xichan96/cortex/agent/utils"
+	"github.com/xichan96/cortex/pkg/errors"
 )
+
+// ApprovalRejectedError marks a user denial of a tool approval. It is an
+// unrecoverable user veto: feeding it back to the model as a recoverable
+// {ok:false} result would make the model retry the very tool the user just
+// refused, looping until the doom detector fires. Wrappers (nonFatalTool) must
+// pass it through as a real error so the engine surfaces the veto instead of
+// resuming the loop. (BLOCKER-2)
+//
+// Implements FatalToolErrorKind so the engine treats a veto like any other fatal
+// error: it surfaces in the observation AND short-circuits the errgroup instead
+// of merely being recorded. (P4.2)
+type ApprovalRejectedError struct {
+	ToolName string
+}
+
+func (e *ApprovalRejectedError) Error() string {
+	if e.ToolName != "" {
+		return fmt.Sprintf("tool '%s' was rejected by user", e.ToolName)
+	}
+	return "tool approval was rejected by user"
+}
+
+// FatalToolErrorKind implements agent/types.FatalToolErrorKind.
+func (e *ApprovalRejectedError) FatalToolErrorKind() {}
 
 // nonFatalTool prevents tool execution errors from terminating the agent loop.
 // Instead, it returns the error as part of the tool result so the LLM can see it and correct.
@@ -39,9 +64,21 @@ func (t *nonFatalTool) Execute(ctx context.Context, input map[string]interface{}
 		return nil, ctx.Err()
 	}
 
-	// For loop detected error, we want to return it as a real error to stop the loop
-	var loopErr *LoopDetectedError
-	if errors.As(err, &loopErr) {
+	// E7 (tools-codex-eval §7.3): errors that retrying the same input cannot
+	// fix are classified fatal even though they don't implement
+	// FatalToolErrorKind yet (MCP connection-state, auth credentials). This
+	// must run before the IsFatalToolError check so the classifier's fatal
+	// wrap is honored by it.
+	err = classifyToolError(err)
+
+	// Fatal errors cannot be fixed by retrying the same input, so pass them
+	// through as real errors instead of feeding them back to the model:
+	//   - FatalToolError (schema/input failures, F3);
+	//   - ApprovalRejectedError (user veto, BLOCKER-2);
+	//   - LoopDetectedError (same input already loops, F2/F3).
+	// types.IsFatalToolError unwraps %w chains, so wrapped variants are caught
+	// too. (P4.2)
+	if types.IsFatalToolError(err) {
 		return nil, err
 	}
 
@@ -51,6 +88,34 @@ func (t *nonFatalTool) Execute(ctx context.Context, input map[string]interface{}
 		"error": err.Error(),
 		"hint":  nonFatalToolHint(t.inner.Name(), err),
 	}, nil
+}
+
+// classifyToolError promotes non-retryable state errors to fatal (E7,
+// tools-codex-eval §7.3): retrying the same input cannot succeed when the
+// tool's connection state or credentials are broken, so feeding the error back
+// to the model only wastes tokens in an unwinnable retry loop.
+//
+// Covers: credential/auth failures (EC_TOOL_AUTH_ERROR) and MCP connection
+// state errors (server not connected, client init/start failed). Other MCP
+// 11xxx errors (e.g. EC_MCP_TOOL_RETURNED_ERROR) stay recoverable — the server
+// may be transiently failing and a retry can succeed.
+func classifyToolError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var ec *errors.Error
+	if !stderrors.As(err, &ec) {
+		return err
+	}
+	switch ec.Code {
+	case errors.EC_TOOL_AUTH_ERROR.Code,
+		errors.EC_MCP_NOT_CONNECTED.Code,
+		errors.EC_MCP_CLIENT_INIT_FAILED.Code,
+		errors.EC_MCP_CLIENT_START_FAILED.Code,
+		errors.EC_MCP_CLIENT_CREATE_FAILED.Code:
+		return &types.FatalToolError{Err: err, Reason: "non-retryable tool state error"}
+	}
+	return err
 }
 
 func nonFatalToolHint(name string, err error) string {
@@ -166,6 +231,11 @@ type LoopDetectedError struct {
 func (e *LoopDetectedError) Error() string {
 	return fmt.Sprintf("Loop detected with tool %s. %s", e.ToolName, e.Suggestion)
 }
+
+// FatalToolErrorKind implements agent/types.FatalToolErrorKind: a loop is not
+// recoverable by retrying the same call, so it must unwind the iteration rather
+// than being fed back to the model. (P4.2)
+func (e *LoopDetectedError) FatalToolErrorKind() {}
 
 type loopDetectingTool struct {
 	inner     types.Tool

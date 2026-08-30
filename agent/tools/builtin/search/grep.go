@@ -3,8 +3,11 @@ package search
 import (
 	"context"
 	_ "embed"
+	stderrors "errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/xichan96/cortex/agent/tools/builtin/fs"
 	"github.com/xichan96/cortex/agent/types"
@@ -86,23 +89,27 @@ func (t *GrepTool) Execute(ctx context.Context, input map[string]interface{}) (i
 	// But let's assume CWD is project root or we should use absolute path.
 	// I will use `absPath` returned by `SafePath` to be safe and consistent.
 
-	cmd := exec.CommandContext(ctx, "grep", "-r", pattern, absPath)
+	args := []string{"-r"}
+	// ignore 规则（P3，tools-codex-eval §8.5）：排除常见噪音目录，避免 vendor /
+	// node_modules / .git 输出污染。workspace 根若有 .gitignore，传给 --exclude-from。
+	args = append(args, excludeDirArgs()...)
+	if gf := gitignorePath(t.workspace); gf != "" {
+		args = append(args, "--exclude-from", gf)
+	}
+	args = append(args, pattern, absPath)
+	cmd := exec.CommandContext(ctx, "grep", args...)
 	// We don't set Dir, but we use absolute path.
 
 	result, err := cmd.CombinedOutput()
 	if err != nil {
-		// grep returns exit code 1 if no matches found. This is not necessarily an error for the tool execution.
-		// But combined output contains the result or error message.
-		// If exit code is 1 and output is empty, it means no matches.
-		// If exit code is 2, it means error.
-		// But err.Error() usually says "exit status 1".
-
-		// Dino implementation returns error if err != nil.
-		// I will do the same to be consistent with Dino.
-		// Wait, if grep finds nothing, it returns 1. Dino returns error?
-		// Yes: "return string(result), err".
-		// So the caller handles it? Or the agent sees it as failure?
-		// I'll keep it as is.
+		// grep exit semantics: 1 = no matches (normal outcome, NOT an error);
+		// anything else (e.g. 2 = usage/path error) is a real failure the model
+		// should be told about. Feeding "no match" back as an error misleads the
+		// model into thinking the search failed (P2/R6)。
+		var exitErr *exec.ExitError
+		if stderrors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return "", nil
+		}
 		return string(result), errors.EC_TOOL_EXECUTION_FAILED.Wrap(err)
 	}
 
@@ -115,4 +122,27 @@ func (t *GrepTool) Metadata() types.ToolMetadata {
 		IsFromToolkit:  false,
 		ToolType:       "search",
 	}
+}
+
+// excludeDirArgs 返回排除常见噪音目录的 grep 参数（P3 ignore 规则）。
+// 避免 vendor/node_modules/.git 等目录的搜索噪音。
+func excludeDirArgs() []string {
+	dirs := []string{".git", "node_modules", "vendor", ".next", "dist", "build", "target"}
+	args := make([]string, 0, len(dirs)*2)
+	for _, d := range dirs {
+		args = append(args, "--exclude-dir", d)
+	}
+	return args
+}
+
+// gitignorePath 返回 workspace 根 .gitignore 的绝对路径；不存在返回 ""。
+func gitignorePath(workspace string) string {
+	if workspace == "*" || workspace == "" {
+		return ""
+	}
+	p := filepath.Join(workspace, ".gitignore")
+	if _, err := os.Stat(p); err != nil {
+		return ""
+	}
+	return p
 }

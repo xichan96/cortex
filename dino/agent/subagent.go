@@ -2,26 +2,38 @@ package agent
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/xichan96/cortex/agent/engine"
+	"github.com/xichan96/cortex/agent/hooks"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/dino/permission"
 )
 
 const (
-	subagentMaxIterations   = 50
-	subagentExecuteTimeout  = 3 * time.Minute
-	subagentMaxFileBytes    = 32 << 10
+	subagentMaxIterations  = 50
+	subagentExecuteTimeout = 3 * time.Minute
+	subagentMaxFileBytes   = 32 << 10
 )
 
 type Result struct {
 	Output string
 	Error  error
 	Usage  types.Usage
+
+	// —— 结构化字段（设计 docs/design/subagent.md §6.1，方案 A）——
+	// Status 终态："completed" | "error" | "timeout" | "cancelled"。
+	Status string
+	// Duration 墙钟耗时（含队列等待）。
+	Duration time.Duration
+	// Iterations 实际迭代数。
+	Iterations int
+	// FilesChanged 子代理涉猎/改动的文件路径（tool_event 采集 + prompt 引导）。
+	FilesChanged []string
 }
 
 type Request struct {
@@ -47,6 +59,26 @@ type subagentImpl struct {
 	llmProvider        types.LLMProvider
 	tools              []types.Tool
 	maxHistoryMessages int
+	// parentRuleset 是父代理的权限约束（restrict-only，P2.4）。
+	// 非 nil 时子代理工具必须同时通过子代理自身权限与父权限的过滤——
+	// 「子代理永不比父代理更特权」。nil = 不约束（向后兼容旧行为）。
+	parentRuleset permission.Ruleset
+	// tracer 是父 session 的 trace 句柄（context-trace，评审 B3）。子代理每次
+	// Execute 新建 AgentEngine，须把 tracer 传给新引擎，否则子代理事件全丢。
+	tracer hooks.Tracer
+}
+
+// WithParentRuleset 注入父代理权限约束（restrict-only）。
+// 子代理 filterTools 时与自身权限取交集：仅同时被两边 allow 的工具可用。
+func (s *subagentImpl) WithParentRuleset(rs permission.Ruleset) *subagentImpl {
+	s.parentRuleset = rs
+	return s
+}
+
+// WithTracer 注入 trace 句柄（context-trace，评审 B3）。nil 允许（= 不 trace）。
+func (s *subagentImpl) WithTracer(t hooks.Tracer) *subagentImpl {
+	s.tracer = t
+	return s
 }
 
 func NewSubagent(info *Info, llmProvider types.LLMProvider, tools []types.Tool, maxHistoryMessages int) (Subagent, error) {
@@ -111,11 +143,32 @@ func buildAgentInput(req *Request) types.AgentInput {
 }
 
 func (s *subagentImpl) Execute(ctx context.Context, req *Request) (*Result, error) {
+	start := time.Now()
 	cfg := s.buildConfig(req)
 	filteredTools := s.filterTools()
 
 	eng := engine.NewAgentEngine(s.llmProvider, cfg)
+	// context-trace（评审 B3）：子代理新引擎须注入 tracer，否则子代理事件全丢。
+	if s.tracer != nil {
+		eng.SetTracer(s.tracer)
+	}
 	eng.AddTools(ctx, filteredTools)
+
+	// 迭代计数：ExecuteStream 只在 end 事件携带 AgentResult，用 OnAfterIteration 钩子
+	// 数真实迭代轮数（设计 §6.1 Iterations 来源）。
+	iterations := 0
+	eng.SetHooks(ctx, hooks.NewHooksFunc(
+		nil, nil, nil, nil,
+		nil, nil,
+		func(ctx context.Context, hc *hooks.HookContext, iteration int, result *types.AgentResult) error {
+			// OnAfterIteration 每轮都调（含无工具调用的收尾轮），取最大轮数。
+			if iteration+1 > iterations {
+				iterations = iteration + 1
+			}
+			return nil
+		},
+		nil, nil,
+	))
 
 	stream, err := eng.ExecuteStream(ctx, buildAgentInput(req), nil)
 	if err != nil {
@@ -124,13 +177,33 @@ func (s *subagentImpl) Execute(ctx context.Context, req *Request) (*Result, erro
 
 	var output strings.Builder
 	var lastUsage types.Usage
+	filesChanged := make([]string, 0)
+	seenFiles := make(map[string]struct{})
 	for result := range stream {
 		if result.Error != nil {
-			return &Result{Error: result.Error}, nil
+			// 错误态折叠（含 ctx deadline -> timeout / ctx cancel -> cancelled）。
+			status := statusFromStreamError(result.Error)
+			return &Result{
+				Error:        result.Error,
+				Status:       status,
+				Duration:     time.Since(start),
+				Iterations:   iterations,
+				FilesChanged: filesChanged,
+			}, nil
 		}
 		switch result.Type {
 		case "chunk":
 			output.WriteString(result.Content)
+		case "tool_event":
+			// 程序化 files_changed 采集：捕获 write_file/edit_file 工具输入里的 path 键。
+			if result.ToolEvent != nil {
+				if p := filesChangedFromToolEvent(result.ToolEvent); p != "" {
+					if _, ok := seenFiles[p]; !ok {
+						seenFiles[p] = struct{}{}
+						filesChanged = append(filesChanged, p)
+					}
+				}
+			}
 		}
 		if result.Result != nil {
 			output.Reset()
@@ -143,9 +216,52 @@ func (s *subagentImpl) Execute(ctx context.Context, req *Request) (*Result, erro
 	}
 
 	return &Result{
-		Output: output.String(),
-		Usage:  lastUsage,
+		Output:       output.String(),
+		Usage:        lastUsage,
+		Status:       DelegateStatusCompleted,
+		Duration:     time.Since(start),
+		Iterations:   iterations,
+		FilesChanged: filesChanged,
 	}, nil
+}
+
+// statusFromStreamError 根据 stream 错误类型判定终态：
+// ctx deadline 超时 -> "timeout"；ctx 主动取消 -> "cancelled"；其余 -> "error"。
+func statusFromStreamError(err error) string {
+	if err == nil {
+		return DelegateStatusError
+	}
+	switch {
+	case stderrors.Is(err, context.DeadlineExceeded):
+		return DelegateStatusTimeout
+	case stderrors.Is(err, context.Canceled):
+		return DelegateStatusCancelled
+	}
+	return DelegateStatusError
+}
+
+// filesChangedFromToolEvent 从工具事件里提取文件路径：
+// write_file/edit_file 用 "path" 键（fs/write.go:37、fs/edit.go:36）。
+// 工具事件分 tool_call / tool_input_start / tool_input_end 三个阶段，只取一次即可，
+// 用 tool_input_start 采集避免与结果阶段重复；bash 的 git 操作无 path 键，属已知残留
+// （评审 R3：bash git 场景 files_changed 会漏，S5 用 prompt 引导兜底）。
+func filesChangedFromToolEvent(ev *types.ToolEvent) string {
+	if ev == nil || ev.Input == nil {
+		return ""
+	}
+	switch ev.ToolName {
+	case "write_file", "edit_file":
+	default:
+		return ""
+	}
+	if ev.Event != types.StreamEventToolInputStart {
+		return ""
+	}
+	p, ok := ev.Input["path"].(string)
+	if !ok || p == "" {
+		return ""
+	}
+	return p
 }
 
 func (s *subagentImpl) buildConfig(req *Request) *types.AgentConfig {
@@ -175,13 +291,24 @@ func (s *subagentImpl) buildConfig(req *Request) *types.AgentConfig {
 
 func (s *subagentImpl) filterTools() []types.Tool {
 	evaluator := permission.NewEvaluator(s.info.Permission)
+	var parentEvaluator *permission.Evaluator
+	if len(s.parentRuleset) > 0 {
+		parentEvaluator = permission.NewEvaluator(s.parentRuleset)
+	}
 	var filtered []types.Tool
 
 	for _, tool := range s.tools {
 		action := evaluator.Evaluate(tool.Name(), nil)
-		if action == permission.ActionAllow {
-			filtered = append(filtered, tool)
+		if action != permission.ActionAllow {
+			continue
 		}
+		// restrict-only：子代理权限必须 ⊆ 父权限。父权限不允许的工具子代理不可用。
+		if parentEvaluator != nil {
+			if pa := parentEvaluator.Evaluate(tool.Name(), nil); pa != permission.ActionAllow {
+				continue
+			}
+		}
+		filtered = append(filtered, tool)
 	}
 
 	return filtered
@@ -191,10 +318,12 @@ func (s *subagentImpl) Close() {
 }
 
 type Manager struct {
-	mu                   sync.RWMutex
-	subagents            map[string]Subagent
-	factory              Factory
-	subagentMaxHistory   int
+	mu                 sync.RWMutex
+	subagents          map[string]Subagent
+	factory            Factory
+	subagentMaxHistory int
+	// parentRuleset 父代理权限约束（restrict-only，P2.4）。
+	parentRuleset permission.Ruleset
 }
 
 type Factory interface {
@@ -213,6 +342,14 @@ func NewManager(factory Factory, maxHistoryMessages int) *Manager {
 		factory:            factory,
 		subagentMaxHistory: mh,
 	}
+}
+
+// SetParentRuleset 注入父代理权限约束（restrict-only，P2.4）。
+// 之后 GetSubagent 构造的子代理工具按「子权限 ∩ 父权限」过滤。
+func (m *Manager) SetParentRuleset(rs permission.Ruleset) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.parentRuleset = rs
 }
 
 func (m *Manager) GetSubagent(name string) (Subagent, error) {
@@ -234,6 +371,9 @@ func (m *Manager) GetSubagent(name string) (Subagent, error) {
 	sa, err := NewSubagent(info, m.factory.GetLLMProvider(), m.factory.GetTools(), m.subagentMaxHistory)
 	if err != nil {
 		return nil, err
+	}
+	if impl, ok := sa.(*subagentImpl); ok && len(m.parentRuleset) > 0 {
+		impl.WithParentRuleset(m.parentRuleset)
 	}
 
 	m.subagents[name] = sa

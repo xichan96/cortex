@@ -2,7 +2,7 @@ package chatstore
 
 import (
 	"context"
-	"strconv"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -10,6 +10,7 @@ import (
 
 	agentproviders "github.com/xichan96/cortex/agent/providers"
 	agenttypes "github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/pkg/logger"
 )
 
 type Message = agenttypes.Message
@@ -46,6 +47,7 @@ type Config struct {
 	CompressionRatio        float32
 	PersistDirectory        string
 	SQLiteFile              string
+	MaxRecentTailTokens     int // 尾部 user 原文 token 预算；<=0 用 MaxRecentTailTokens 默认
 }
 
 func DefaultConfig() *Config {
@@ -93,7 +95,7 @@ func (m *InMemory) AddMessage(ctx context.Context, msg Message) error {
 
 	m.SimpleMemoryProvider.AddMessage(ctx, msg)
 	m.stats.MessageCount++
-	m.stats.TotalTokens += estimateTokens(msg.Content)
+	m.stats.TotalTokens += EstimateTokens(msg.Content)
 
 	if m.config.EnableMemoryCompress && m.stats.MessageCount > m.config.MemoryCompressThreshold {
 		if m.comparing.CompareAndSwap(false, true) {
@@ -246,6 +248,11 @@ type Hybrid struct {
 	llmProvider LLMProvider
 	config      *Config
 	compressing atomic.Bool
+	// injectSummaryTail 摘要注入模式（评审 B1 单一注入源）。
+	// true = Hybrid 活跃：摘要只由 GetMessages 尾部注入，engine 头部 GetSummary 注入被
+	// memoryAdapter 禁用；false = Hybrid 不活跃：GetMessages 不追加尾部摘要，engine 头部
+	// 注入照常（非 Hybrid 底层 provider 场景）。
+	injectSummaryTail bool
 }
 
 func NewHybrid(sessionID string, provider Provider, llmProvider LLMProvider, config *Config) *Hybrid {
@@ -254,10 +261,11 @@ func NewHybrid(sessionID string, provider Provider, llmProvider LLMProvider, con
 	}
 
 	return &Hybrid{
-		provider:    provider,
-		sessionID:   sessionID,
-		llmProvider: llmProvider,
-		config:      config,
+		provider:          provider,
+		sessionID:         sessionID,
+		llmProvider:       llmProvider,
+		config:            config,
+		injectSummaryTail: true,
 	}
 }
 
@@ -279,10 +287,27 @@ func (m *Hybrid) AddMessage(ctx context.Context, msg Message) error {
 	return nil
 }
 
+// TailSummaryEnabled 返回当前摘要注入模式：true = 摘要由 GetMessages 尾部注入
+// （engine 头部 GetSummary 注入应被禁用，单一注入源）；false = 尾部注入关闭。
+func (m *Hybrid) TailSummaryEnabled() bool {
+	return m.injectSummaryTail
+}
+
+// SetSummaryForTest 测试辅助：直接写入 Hybrid.summary。
+func (m *Hybrid) SetSummaryForTest(s string) {
+	m.summaryMu.Lock()
+	defer m.summaryMu.Unlock()
+	m.summary = s
+}
+
 func (m *Hybrid) GetMessages(ctx context.Context, limit int) ([]Message, error) {
 	messages, err := m.provider.GetMessages(ctx, limit)
 	if err != nil {
 		return nil, err
+	}
+
+	if !m.injectSummaryTail {
+		return messages, nil
 	}
 
 	m.summaryMu.RLock()
@@ -290,11 +315,10 @@ func (m *Hybrid) GetMessages(ctx context.Context, limit int) ([]Message, error) 
 	m.summaryMu.RUnlock()
 
 	if summary != "" {
-		summaryMsg := Message{
-			Role:    "system",
-			Content: summary,
-		}
-		messages = append([]Message{summaryMsg}, messages...)
+		messages = append(messages, Message{
+			Role:    "user",
+			Content: SummaryMarker + "\n" + summary,
+		})
 	}
 
 	return messages, nil
@@ -316,9 +340,14 @@ func (m *Hybrid) Compress(ctx context.Context) error {
 		return nil
 	}
 
-	recentCount := m.config.KeepRecentCount
-	olderMessages := messages[:len(messages)-recentCount]
+	// A) 尾部原文保留：最近 KeepRecentCount 条 + 按 token 预算吸收的 user 原文。
+	tailBudget := m.config.MaxRecentTailTokens
+	if tailBudget <= 0 {
+		tailBudget = MaxRecentTailTokens
+	}
+	tailUser, older := splitTailUserMessages(messages, m.config.KeepRecentCount, tailBudget)
 
+	// B) 前次摘要前置到 older，送 LLM 生成新摘要。
 	m.summaryMu.RLock()
 	existingSummary := m.summary
 	m.summaryMu.RUnlock()
@@ -328,30 +357,49 @@ func (m *Hybrid) Compress(ctx context.Context) error {
 			Role:    "system",
 			Content: "Previous Summary:\n" + existingSummary,
 		}
-		olderMessages = append([]Message{summaryMsg}, olderMessages...)
+		older = append([]Message{summaryMsg}, older...)
 	}
 
+	// C) LLM 摘要 + 确定性 fallback（DeterministicCompact 替换 generateBasicSummary）。
 	var summary string
+	usedLLM := false
 	if m.llmProvider != nil {
-		summary, err = m.llmProvider.GenerateSummary(ctx, olderMessages)
-		if err != nil {
-			summary = generateBasicSummary(olderMessages)
+		s, sErr := m.llmProvider.GenerateSummary(ctx, older)
+		if sErr != nil {
+			logger.Warn("[Hybrid] LLM summary failed, using deterministic fallback",
+				slog.String("error", sErr.Error()))
+			summary = DeterministicCompact(existingSummary, older, DefaultCompactConfig())
+		} else if strings.TrimSpace(s) == "" {
+			logger.Warn("[Hybrid] LLM summary empty, using deterministic fallback")
+			summary = DeterministicCompact(existingSummary, older, DefaultCompactConfig())
+		} else {
+			summary = strings.TrimSpace(s)
+			usedLLM = true
 		}
 	} else {
-		summary = generateBasicSummary(olderMessages)
+		summary = DeterministicCompact(existingSummary, older, DefaultCompactConfig())
 	}
 
 	m.summaryMu.Lock()
 	m.summary = summary
 	m.summaryMu.Unlock()
 
+	// R5：SummaryLength 观测。压缩后的摘要长度是 D6b（预算裁剪是否裁掉摘要）与
+	// 摘要质量的可观测数据点——GetStats 无生产读点，压缩日志是唯一的观察通道。
+	logger.Info("[Hybrid] Memory compressed",
+		slog.String("session_id", m.sessionID),
+		slog.Int("summary_length", len(summary)),
+		slog.Int("older_messages", len(older)),
+		slog.Int("tail_messages", len(tailUser)),
+		slog.Bool("llm_summary", usedLLM))
+
+	// D) 落盘：清空 → 回写 tailUser（尾部原文）；摘要存 m.summary（GetMessages 尾部注入）。
 	err = m.provider.Clear(ctx)
 	if err != nil {
 		return err
 	}
 
-	recentMessages := messages[len(messages)-recentCount:]
-	for _, msg := range recentMessages {
+	for _, msg := range tailUser {
 		_ = m.provider.AddMessage(ctx, msg)
 	}
 
@@ -388,35 +436,3 @@ func (m *Hybrid) autoCompress(ctx context.Context) {
 	_ = m.Compress(ctx)
 }
 
-func generateBasicSummary(messages []Message) string {
-	if len(messages) == 0 {
-		return ""
-	}
-
-	var contentBuilder strings.Builder
-	for _, msg := range messages {
-		contentBuilder.WriteString(msg.Role)
-		contentBuilder.WriteString(": ")
-		contentBuilder.WriteString(msg.Content)
-		contentBuilder.WriteString("\n")
-	}
-
-	summary := "Summary of previous conversation:\n"
-	summary += "User and assistant exchanged " + strconv.Itoa(len(messages)) + " messages.\n"
-	summary += "Topics discussed include the user's requests and assistant's responses.\n"
-
-	return summary
-}
-
-func estimateTokens(text string) int {
-	asciiCount := 0
-	nonAsciiCount := 0
-	for _, r := range text {
-		if r < 128 {
-			asciiCount++
-		} else {
-			nonAsciiCount++
-		}
-	}
-	return (asciiCount / 4) + (nonAsciiCount * 2)
-}

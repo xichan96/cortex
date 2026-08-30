@@ -2,13 +2,130 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"testing"
 
 	"github.com/xichan96/cortex/agent/types"
 	agentutils "github.com/xichan96/cortex/agent/utils"
+	pkgerrors "github.com/xichan96/cortex/pkg/errors"
 )
+
+// errTool is a MockTool variant whose Execute always returns the configured error.
+type errTool struct {
+	MockTool
+	err error
+}
+
+func (e *errTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	return nil, e.err
+}
+
+// TestNonFatal_FatalPassthrough verifies every fatal error class (FatalToolError,
+// ApprovalRejectedError, LoopDetectedError) is passed through as a real error
+// instead of being fed back to the model as {ok:false}. (F3/P4.2)
+func TestNonFatal_FatalPassthrough(t *testing.T) {
+	fatals := []error{
+		&types.FatalToolError{Err: errors.New("bad input"), Reason: "validation"},
+		&ApprovalRejectedError{ToolName: "bash"},
+		&LoopDetectedError{ToolName: "bash", Suggestion: "change strategy"},
+		// A fatal error buried under a %w wrap must still be caught.
+		fmt.Errorf("outer: %w", &types.FatalToolError{Reason: "wrapped"}),
+	}
+	for _, fe := range fatals {
+		tool := WrapNonFatalTool(&errTool{MockTool: MockTool{name: "t"}, err: fe})
+		res, err := tool.Execute(context.Background(), nil)
+		if err == nil {
+			t.Fatalf("fatal error %v should be passed through, got result %v", fe, res)
+		}
+		if !types.IsFatalToolError(err) {
+			t.Fatalf("expected passthrough to preserve fatal classification for %v, got %T", fe, err)
+		}
+	}
+}
+
+// TestNonFatal_RecoverableFeedsBack verifies recoverable errors are converted to
+// {ok:false} results fed back to the model.
+func TestNonFatal_RecoverableFeedsBack(t *testing.T) {
+	recoverable := []error{
+		errors.New("MCP call failed: connection refused"),
+		errors.New("tool execution timeout"),
+		errors.New("file not found"),
+	}
+	for _, e := range recoverable {
+		tool := WrapNonFatalTool(&errTool{MockTool: MockTool{name: "t"}, err: e})
+		res, err := tool.Execute(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("recoverable error %v should feed back as result, got err %v", e, err)
+		}
+		m, ok := res.(map[string]interface{})
+		if !ok || m["ok"] != false {
+			t.Fatalf("expected {ok:false} result for %v, got %v", e, res)
+		}
+	}
+}
+
+// TestNonFatal_CtxCancelPassesThrough verifies a cancelled ctx still surfaces as
+// a real error (not swallowed into {ok:false}).
+func TestNonFatal_CtxCancelPassesThrough(t *testing.T) {
+	tool := WrapNonFatalTool(&errTool{MockTool: MockTool{name: "t"}, err: errors.New("boom")})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := tool.Execute(ctx, nil)
+	if err == nil {
+		t.Fatal("cancelled ctx should surface as a real error")
+	}
+}
+
+// TestClassifyToolError_E7 verifies connection-state / credential errors are
+// promoted to fatal (E7, tools-codex-eval §7.3), while other MCP errors stay
+// recoverable.
+func TestClassifyToolError_E7(t *testing.T) {
+	fatalCodes := []int{
+		pkgerrors.EC_TOOL_AUTH_ERROR.Code,
+		pkgerrors.EC_MCP_NOT_CONNECTED.Code,
+		pkgerrors.EC_MCP_CLIENT_INIT_FAILED.Code,
+		pkgerrors.EC_MCP_CLIENT_START_FAILED.Code,
+		pkgerrors.EC_MCP_CLIENT_CREATE_FAILED.Code,
+	}
+	for _, code := range fatalCodes {
+		err := pkgerrors.NewError(code, "state error")
+		if classified := classifyToolError(err); !types.IsFatalToolError(classified) {
+			t.Errorf("code %d should be fatal, got recoverable: %v", code, classified)
+		}
+	}
+
+	// Other MCP 11xxx errors (transient server failure) stay recoverable.
+	recoverable := []error{
+		pkgerrors.NewError(pkgerrors.EC_MCP_TOOL_RETURNED_ERROR.Code, "server hiccup"),
+		pkgerrors.NewError(pkgerrors.EC_MCP_CALL_TOOL_FAILED.Code, "call failed"),
+	}
+	for _, err := range recoverable {
+		if classified := classifyToolError(err); types.IsFatalToolError(classified) {
+			t.Errorf("%v should stay recoverable, got fatal", err)
+		}
+	}
+
+	// Non-error-code errors are untouched.
+	if classified := classifyToolError(errors.New("plain")); classified.Error() != "plain" {
+		t.Errorf("plain error should pass through unchanged")
+	}
+}
+
+// TestNonFatal_E7ConnectionStatePassthrough verifies MCP connection-state errors
+// flow through nonFatalTool as real (fatal) errors, not {ok:false} feed-back.
+func TestNonFatal_E7ConnectionStatePassthrough(t *testing.T) {
+	connErr := pkgerrors.NewError(pkgerrors.EC_MCP_NOT_CONNECTED.Code, "not connected")
+	tool := WrapNonFatalTool(&errTool{MockTool: MockTool{name: "mcp_tool"}, err: connErr})
+	_, err := tool.Execute(context.Background(), nil)
+	if err == nil {
+		t.Fatal("MCP connection-state error should surface as a real error, not feed back")
+	}
+	if !types.IsFatalToolError(err) {
+		t.Fatalf("MCP connection-state error should be fatal, got %T", err)
+	}
+}
 
 // MockTool implements types.Tool for testing
 type MockTool struct {

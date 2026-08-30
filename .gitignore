@@ -1,0 +1,6 @@
+# dino session SQLite artifacts (test/runtime)
+dino/dino_sessions/
+dino/session/dino_sessions/
+
+# Claude Code local config
+.claude/

@@ -3,6 +3,7 @@ package dino
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -152,6 +153,70 @@ func TestNewDinoFactory(t *testing.T) {
 
 	if factory == nil {
 		t.Fatal("Factory should not be nil")
+	}
+}
+
+func TestDinoFactory_LongTermMemEnabled(t *testing.T) {
+	cfg := getTestConfig()
+	cfg.Memory.PersistEnabled = true
+	cfg.Memory.PersistDirectory = t.TempDir() // 避免污染仓库 ./dino_sessions
+	cfg.LongTermMemory.Enabled = true
+	cfg.LongTermMemory.IngestInterval = time.Minute
+	factory, err := NewDinoFactory(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create factory: %v", err)
+	}
+	df, ok := factory.(*dinoFactory)
+	if !ok {
+		t.Fatal("expected *dinoFactory")
+	}
+	if df.longTermMem == nil {
+		t.Fatal("longTermMem should be constructed when LongTermMemory.Enabled")
+	}
+	if err := factory.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown with long-term memory: %v", err)
+	}
+	if df.longTermMem != nil {
+		t.Fatal("longTermMem should be nil after Shutdown")
+	}
+}
+
+func TestDinoFactory_LongTermMemExposesMemoryTool(t *testing.T) {
+	cfg := getTestConfig()
+	cfg.Memory.PersistEnabled = true
+	cfg.Memory.PersistDirectory = t.TempDir()
+	cfg.LongTermMemory.Enabled = true
+	cfg.LongTermMemory.IngestInterval = time.Minute
+	factory, err := NewDinoFactory(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create factory: %v", err)
+	}
+	defer factory.Shutdown(context.Background())
+
+	sess, err := factory.CreateSession(context.Background(), "ltm-session")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if sess == nil {
+		t.Fatal("nil session")
+	}
+	// memory 工具在 mem 包单测已覆盖（MemoryTools 构造 + action 拆分）；
+	// 这里验证 LTM 开启时 CreateSession 能正常跑通（L1 prompt 注入 + 工具装配不 panic）。
+}
+
+func TestDinoFactory_LongTermMemDisabledByDefault(t *testing.T) {
+	cfg := getTestConfig()
+	factory, err := NewDinoFactory(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create factory: %v", err)
+	}
+	defer factory.Shutdown(context.Background())
+	df, ok := factory.(*dinoFactory)
+	if !ok {
+		t.Fatal("expected *dinoFactory")
+	}
+	if df.longTermMem != nil {
+		t.Fatal("longTermMem should be nil when disabled (default off)")
 	}
 }
 
@@ -1334,6 +1399,89 @@ func TestStreamEvent(t *testing.T) {
 	if event.Content != "test content" {
 		t.Errorf("Expected 'test content', got '%s'", event.Content)
 	}
+}
+
+// TestPromptCacheOptions_Mapping verifies dino PromptCachingConfig maps onto
+// types.PromptCacheOptions starting from provider defaults (Step 3).
+func TestPromptCacheOptions_Mapping(t *testing.T) {
+	cfg := DefaultConfig()
+	opts := cfg.PromptCacheOptions()
+	if !opts.Enabled {
+		t.Error("default should be enabled")
+	}
+	if opts.HistoryEveryN != types.DefaultHistoryBreakpointBudget {
+		t.Errorf("default HistoryEveryN = %d, want %d", opts.HistoryEveryN, types.DefaultHistoryBreakpointBudget)
+	}
+	if opts.MinCacheTokens != 4096 {
+		t.Errorf("default MinCacheTokens = %d, want 4096 (R2)", opts.MinCacheTokens)
+	}
+
+	// Partial override: only disable.
+	cfg.PromptCaching.Enabled = false
+	opts = cfg.PromptCacheOptions()
+	if opts.Enabled {
+		t.Error("disabled should propagate")
+	}
+	if opts.SystemBreakpoint != true || opts.ToolsBreakpoint != true || opts.HistoryEveryN != 2 {
+		t.Errorf("unset sub-fields should keep defaults, got %+v", opts)
+	}
+
+	// Full override.
+	historyN := 1
+	minTok := 2048
+	cfg2 := DefaultConfig()
+	cfg2.PromptCaching.HistoryEveryN = &historyN
+	cfg2.PromptCaching.MinCacheTokens = &minTok
+	sysOff := false
+	cfg2.PromptCaching.SystemBreakpoint = &sysOff
+	opts2 := cfg2.PromptCacheOptions()
+	if opts2.HistoryEveryN != 1 || opts2.MinCacheTokens != 2048 || opts2.SystemBreakpoint {
+		t.Errorf("sub-field overrides not applied: %+v", opts2)
+	}
+}
+
+// TestFactoryConfiguresPromptCacheProvider (Step 3) verifies the factory
+// applies dino prompt-cache config to a provider that implements
+// types.PromptCacheConfigurer.
+func TestFactoryConfiguresPromptCacheProvider(t *testing.T) {
+	cfg := getTestConfig()
+	cfg.Provider.Type = "mock"
+
+	var configured types.PromptCacheOptions
+	RegisterLLMProvider("pc-test", func(cfg *Config) (types.LLMProvider, error) {
+		return &pcRecorderProvider{
+			LLMProvider: newMockLLMProvider([]string{"x"}),
+			apply: func(opts types.PromptCacheOptions) {
+				configured = opts
+			},
+		}, nil
+	})
+	cfg.Provider.Type = "pc-test"
+
+	_, err := NewDinoFactory(cfg)
+	if err != nil {
+		t.Fatalf("NewDinoFactory: %v", err)
+	}
+	if !configured.Enabled {
+		t.Error("factory should configure prompt cache enabled by default")
+	}
+}
+
+type pcRecorderProvider struct {
+	types.LLMProvider
+	apply func(types.PromptCacheOptions)
+	opts  types.PromptCacheOptions
+}
+
+func (p *pcRecorderProvider) SetPromptCacheOptions(opts types.PromptCacheOptions) {
+	p.opts = opts
+	if p.apply != nil {
+		p.apply(opts)
+	}
+}
+
+func (p *pcRecorderProvider) PromptCacheOptions() types.PromptCacheOptions {
+	return p.opts
 }
 
 func TestConfig_Default(t *testing.T) {
@@ -2530,9 +2678,10 @@ func TestQueue_EnqueueBatch(t *testing.T) {
 
 func TestQueue_EnqueueFull(t *testing.T) {
 	cfg := &queue.Config{
-		MaxSize:    2,
-		MaxPending: 10,
-		Timeout:    5 * time.Minute,
+		MaxSize:          2,
+		MaxPending:       10,
+		Timeout:          5 * time.Minute,
+		DisableProcessor: true, // 禁用 run() 消费协程，稳定验证 MaxSize 满语义（避免 flaky）
 	}
 
 	q := queue.New(cfg)
@@ -3313,5 +3462,226 @@ func TestLoopResult(t *testing.T) {
 
 	if result.Similarity != 0.9 {
 		t.Errorf("Expected 0.9, got %f", result.Similarity)
+	}
+}
+
+// recordingApprovalSender records approval requests so tests can correlate
+// requestIDs.
+type recordingApprovalSender struct {
+	mu       sync.Mutex
+	requests []struct {
+		sessionID string
+		requestID string
+		toolName  string
+		args      string
+	}
+}
+
+func (s *recordingApprovalSender) SendToolApprovalRequest(sessionID, requestID, toolName, arguments string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.requests = append(s.requests, struct {
+		sessionID string
+		requestID string
+		toolName  string
+		args      string
+	}{sessionID, requestID, toolName, arguments})
+}
+
+func (s *recordingApprovalSender) SendToolApprovalResponse(sessionID, requestID, toolName string, approved bool) {}
+
+func (s *recordingApprovalSender) firstRequestID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.requests) == 0 {
+		return ""
+	}
+	return s.requests[0].requestID
+}
+
+func TestRespond_UnknownID(t *testing.T) {
+	store := NewApprovalStore(5 * time.Second)
+	if got := store.Respond("does-not-exist", true); got {
+		t.Error("expected false for unknown request id")
+	}
+}
+
+func TestRequestApproval_ThenRespond(t *testing.T) {
+	store := NewApprovalStore(5 * time.Second)
+	sender := &recordingApprovalSender{}
+	store.SetSender(sender)
+
+	done := make(chan bool, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		approved, err := store.RequestApproval(context.Background(), "sess", "bash", `{"command":"ls"}`)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		done <- approved
+	}()
+
+	// Wait for the request to register.
+	var requestID string
+	deadline := time.Now().Add(2 * time.Second)
+	for requestID == "" {
+		requestID = sender.firstRequestID()
+		if requestID == "" {
+			if time.Now().After(deadline) {
+				t.Fatal("approval request was not registered")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+
+	if !store.Respond(requestID, true) {
+		t.Fatal("Respond should deliver")
+	}
+	select {
+	case approved := <-done:
+		if !approved {
+			t.Error("expected approved == true")
+		}
+	case err := <-errCh:
+		t.Fatalf("RequestApproval errored: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("RequestApproval did not return after Respond")
+	}
+}
+
+func TestRespond_BlocksThenSucceeds(t *testing.T) {
+	store := NewApprovalStore(5 * time.Second)
+
+	store.mu.Lock()
+	store.pending["manual-id"] = make(chan bool, 1)
+	// Pre-fill the channel: a previous response that has not been consumed
+	// (RequestApproval's waiter is slow / not yet in its select). Channel full.
+	store.pending["manual-id"] <- true
+	store.mu.Unlock()
+
+	// Second response: channel full, no consumer. Must block, not drop.
+	responded := make(chan bool, 1)
+	go func() {
+		responded <- store.Respond("manual-id", false)
+	}()
+
+	select {
+	case r := <-responded:
+		t.Fatalf("Respond returned %v while channel full and no consumer; expected it to block", r)
+	case <-time.After(100 * time.Millisecond):
+		// good — it is blocking
+	}
+
+	// Now consume the stale value; Respond should deliver and return true.
+	store.mu.Lock()
+	got := <-store.pending["manual-id"]
+	store.mu.Unlock()
+	if !got {
+		t.Error("expected first delivered value true")
+	}
+
+	select {
+	case r := <-responded:
+		if !r {
+			t.Error("expected Respond true after consumer drained channel")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Respond did not unblock after consumer drained channel")
+	}
+}
+
+func TestRespond_Timeout(t *testing.T) {
+	old := approvalRespondTimeout
+	approvalRespondTimeout = 150 * time.Millisecond
+	defer func() { approvalRespondTimeout = old }()
+
+	store := NewApprovalStore(5 * time.Second)
+	store.mu.Lock()
+	store.pending["stuck"] = make(chan bool, 1)
+	store.mu.Unlock()
+
+	// Fill the channel and do not consume.
+	store.pending["stuck"] <- true
+
+	start := time.Now()
+	if got := store.Respond("stuck", false); got {
+		t.Error("expected false on timeout")
+	}
+	if elapsed := time.Since(start); elapsed < 100*time.Millisecond {
+		t.Errorf("Respond returned too fast (%v); expected to block until timeout", elapsed)
+	}
+}
+
+// TestDinoFactory_CompactionPrefixWiring (P3.1 · B1) verifies the factory maps
+// Memory.CompactionPrefix/CacheAnchorTokens into the session agent config and
+// injects the deterministic SummaryGenerator closure (engine never imports
+// dino — the closure carries the chatstore dependency).
+func TestDinoFactory_CompactionPrefixWiring(t *testing.T) {
+	cfg := getTestConfig()
+	cfg.Memory.CompactionPrefix = true
+	cfg.Memory.CacheAnchorTokens = 2048
+	factory, err := NewDinoFactory(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create factory: %v", err)
+	}
+	defer factory.Shutdown(context.Background())
+
+	ctx := context.Background()
+	sess, err := factory.CreateSession(ctx, "compaction-wiring-session")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	defer sess.Close()
+
+	ag := sess.GetAgent()
+	if ag == nil {
+		t.Fatal("session agent is nil")
+	}
+	opts := ag.GetCompactionOptions()
+	if opts == nil {
+		t.Fatal("CompactionOptions not injected when CompactionPrefix=true")
+	}
+	if opts.SummaryGenerator == nil {
+		t.Fatal("SummaryGenerator must be injected (B1): engine never imports dino")
+	}
+	// The closure must produce deterministic compaction output.
+	out := opts.SummaryGenerator("", []types.Message{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "world"},
+	})
+	if out == "" {
+		t.Fatal("SummaryGenerator returned empty output")
+	}
+	if !strings.Contains(out, "scope") {
+		t.Fatalf("SummaryGenerator output should be a DeterministicCompact-style summary, got %q", out)
+	}
+}
+
+// TestDinoFactory_CompactionPrefixOff (default) verifies no options are
+// injected when CompactionPrefix is off (default): existing users see zero
+// behavior change.
+func TestDinoFactory_CompactionPrefixOff(t *testing.T) {
+	cfg := getTestConfig()
+	cfg.Memory.CompactionPrefix = false
+	factory, err := NewDinoFactory(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create factory: %v", err)
+	}
+	defer factory.Shutdown(context.Background())
+
+	ctx := context.Background()
+	sess, err := factory.CreateSession(ctx, "compaction-off-session")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	defer sess.Close()
+
+	ag := sess.GetAgent()
+	if ag == nil {
+		t.Fatal("session agent is nil")
+	}
+	if opts := ag.GetCompactionOptions(); opts != nil {
+		t.Fatalf("CompactionOptions should be nil when CompactionPrefix=false, got %+v", opts)
 	}
 }

@@ -1,0 +1,13 @@
+- Searches for tools that are registered but not in your initial tool list.
+- Use this when you need a capability you don't currently see (e.g. a specific
+  MCP server's tools, or specialized helpers).
+- Call it with a `query` describing the capability (e.g. "github", "memory",
+  "deploy"). It returns matching tool names and descriptions.
+- Tools returned in `discovered` become available to call starting from your
+  NEXT turn. Re-run tool_search with a different query to discover more.
+
+Usage notes:
+  - `query` is required. `max_results` limits how many matches are returned
+    (default 8).
+  - Returning no matches is normal — try different keywords.
+  - Already-discovered tools stay available; re-searching them is harmless.

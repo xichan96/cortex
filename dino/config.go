@@ -1,12 +1,15 @@
 package dino
 
 import (
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/xichan96/cortex/agent/llm"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/dino/agent"
+	"github.com/xichan96/cortex/dino/mem"
 )
 
 type Config struct {
@@ -31,12 +34,29 @@ type Config struct {
 	Provider              ProviderConfig         `yaml:"provider"`
 	PlannerMode           PlannerModeConfig      `yaml:"planner_mode"`
 	Memory                MemoryConfig           `yaml:"memory"`
+	PromptCaching         PromptCachingConfig    `yaml:"prompt_caching"`
+	LongTermMemory        MemLongTermConfig      `yaml:"long_term_memory"`
 	Subagent              agent.SubagentConfig   `yaml:"subagent"`
 	MCP                   MCPConfig              `yaml:"mcp"`
+	Trace                 TraceConfig            `yaml:"trace"`
+}
+
+// TraceConfig controls the context-trace event log (docs/design/context-trace.md).
+// Enabled=false (default) means no recorder is constructed at all — the engine's
+// tracer stays nil (zero overhead).
+type TraceConfig struct {
+	Enabled              bool   `yaml:"enabled"`
+	Dir                  string `yaml:"dir,omitempty"` // default "./dino_sessions/traces"
+	QueueSize            int    `yaml:"queue_size,omitempty"`
+	FlushIntervalMs      int    `yaml:"flush_interval_ms,omitempty"`
+	CaptureFullMessages  bool   `yaml:"capture_full_messages,omitempty"`
+	CaptureFullToolOutput bool  `yaml:"capture_full_tool_output,omitempty"`
+	CaptureChunks        bool   `yaml:"capture_chunks,omitempty"`
 }
 
 type MemoryConfig struct {
 	EnableCompress     bool   `yaml:"enable_compress"`
+	EnableLLMCompress  bool   `yaml:"enable_llm_compress"` // 压缩是否走 LLM 摘要（Hybrid 包裹）；false 退回 DeterministicCompact。与 EnableCompress（是否压缩）语义正交
 	MaxHistoryMessages int    `yaml:"max_history_messages"`
 	MaxBudgetTokens    int    `yaml:"max_budget_tokens"`
 	CompactAfterTurns  int    `yaml:"compact_after_turns"`
@@ -46,7 +66,33 @@ type MemoryConfig struct {
 	PersistFileName    string `yaml:"persist_file_name"`
 	PersistEnabled     bool   `yaml:"persist_enabled"`
 	Type               string `yaml:"type"` // "memory" or "sqlite"
+	// CompactionPrefix enables prefix-preserving compaction (P3.1 · prompt
+	// caching Step 4): trimHistoryToTokenBudget keeps a head cache anchor and
+	// preserves the recent tail verbatim, replacing the middle with a summary,
+	// so prompt-cache segments 1-2 (system+tools) survive compaction. Default
+	// off (conservative): the trim output structure changes when on.
+	CompactionPrefix bool `yaml:"compaction_prefix"`
+	// CacheAnchorTokens caps the head-cache-anchor budget (tokens). 0 = no
+	// anchor (the head is trimmed like today). Default 0. Suggest ≤30% of
+	// MaxBudgetTokens so the tail keeps enough room to anchor segment 3 (R5).
+	CacheAnchorTokens int `yaml:"cache_anchor_tokens"`
 }
+
+// PromptCachingConfig controls provider prompt caching. nil sub-fields mean
+// "use the provider default" (see types.DefaultPromptCacheOptions). This lets
+// a partial YAML block (e.g. only `enabled: false`) override just that field
+// instead of silently zeroing the other toggles.
+type PromptCachingConfig struct {
+	Enabled          bool  `yaml:"enabled"`             // default true (pure cost optimization)
+	SystemBreakpoint *bool `yaml:"system_breakpoint,omitempty"`
+	ToolsBreakpoint  *bool `yaml:"tools_breakpoint,omitempty"`
+	HistoryEveryN    *int  `yaml:"history_every_n,omitempty"` // history breakpoint budget (≤ remaining of 4); 0 = none
+	MinCacheTokens   *int  `yaml:"min_cache_tokens,omitempty"`
+}
+
+// MemLongTermConfig 长期记忆配置段。定义在 dino/mem 包（避免 import cycle），
+// 这里按原样引用。
+type MemLongTermConfig = mem.MemLongTermConfig
 
 type PlannerModeConfig struct {
 	Enabled     bool   `yaml:"enabled"`
@@ -68,10 +114,23 @@ type SkillsConfig struct {
 }
 
 type ToolConfig struct {
-	Profile          string   `yaml:"profile"`
-	Allowed          []string `yaml:"allowed"`
-	ApprovalRequired []string `yaml:"approval_required"`
-	Denied           []string `yaml:"denied"`
+	Profile                    string   `yaml:"profile"`
+	Allowed                    []string `yaml:"allowed"`
+	ApprovalRequired           []string `yaml:"approval_required"`
+	Denied                     []string `yaml:"denied"`
+	MaxToolParallelism         int      `yaml:"max_tool_parallelism,omitempty"`          // 0=默认 max(4, GOMAXPROCS*2)；>0 用该值
+	StreamBufferSize           int      `yaml:"stream_buffer_size,omitempty"`            // 0=默认 50
+	ResultLimiterMaxBytes      int      `yaml:"result_limiter_max_bytes,omitempty"`      // 0=默认 120_000
+	ResultLimiterMaxStringBytes int     `yaml:"result_limiter_max_string_bytes,omitempty"` // 0=默认 60_000
+	// ToolSearchEnabled 控制是否注入 tool_search 工具并启用 Deferred 工具的
+	// 延迟发现（E2）。默认 true。
+	ToolSearchEnabled bool `yaml:"tool_search_enabled,omitempty"`
+	// MCPDeferred 为 true 时，所有 MCP 工具以 ExposureDeferred 注册（不进初始
+	// 工具列表，靠 tool_search 发现）。默认 false 灰度，稳定后翻 true（§2.5）。
+	MCPDeferred bool `yaml:"mcp_deferred,omitempty"`
+	// MaxDiscoveredTools 每个 session 可通过 tool_search 发现/注入的 Deferred
+	// 工具上限（R1）。0 = 默认 32；<0 = 不设上限。
+	MaxDiscoveredTools int `yaml:"max_discovered_tools,omitempty"`
 }
 
 type LoopDetectionConfig struct {
@@ -166,12 +225,19 @@ func DefaultConfig() *Config {
 				"grep",
 				"bash",
 				"list_directory",
+				// E2：tool_search 默认可见（否则默认白名单 `*→deny` 会把它挡掉，
+				// 延迟发现功能默认不可用）。
+				"tool_search",
 			},
 			ApprovalRequired: []string{
 				"bash",
 				"write_file",
 				"edit_file",
 			},
+			// E1/E2 默认：tool_search 开，MCP Deferred 灰度关，discover 上限 32。
+			ToolSearchEnabled:  true,
+			MCPDeferred:        false,
+			MaxDiscoveredTools: 32,
 		},
 		Skills: SkillsConfig{
 			Path:     "",
@@ -192,6 +258,7 @@ func DefaultConfig() *Config {
 		},
 		Memory: MemoryConfig{
 			EnableCompress:     true,
+			EnableLLMCompress:  true,
 			MaxHistoryMessages: 100,
 			MaxBudgetTokens:    0,
 			CompactAfterTurns:  0,
@@ -201,22 +268,42 @@ func DefaultConfig() *Config {
 			PersistEnabled:     false,
 			Type:               "memory",
 		},
+		PromptCaching: PromptCachingConfig{
+			Enabled: true,
+		},
+		LongTermMemory: MemLongTermConfig{
+			Enabled:             false,
+			ToolName:            "memory",
+			WriteKnowledgeTag:   "memory_tool_write",
+			ExposeSearchIndexes: false,
+			IngestInterval:      2 * time.Minute,
+			IngestBatchMax:      50,
+			IngestMinNew:        2,
+			EnableContentFilter: true,
+			PromptMaxTokens:     2500,
+			Phase2Merge:         true,
+			Phase2LLMMerge:      false,
+			MaxUnusedDays:       30,
+			UseSameLLMForIngest: true,
+			UserMergeEnabled:    false,
+			DefaultUserID:       "",
+		},
 		Subagent: agent.SubagentConfig{
 			Enabled:              true,
-			TriggerOnKeyword:     true,
 			MaxHistoryMessages:   48,
-			Triggers: []agent.SubagentTrigger{
-				{
-					AgentName: "general",
-					Keywords:  []string{"research", "analyze", "investigate", "study", "研究", "分析", "调查"},
-					Patterns:  []string{`(?i)(research|analyze|investigate|study)\s+(about|on|the)`, `(?i)what\s+is\s+.*about`},
-					Priority:  5,
-				},
-			},
+			NotifyCompletion:     true,
+			CompletionMaxRunes:   agent.DefaultDelegateTruncatedRunes,
+			DelegateReturnMode:   agent.DelegateReturnModeEnvelope,
+			MaxConcurrentSpawns:  agent.DefaultMaxConcurrentSpawns,
+			SpawnTimeout:         agent.DefaultSpawnTimeout,
+			WakeOnCompletion:     false, // S4 灰度开关：默认关，显式开启才启用 B2 唤醒（评审 RECOMMENDED-1）
 		},
 		MCP: MCPConfig{
 			Enabled: false,
 			Servers: make(map[string]MCPServerConfig),
+		},
+		Trace: TraceConfig{
+			Enabled: false, // context-trace default off (zero overhead)
 		},
 	}
 }
@@ -263,6 +350,45 @@ func init() {
 	})
 }
 
+// builtinProviders 是框架内置、已知需要显式 model 的 provider。
+// 自定义/通过 RegisterLLMProvider 注册的 provider 自行决定是否需要 model，
+// 校验不强制（代理/网关可能用 header/baseURL 路由，不依赖 DefaultModel）。
+var builtinProviders = map[string]struct{}{
+	"openai":    {},
+	"anthropic": {},
+	"deepseek":  {},
+	"volce":     {},
+}
+
+// ValidateConfig 在构造 DinoFactory 前做配置校验，让配置错误尽早、清晰暴露
+// （而不是等到 createLLMProvider 时才报笼统的 provider not found）。
+func ValidateConfig(cfg *Config) error {
+	if cfg == nil {
+		return nil
+	}
+
+	// Provider.Type 必须设置且已注册（列出支持列表帮助排错）。
+	if cfg.Provider.Type == "" {
+		return fmt.Errorf("config validation: llm provider type is empty (set dino.Config.Provider.Type; supported: %s)",
+			strings.Join(GetRegisteredProviders(), ", "))
+	}
+	registryMu.RLock()
+	_, exists := providerRegistry[cfg.Provider.Type]
+	registryMu.RUnlock()
+	if !exists {
+		return fmt.Errorf("config validation: unknown llm provider type %q (supported: %s)",
+			cfg.Provider.Type, strings.Join(GetRegisteredProviders(), ", "))
+	}
+
+	// 内置 provider 的 client 直接消费 cfg.DefaultModel，空值会静默走 client
+	// 默认模型，容易"以为配了实际走默认"——这里强制显式设置。
+	if _, builtin := builtinProviders[cfg.Provider.Type]; builtin && cfg.DefaultModel == "" {
+		return fmt.Errorf("config validation: default model is empty (set dino.Config.DefaultModel)")
+	}
+
+	return nil
+}
+
 func createLLMProvider(cfg *Config) (types.LLMProvider, error) {
 	registryMu.RLock()
 	factory, exists := providerRegistry[cfg.Provider.Type]
@@ -271,6 +397,39 @@ func createLLMProvider(cfg *Config) (types.LLMProvider, error) {
 		return nil, ErrProviderNotFound
 	}
 	return factory(cfg)
+}
+
+// PromptCacheOptions maps dino's PromptCachingConfig onto the shared
+// types.PromptCacheOptions, starting from provider defaults so partial YAML
+// overrides don't zero unrelated toggles.
+func (c *Config) PromptCacheOptions() types.PromptCacheOptions {
+	opts := types.DefaultPromptCacheOptions()
+	if c == nil {
+		return opts
+	}
+	opts.Enabled = c.PromptCaching.Enabled
+	if c.PromptCaching.SystemBreakpoint != nil {
+		opts.SystemBreakpoint = *c.PromptCaching.SystemBreakpoint
+	}
+	if c.PromptCaching.ToolsBreakpoint != nil {
+		opts.ToolsBreakpoint = *c.PromptCaching.ToolsBreakpoint
+	}
+	if c.PromptCaching.HistoryEveryN != nil {
+		opts.HistoryEveryN = *c.PromptCaching.HistoryEveryN
+	}
+	if c.PromptCaching.MinCacheTokens != nil {
+		opts.MinCacheTokens = *c.PromptCaching.MinCacheTokens
+	}
+	return opts
+}
+
+// ConfigurePromptCache applies prompt caching to a provider that supports it.
+// It is a no-op for providers that don't implement types.PromptCacheConfigurer
+// (OpenAI/DeepSeek/Volce — no cache_control protocol).
+func ConfigurePromptCache(provider types.LLMProvider, opts types.PromptCacheOptions) {
+	if pc, ok := provider.(types.PromptCacheConfigurer); ok {
+		pc.SetPromptCacheOptions(opts)
+	}
 }
 
 type ProviderError string

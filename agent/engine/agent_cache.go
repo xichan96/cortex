@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"time"
 
 	"github.com/xichan96/cortex/agent/types"
@@ -67,6 +68,36 @@ func (ae *AgentEngine) getToolErrorMaxLen() int {
 		return c.ToolErrorMaxLen
 	}
 	return types.ToolErrorMaxLen
+}
+
+// getToolParallelismLimit returns the maximum number of tool calls that may run
+// concurrently within one iteration. 0/negative config means the default
+// max(4, GOMAXPROCS*2), capped at 32.
+func (ae *AgentEngine) getToolParallelismLimit() int {
+	if c := ae.getConfig(); c != nil && c.ToolParallelismLimit > 0 {
+		return c.ToolParallelismLimit
+	}
+	return defaultToolParallelismLimit()
+}
+
+func defaultToolParallelismLimit() int {
+	n := runtime.GOMAXPROCS(0) * 2
+	if n < 4 {
+		n = 4
+	}
+	if n > 32 {
+		n = 32
+	}
+	return n
+}
+
+// getStreamBufferSize returns the size of the ExecuteStream result channel
+// buffer. 0/negative config means the default.
+func (ae *AgentEngine) getStreamBufferSize() int {
+	if c := ae.getConfig(); c != nil && c.StreamBufferSize > 0 {
+		return c.StreamBufferSize
+	}
+	return types.DefaultChannelBuffer
 }
 
 // getCachedToolResult gets cached tool result

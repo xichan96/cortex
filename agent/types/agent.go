@@ -85,6 +85,30 @@ type AgentConfig struct {
 	DefaultToolResultMaxLen  int                                                               `json:"defaultToolResultMaxLen"`
 	ToolErrorMaxLen          int                                                               `json:"toolErrorMaxLen"`
 	ReasoningEffort          string                                                            `json:"reasoningEffort"`
+	// PromptCaching enables provider prompt caching (Anthropic cache_control
+	// breakpoints) and cache usage backfill. Default on: it is a pure cost
+	// optimization with no correctness impact. Set false for providers/proxies
+	// that choke on cache_control (R9 escape hatch).
+	PromptCaching bool `json:"promptCaching,omitempty"`
+	ToolParallelismLimit     int                                                               `json:"toolParallelismLimit,omitempty"` // 0=默认 max(4, GOMAXPROCS*2) 封顶 32；>0 用该值
+	StreamBufferSize         int                                                               `json:"streamBufferSize,omitempty"`     // 0=默认 50；>0 用该值
+	// ChunkMergeFlushInterval batches consecutive stream "chunk" results and
+	// flushes them as one merged chunk. 0=default 50ms. Disable merging by
+	// setting a value <0 (each fragment is sent immediately). Merging never
+	// affects end/error/tool_event delivery — those bypass the buffer.
+	ChunkMergeFlushInterval time.Duration                                                    `json:"chunkMergeFlushInterval,omitempty"` // 0=默认 50ms；<0 禁用合并；>0 用该值
+	// CompactionPrefix enables prefix-preserving compaction: trimHistoryToTokenBudget
+	// keeps a head cache anchor, replaces the middle with a tail summary, and
+	// preserves the recent tail verbatim, so prompt-cache breakpoints 1-2
+	// (system+tools) survive compaction (P3.1, prompt caching Step 4).
+	// Default off: with it off, trimHistoryToTokenBudget keeps today's behavior
+	// and the GetSummary head injection is unchanged (byte-identical).
+	CompactionPrefix bool `json:"compactionPrefix,omitempty"`
+	// CacheAnchorTokens caps the head-cache-anchor budget (tokens): the head of
+	// history, counted from index 0, is kept verbatim up to this many tokens so
+	// it participates in the cache prefix. 0 = no anchor (the head is trimmed
+	// like today, the middle is still replaced by the summary). Default 0.
+	CacheAnchorTokens int `json:"cacheAnchorTokens,omitempty"`
 }
 
 func (c *AgentConfig) EffectiveMaxCompletionTokens() int {
@@ -126,6 +150,12 @@ func NewAgentConfig() *AgentConfig {
 		DefaultToolResultMaxLen:  0,
 		ToolErrorMaxLen:          0,
 		ReasoningEffort:          "",
+		PromptCaching:            true,
+		ToolParallelismLimit:     0,
+		StreamBufferSize:         0,
+		ChunkMergeFlushInterval:  0,
+		CompactionPrefix:         false,
+		CacheAnchorTokens:        0,
 	}
 }
 
@@ -300,12 +330,14 @@ func (f *ToolCallbackFunc) OnToolError(toolName string, toolCallID string, err e
 	}
 }
 
-// TruncateString truncates a string to the specified length
+// TruncateString truncates a string to the specified length, keeping the head
+// (a UTF-8-safe convenience used for logging and short labels). For
+// tool-output truncation that preserves the middle, use TruncateMiddle.
 func TruncateString(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	return truncateUTF8Head(s, maxLen) + "..."
 }
 
 const ToolErrorMaxLen = 400

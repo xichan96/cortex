@@ -34,6 +34,9 @@ type Config struct {
 	MaxSize    int
 	MaxPending int
 	Timeout    time.Duration
+	// DisableProcessor 是否禁用后台消费协程（默认 false = 正常启动 run()）。
+	// 测试置 true 可稳定验证 MaxSize 满队列语义（避免 run() 消费时序导致的 flaky）。
+	DisableProcessor bool
 }
 
 func DefaultConfig() *Config {
@@ -101,8 +104,10 @@ func New(cfg *Config) Interface {
 		stats:      Stats{},
 		done:       make(chan struct{}),
 	}
-	q.doneWg.Add(1)
-	go q.run()
+	if !cfg.DisableProcessor {
+		q.doneWg.Add(1)
+		go q.run()
+	}
 
 	return q
 }

@@ -472,6 +472,14 @@ func (p *LangChainLLMProvider) extractUsage(response *llms.ContentResponse) *typ
 			if v, ok := usageMap["total_tokens"]; ok {
 				usage.TotalTokens = getInt(v)
 			}
+			if v, ok := usageMap["cached_tokens"]; ok {
+				usage.CachedTokens = getInt(v)
+			}
+			if v, ok := usageMap["prompt_tokens_details"].(map[string]interface{}); ok {
+				if cv, ok := v["cached_tokens"]; ok {
+					usage.CachedTokens = getInt(cv)
+				}
+			}
 			return usage
 		}
 	}
@@ -493,6 +501,20 @@ func (p *LangChainLLMProvider) extractUsage(response *llms.ContentResponse) *typ
 		usage.TotalTokens = getInt(v)
 	} else if v, ok := choice.GenerationInfo["total_tokens"]; ok {
 		usage.TotalTokens = getInt(v)
+	}
+
+	// OpenAI-compatible providers report cache reads via prompt_tokens_details.cached_tokens.
+	if v, ok := choice.GenerationInfo["prompt_tokens_details"]; ok {
+		if pd, ok := v.(map[string]interface{}); ok {
+			if cv, ok := pd["cached_tokens"]; ok {
+				usage.CachedTokens = getInt(cv)
+			}
+		}
+	}
+	if v, ok := choice.GenerationInfo["CachedTokens"]; ok {
+		usage.CachedTokens = getInt(v)
+	} else if v, ok := choice.GenerationInfo["cached_tokens"]; ok {
+		usage.CachedTokens = getInt(v)
 	}
 
 	return usage

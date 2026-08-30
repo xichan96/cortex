@@ -75,7 +75,9 @@ func openSharedSQLite(dir, sqliteFile string) (*sql.DB, error) {
 	}
 	sharedMu.Unlock()
 
-	db, err := sql.Open("sqlite3", dbPath)
+	// WAL + busy_timeout: ingest 后台写与用户会话写共享同一连接池，
+	// 默认 rollback-journal 下写事务会偶发 "database is locked"。
+	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
@@ -221,7 +223,7 @@ func (s *SQLite) AddMessage(ctx context.Context, msg Message) error {
 	}
 
 	s.stats.MessageCount++
-	s.stats.TotalTokens += estimateTokens(msg.Content)
+	s.stats.TotalTokens += EstimateTokens(msg.Content)
 
 	if s.config.EnableMemoryCompress && s.stats.MessageCount > s.config.MemoryCompressThreshold {
 		if s.comparing.CompareAndSwap(false, true) {

@@ -130,9 +130,27 @@ func (ae *AgentEngine) SetConfig(ctx context.Context, config *types.AgentConfig)
 		ae.config = config
 	}
 
+	ae.propagateConfigLocked()
+}
+
+// propagateConfigLocked applies engine-level config to the LLM provider that
+// supports it. Must be called with ae.mu held (or before the engine is shared).
+//
+// R4 (review): dino/factory.go never calls SetConfig, so NewAgentEngine must
+// call this too or the dino default path never enables prompt caching.
+func (ae *AgentEngine) propagateConfigLocked() {
 	// Propagate logger to model if supported
 	if provider, ok := ae.model.(interface{ SetLogger(*logger.Logger) }); ok {
 		provider.SetLogger(logger.GetLogger())
+	}
+
+	// Propagate prompt caching to providers that implement the configurer.
+	// We merge only the Enabled flag onto the provider's existing options so
+	// sub-field overrides (e.g. dino's PromptCachingConfig) are preserved.
+	if pc, ok := ae.model.(types.PromptCacheConfigurer); ok {
+		opts := pc.PromptCacheOptions()
+		opts.Enabled = ae.config != nil && ae.config.PromptCaching
+		pc.SetPromptCacheOptions(opts)
 	}
 }
 
@@ -155,4 +173,32 @@ func (ae *AgentEngine) SetHooks(ctx context.Context, h hooks.Hooks) {
 	ae.mu.Lock()
 	defer ae.mu.Unlock()
 	ae.hooks = h
+}
+
+// SetCompactionOptions wires prefix-preserving compaction (P3.1). The summary
+// generator must come from the constructor (dino/factory.go injects
+// chatstore.DeterministicCompact as a closure); the engine itself never
+// imports dino (review BLOCKER B1). Pass nil to disable.
+func (ae *AgentEngine) SetCompactionOptions(opts *CompactionOptions) {
+	ae.mu.Lock()
+	defer ae.mu.Unlock()
+	ae.compaction = opts
+}
+
+// GetCompactionOptions returns the current compaction options under the read
+// lock (nil when disabled). The Enabled/CacheAnchorTokens switches live on
+// types.AgentConfig; the SummaryGenerator lives only here. Exported so the
+// constructor (dino/factory.go) and tests can verify the wiring.
+func (ae *AgentEngine) GetCompactionOptions() *CompactionOptions {
+	ae.mu.RLock()
+	defer ae.mu.RUnlock()
+	return ae.compaction
+}
+
+// getCompactionOptions returns the current compaction options under the read
+// lock (internal, unexported).
+func (ae *AgentEngine) getCompactionOptions() *CompactionOptions {
+	ae.mu.RLock()
+	defer ae.mu.RUnlock()
+	return ae.compaction
 }
