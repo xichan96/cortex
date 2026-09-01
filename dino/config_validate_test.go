@@ -101,7 +101,7 @@ func TestValidateConfig_BuiltinEmptyModel(t *testing.T) {
 }
 
 func TestValidateConfig_BuiltinWithModel(t *testing.T) {
-	for _, typ := range []string{"openai", "anthropic", "deepseek", "volce"} {
+	for _, typ := range []string{"openai", "anthropic"} {
 		cfg := &Config{Provider: ProviderConfig{Type: typ}, DefaultModel: "some-model"}
 		if err := ValidateConfig(cfg); err != nil {
 			t.Errorf("builtin provider %q with model must pass, got %v", typ, err)

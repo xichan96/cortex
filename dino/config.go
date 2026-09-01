@@ -329,18 +329,6 @@ func init() {
 			Model:   cfg.DefaultModel,
 		})
 	})
-	RegisterLLMProvider("deepseek", func(cfg *Config) (types.LLMProvider, error) {
-		return llm.NewDeepSeekClient(llm.DeepSeekOptions{
-			APIKey: cfg.Provider.APIKey,
-			Model:  cfg.DefaultModel,
-		})
-	})
-	RegisterLLMProvider("volce", func(cfg *Config) (types.LLMProvider, error) {
-		return llm.NewVolceClient(llm.VolceOptions{
-			APIKey: cfg.Provider.APIKey,
-			Model:  cfg.DefaultModel,
-		})
-	})
 	RegisterLLMProvider("anthropic", func(cfg *Config) (types.LLMProvider, error) {
 		return llm.NewAnthropicClient(llm.AnthropicOptions{
 			APIKey:  cfg.Provider.APIKey,
@@ -356,8 +344,6 @@ func init() {
 var builtinProviders = map[string]struct{}{
 	"openai":    {},
 	"anthropic": {},
-	"deepseek":  {},
-	"volce":     {},
 }
 
 // ValidateConfig 在构造 DinoFactory 前做配置校验，让配置错误尽早、清晰暴露
@@ -425,7 +411,7 @@ func (c *Config) PromptCacheOptions() types.PromptCacheOptions {
 
 // ConfigurePromptCache applies prompt caching to a provider that supports it.
 // It is a no-op for providers that don't implement types.PromptCacheConfigurer
-// (OpenAI/DeepSeek/Volce — no cache_control protocol).
+// (OpenAI-compat endpoints — no cache_control protocol).
 func ConfigurePromptCache(provider types.LLMProvider, opts types.PromptCacheOptions) {
 	if pc, ok := provider.(types.PromptCacheConfigurer); ok {
 		pc.SetPromptCacheOptions(opts)

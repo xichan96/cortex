@@ -76,6 +76,7 @@ var (
 	EC_LLM_CALL_FAILED          = NewError(10002, "LLM call failed")             // 10002
 	EC_LLM_API_KEY_REQUIRED     = NewError(10003, "API key is required")         // 10003
 	EC_LLM_CLIENT_CREATE_FAILED = NewError(10004, "failed to create LLM client") // 10004
+	EC_LLM_MODEL_REQUIRED       = NewError(10005, "model is required")           // 10005
 
 	// MCP client errors (11xxx)
 	EC_MCP_UNSUPPORTED_TRANSPORT = NewError(11001, "unsupported transport")           // 11001

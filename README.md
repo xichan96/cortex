@@ -38,7 +38,7 @@ Designed for production environments, CORTEX prioritizes reliability, configurab
 ## Features
 
 - **Intelligent Agent Engine**: A robust core for building agents with advanced reasoning and tool-calling capabilities.
-- **Broad LLM Support**: Seamless integration with OpenAI, DeepSeek, Volce, and custom providers.
+- **Broad LLM Support**: OpenAI and Anthropic native clients, plus any OpenAI-compatible endpoint (DeepSeek, Volcengine, ...) via BaseURL, and custom providers.
 - **Multi-Modal Native**: Effortlessly process and generate text, images, and other media formats.
 - **Dynamic Skills**: File-system-based skills with lazy loading; YAML frontmatter supports `paths`, `when_to_use`, and `allowed_tools`, with path-glob filtering (`doublestar`) and optional symlink resolve / real-path dedupe in the loader.
 - **Extensible Tooling**: `agent/tools/builtin` spans fs, search, shell/background jobs, net/web, Docker, email, math, and `mcp_client`; register custom `types.Tool` as needed.
@@ -161,11 +161,12 @@ Unified interface for major LLM providers:
 // OpenAI
 llmProvider, _ := llm.OpenAIClient("sk-...", "gpt-4o")
 
-// DeepSeek
-llmProvider, _ := llm.QuickDeepSeekProvider("sk-...", "deepseek-chat")
+// Anthropic
+llmProvider, _ := llm.AnthropicClient("sk-...", "claude-sonnet-4-20250514")
 
-// Volcengine
-llmProvider, _ := llm.VolceClient("ak-...", "doubao-pro-32k")
+// Other OpenAI-compatible endpoints (DeepSeek, Volcengine, ...): just set BaseURL
+opts := llm.OpenAIOptions{APIKey: "sk-...", BaseURL: "https://api.deepseek.com", Model: "deepseek-chat"}
+llmProvider, _ := llm.NewOpenAIClient(opts)
 ```
 
 ## Dino

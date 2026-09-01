@@ -55,9 +55,6 @@ type LLMConfig struct {
 	Provider  string                    `mapstructure:"provider"`
 	Providers map[string]ProviderConfig `mapstructure:"providers"`
 	OpenAI    ProviderConfig            `mapstructure:"openai"`
-	DeepSeek  ProviderConfig            `mapstructure:"deepseek"`
-	Volce     ProviderConfig            `mapstructure:"volce"`
-	Gemini    ProviderConfig            `mapstructure:"gemini"`
 	Anthropic ProviderConfig            `mapstructure:"anthropic"`
 }
 

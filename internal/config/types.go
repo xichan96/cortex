@@ -15,10 +15,9 @@ type SkillsConfig struct {
 }
 
 type LLMConfig struct {
-	Provider string         `yaml:"provider"`
-	OpenAI   OpenAIConfig   `yaml:"openai"`
-	DeepSeek DeepSeekConfig `yaml:"deepseek"`
-	Volce    VolceConfig    `yaml:"volce"`
+	Provider  string          `yaml:"provider"`
+	OpenAI    OpenAIConfig    `yaml:"openai"`
+	Anthropic AnthropicConfig `yaml:"anthropic"`
 }
 
 type OpenAIConfig struct {
@@ -29,13 +28,7 @@ type OpenAIConfig struct {
 	APIType string `yaml:"api_type"`
 }
 
-type DeepSeekConfig struct {
-	APIKey  string `yaml:"api_key"`
-	BaseURL string `yaml:"base_url"`
-	Model   string `yaml:"model"`
-}
-
-type VolceConfig struct {
+type AnthropicConfig struct {
 	APIKey  string `yaml:"api_key"`
 	BaseURL string `yaml:"base_url"`
 	Model   string `yaml:"model"`

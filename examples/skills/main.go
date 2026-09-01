@@ -21,19 +21,19 @@ import (
 	"github.com/xichan96/cortex/pkg/logger"
 )
 
-// getLLMProvider creates an LLM provider (using Volcengine configuration)
+// getLLMProvider creates an LLM provider (OpenAI-compatible client).
+// Model and baseURL are required; an empty baseURL falls back to api.openai.com.
+// Other OpenAI-compatible endpoints (DeepSeek, Volce, ...) work through the same
+// client by pointing BaseURL at their API.
 func getLLMProvider() (types.LLMProvider, error) {
-	// Use Volcengine client
-	// If model is empty, llm.NewVolceClient will use the default (DoubaoSeed1)
-	// If baseURL is empty, llm.NewVolceClient will use the default
-	opts := llm.VolceOptions{
+	opts := llm.OpenAIOptions{
 		APIKey: "",
-		Model:  "deepseek-v3-1-250821",
+		Model:  "gpt-4o-mini",
 	}
 
-	llmProvider, err := llm.NewVolceClient(opts)
+	llmProvider, err := llm.NewOpenAIClient(opts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create Volcengine client: %w", err)
+		return nil, fmt.Errorf("failed to create OpenAI client: %w", err)
 	}
 	return llmProvider, nil
 }

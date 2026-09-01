@@ -152,9 +152,6 @@ func newNativeAnthropicProvider(apiKey, baseURL, model string) *NativeAnthropicP
 		baseURL = anthropicDefaultURL
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
-	if model == "" {
-		model = ClaudeSonnet4.String()
-	}
 	return &NativeAnthropicProvider{
 		apiKey:      apiKey,
 		baseURL:     baseURL,

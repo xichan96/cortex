@@ -38,7 +38,7 @@ CORTEX 旨在融合轻量级框架的易用性与 Go 语言的稳健性能。它
 ## 特性
 
 - **智能代理引擎**：核心引擎支持复杂的工具调用与逻辑推理，轻松构建智能 Agent。
-- **广泛的 LLM 支持**：深度集成 OpenAI、DeepSeek、火山引擎 (Volce) 等主流模型，并支持自定义 Provider。
+- **广泛的 LLM 支持**：内置 OpenAI、Anthropic 原生客户端，其它 OpenAI 兼容端点（DeepSeek、火山引擎等）通过 BaseURL 接入，并支持自定义 Provider。
 - **多模态交互**：原生支持文本、图像等多模态数据的处理与交互。
 - **动态技能 (Skills)**：基于文件系统的技能与懒加载；YAML 头可配置 `paths`、`when_to_use`、`allowed_tools`，支持路径 glob（`doublestar`）过滤，加载器可选解析符号链接与按真实路径去重。
 - **开放工具生态**：`agent/tools/builtin` 覆盖文件、搜索、Shell/后台任务、网络与 Web、Docker、邮件、数学及 `mcp_client`；可自注册工具扩展。
@@ -161,11 +161,12 @@ Cortex 提供了统一的接口适配多种 LLM Provider，支持灵活的参数
 // OpenAI
 llmProvider, _ := llm.OpenAIClient("sk-...", "gpt-4o")
 
-// DeepSeek
-llmProvider, _ := llm.QuickDeepSeekProvider("sk-...", "deepseek-chat")
+// Anthropic
+llmProvider, _ := llm.AnthropicClient("sk-...", "claude-sonnet-4-20250514")
 
-// 火山引擎 (Volcengine)
-llmProvider, _ := llm.VolceClient("ak-...", "doubao-pro-32k")
+// 其它 OpenAI 兼容端点（DeepSeek、火山引擎等）：换 BaseURL 即可
+opts := llm.OpenAIOptions{APIKey: "sk-...", BaseURL: "https://api.deepseek.com", Model: "deepseek-chat"}
+llmProvider, _ := llm.NewOpenAIClient(opts)
 ```
 
 ## Dino 高级编排
