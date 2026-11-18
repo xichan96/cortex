@@ -15,10 +15,10 @@ import (
 )
 
 const (
-	anthropicVersion     = "2023-06-01"
-	anthropicDefaultURL  = "https://api.anthropic.com"
+	anthropicVersion      = "2023-06-01"
+	anthropicDefaultURL   = "https://api.anthropic.com"
 	anthropicMessagesPath = "/v1/messages"
-	anthropicMaxTokens   = 8096
+	anthropicMaxTokens    = 8096
 	// sseMaxLineBytes is the max expected SSE line size; 4MB is generous.
 	sseMaxLineBytes = 4 * 1024 * 1024
 )
@@ -36,14 +36,14 @@ func ephemeralCacheControl() *anthropicCacheControl {
 }
 
 type anthropicRequest struct {
-	Model     string              `json:"model"`
-	MaxTokens int                 `json:"max_tokens"`
+	Model     string `json:"model"`
+	MaxTokens int    `json:"max_tokens"`
 	// System is a string (legacy) or []anthropicContentBlock when prompt
 	// caching places a breakpoint on the system block. Anthropic accepts both.
-	System    interface{}         `json:"system,omitempty"`
-	Messages  []anthropicMessage  `json:"messages"`
-	Tools     []anthropicTool     `json:"tools,omitempty"`
-	Stream    bool                `json:"stream"`
+	System   interface{}        `json:"system,omitempty"`
+	Messages []anthropicMessage `json:"messages"`
+	Tools    []anthropicTool    `json:"tools,omitempty"`
+	Stream   bool               `json:"stream"`
 }
 
 type anthropicMessage struct {
@@ -52,20 +52,20 @@ type anthropicMessage struct {
 }
 
 type anthropicContentBlock struct {
-	Type         string               `json:"type"`
-	Text         string               `json:"text,omitempty"`
-	ID           string               `json:"id,omitempty"`
-	Name         string               `json:"name,omitempty"`
-	Input        json.RawMessage      `json:"input,omitempty"`
-	ToolUseID    string               `json:"tool_use_id,omitempty"`
-	Content      string               `json:"content,omitempty"`
+	Type         string                 `json:"type"`
+	Text         string                 `json:"text,omitempty"`
+	ID           string                 `json:"id,omitempty"`
+	Name         string                 `json:"name,omitempty"`
+	Input        json.RawMessage        `json:"input,omitempty"`
+	ToolUseID    string                 `json:"tool_use_id,omitempty"`
+	Content      string                 `json:"content,omitempty"`
 	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
 type anthropicTool struct {
-	Name         string               `json:"name"`
-	Description  string               `json:"description"`
-	InputSchema  interface{}          `json:"input_schema"`
+	Name         string                 `json:"name"`
+	Description  string                 `json:"description"`
+	InputSchema  interface{}            `json:"input_schema"`
 	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
@@ -82,10 +82,10 @@ type anthropicContentBlockStartData struct {
 	Type         string `json:"type"`
 	Index        int    `json:"index"`
 	ContentBlock struct {
-		Type  string `json:"type"`
-		ID    string `json:"id,omitempty"`
-		Name  string `json:"name,omitempty"`
-		Text  string `json:"text,omitempty"`
+		Type string `json:"type"`
+		ID   string `json:"id,omitempty"`
+		Name string `json:"name,omitempty"`
+		Text string `json:"text,omitempty"`
 	} `json:"content_block"`
 }
 
@@ -106,9 +106,9 @@ type anthropicMessageDeltaData struct {
 	Type  string         `json:"type"`
 	Delta anthropicDelta `json:"delta"`
 	Usage struct {
-		OutputTokens         int                          `json:"output_tokens"`
-		ReasoningTokens      int                          `json:"reasoning_tokens"` // OpenAI-compat alias some gateways emit
-		OutputTokensDetails  anthropicOutputTokensDetails `json:"output_tokens_details"`
+		OutputTokens        int                          `json:"output_tokens"`
+		ReasoningTokens     int                          `json:"reasoning_tokens"` // OpenAI-compat alias some gateways emit
+		OutputTokensDetails anthropicOutputTokensDetails `json:"output_tokens_details"`
 	} `json:"usage"`
 }
 
@@ -116,12 +116,12 @@ type anthropicMessageStartData struct {
 	Type    string `json:"type"`
 	Message struct {
 		Usage struct {
-			InputTokens             int                          `json:"input_tokens"`
-			OutputTokens            int                          `json:"output_tokens"`
-			CacheReadInputTokens    int                          `json:"cache_read_input_tokens"`
-			CacheCreationInputTokens int                         `json:"cache_creation_input_tokens"`
-			ReasoningTokens         int                          `json:"reasoning_tokens"` // OpenAI-compat alias some gateways emit
-			OutputTokensDetails     anthropicOutputTokensDetails `json:"output_tokens_details"`
+			InputTokens              int                          `json:"input_tokens"`
+			OutputTokens             int                          `json:"output_tokens"`
+			CacheReadInputTokens     int                          `json:"cache_read_input_tokens"`
+			CacheCreationInputTokens int                          `json:"cache_creation_input_tokens"`
+			ReasoningTokens          int                          `json:"reasoning_tokens"` // OpenAI-compat alias some gateways emit
+			OutputTokensDetails      anthropicOutputTokensDetails `json:"output_tokens_details"`
 		} `json:"usage"`
 	} `json:"message"`
 }
@@ -139,11 +139,11 @@ type anthropicErrorData struct {
 // NativeAnthropicProvider implements LLMProvider using the Anthropic /v1/messages API directly.
 // This avoids langchaingo's OpenAI-compat layer and its bufio.Scanner 64KB line limit.
 type NativeAnthropicProvider struct {
-	apiKey    string
-	baseURL   string
-	model     string
-	maxTokens int
-	client    *http.Client
+	apiKey      string
+	baseURL     string
+	model       string
+	maxTokens   int
+	client      *http.Client
 	promptCache types.PromptCacheOptions
 }
 
@@ -332,6 +332,16 @@ func (p *NativeAnthropicProvider) readStream(body io.ReadCloser, out chan<- type
 			case "input_json_delta":
 				if ts, ok := toolBlocks[ev.Index]; ok {
 					ts.buf.WriteString(ev.Delta.PartialJSON)
+					// 逐段透传参数增量，让上层能边收边渲染工具卡片。
+					// 空片段不发，避免一长串无内容的帧。
+					if chunk := ev.Delta.PartialJSON; chunk != "" {
+						send(types.StreamMessage{
+							Type:       "tool_input_delta",
+							Content:    chunk,
+							ToolCallID: ts.id,
+							ToolName:   ts.name,
+						})
+					}
 				}
 			case "thinking_delta":
 				if ev.Delta.Text != "" {

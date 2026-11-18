@@ -15,13 +15,17 @@ const (
 	EventTypeToolCall   EventType = "tool_call"
 	EventTypeToolResult EventType = "tool_result"
 	EventTypeToolStart  EventType = "tool_start"
-	EventTypeTokenUsage EventType = "token_usage"
-	EventTypeError      EventType = "error"
-	EventTypeDone       EventType = "done"
-	EventTypeApproved   EventType = "approved"
-	EventTypeApproval   EventType = "approval"
-	EventTypePlan       EventType = "plan"
-	EventTypePlanStep   EventType = "plan_step"
+	// EventTypeToolInputDelta 工具参数 JSON 的增量片段（Anthropic input_json_delta）。
+	// Content 是这一段原文，ToolCallID/ToolName 标识归属。消费方据此边收边渲染，
+	// 不必等到参数解析完才显示工具卡片。
+	EventTypeToolInputDelta EventType = "tool_input_delta"
+	EventTypeTokenUsage     EventType = "token_usage"
+	EventTypeError          EventType = "error"
+	EventTypeDone           EventType = "done"
+	EventTypeApproved       EventType = "approved"
+	EventTypeApproval       EventType = "approval"
+	EventTypePlan           EventType = "plan"
+	EventTypePlanStep       EventType = "plan_step"
 	// EventTypeQuestion question 工具向用户提问（P2.1，异步事件模型）。
 	// session 检测到 SentinelQuestionResult 时 emit；UI 经 onQuestion 回调拿到
 	// 问题，随后用 AnswerQuestion 把回答注入（作为下一条 user 消息喂回）。

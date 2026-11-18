@@ -1795,6 +1795,20 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 			}) {
 				return nil, false, ctx.Err()
 			}
+		case "tool_input_delta":
+			// 参数增量：直接转发给消费方（dino session → 协议帧），不参与
+			// result.ToolCalls 的组装——完整参数仍在 content_block_stop 的
+			// tool_calls 里给出，增量只用于「边收边渲染」。
+			sendStreamResult(ctx, resultChan, types.StreamResult{
+				Type: "tool_input_delta",
+				ToolEvent: &types.ToolEvent{
+					Event:      "tool_input_delta",
+					ToolName:   msg.ToolName,
+					ToolCallID: msg.ToolCallID,
+					Input:      map[string]interface{}{"delta": msg.Content},
+				},
+			})
+
 		case "tool_calls":
 			for _, tc := range msg.ToolCalls {
 				result.ToolCalls = append(result.ToolCalls, types.ToolCallRequest{

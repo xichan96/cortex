@@ -46,8 +46,8 @@ type Usage struct {
 	PromptTokens        int `json:"prompt_tokens"`
 	CompletionTokens    int `json:"completion_tokens"`
 	TotalTokens         int `json:"total_tokens"`
-	ReasoningTokens     int `json:"reasoning_tokens,omitempty"` // Thinking tokens (o1, o3 series etc.)
-	CachedTokens        int `json:"cached_tokens,omitempty"`    // Cache read tokens (0.1x price)
+	ReasoningTokens     int `json:"reasoning_tokens,omitempty"`      // Thinking tokens (o1, o3 series etc.)
+	CachedTokens        int `json:"cached_tokens,omitempty"`         // Cache read tokens (0.1x price)
 	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"` // Cache write tokens (1.25x price)
 }
 
@@ -94,12 +94,18 @@ type ToolFunction struct {
 
 // StreamMessage streaming message
 type StreamMessage struct {
-	Type      string     `json:"type"` // "chunk", "end", "error", "tool_calls", "reasoning"
+	Type string `json:"type"` // "chunk", "end", "error", "tool_calls", "reasoning", "tool_input_delta"
+	// Content 正文增量；tool_input_delta 时承载**参数 JSON 的增量片段**。
 	Content   string     `json:"content,omitempty"`
 	Reasoning string     `json:"reasoning,omitempty"` // Thinking/reasoning content
 	Error     string     `json:"error,omitempty"`
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 	Usage     *Usage     `json:"usage,omitempty"`
+	// ToolCallID / ToolName 仅 tool_input_delta 使用：标识这段参数增量属于哪次调用。
+	// 早期实现把参数攒到 content_block_stop 才一次性发 tool_calls，前端卡片只能
+	// 「整块弹出」；有了增量就能边收边渲染（Claude Code 的体验）。
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	ToolName   string `json:"tool_name,omitempty"`
 }
 
 // ReasoningMessage represents a message with reasoning/thinking content

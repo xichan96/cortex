@@ -539,6 +539,15 @@ func (s *Session) executeWithInput(ctx context.Context, agentInput types.AgentIn
 					ToolInput: result.ToolEvent.Input,
 				})
 			}
+		case "tool_input_delta":
+			if result.ToolEvent != nil {
+				s.emit(&Event{
+					Type:       EventTypeToolInputDelta,
+					ToolName:   result.ToolEvent.ToolName,
+					ToolCallID: result.ToolEvent.ToolCallID,
+					Content:    deltaString(result.ToolEvent.Input["delta"]),
+				})
+			}
 		case "tool_event":
 			if result.ToolEvent != nil {
 				switch result.ToolEvent.Event {
@@ -727,6 +736,14 @@ func questionFromOutput(output interface{}) string {
 				return q
 			}
 		}
+	}
+	return ""
+}
+
+// deltaString 从 map 里取字符串（tool_input_delta 的 delta 字段）。
+func deltaString(v interface{}) string {
+	if s, ok := v.(string); ok {
+		return s
 	}
 	return ""
 }
