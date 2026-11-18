@@ -392,6 +392,10 @@ type dinoFactory struct {
 	longTermMem          *dinoMem.LongTermMem // 长期记忆子系统句柄（nil = 未启用）
 	sessionToolsProvider func(sessionID string) []types.Tool
 	hooks                hooks.Hooks
+	// memoryProvider 调用方注入的 chatstore.Provider（WithMemoryProvider）。
+	// 非 nil 时 CreateSession 跳过 Memory.Type / PersistEnabled 的 provider 构造；
+	// Hybrid（EnableLLMCompress）仍包裹在它外面。
+	memoryProvider chatstore.Provider
 
 	// —— S3/S4 mailbox（subagent-s3s4 §4/§7.2）——
 	// bus 实例级事件总线（notifier 旁路事件用，评审 BLOCKER-1：factory 层注入回调，
@@ -488,6 +492,22 @@ func (f *dinoFactory) Detect(ctx context.Context, sessionID string, action agent
 	return f.loopDetector.Detect(ctx, sessionID, action)
 }
 
+// dedupeSkillsFirstWins keeps the first skill seen per name, preserving input
+// order. LoadSkillsFromDirs walks roots in order, so "first" == the skill from
+// the highest-priority root (Skills.Paths[0] wins).
+func dedupeSkillsFirstWins(skills []agentskills.Skill) []agentskills.Skill {
+	seen := make(map[string]struct{}, len(skills))
+	out := make([]agentskills.Skill, 0, len(skills))
+	for _, s := range skills {
+		if _, ok := seen[s.Name]; ok {
+			continue
+		}
+		seen[s.Name] = struct{}{}
+		out = append(out, s)
+	}
+	return out
+}
+
 type FactoryOption func(*dinoFactory)
 
 func WithStreamEventSender(sender StreamEventSender) FactoryOption {
@@ -519,6 +539,23 @@ func WithHooks(h hooks.Hooks) FactoryOption {
 	}
 }
 
+// WithMemoryProvider injects a caller-supplied chatstore.Provider into every
+// session created by this factory, replacing dino's built-in
+// NewSQLite/NewInMemory construction. While injected, Memory.Type and
+// Memory.PersistEnabled are ignored for this factory (they no longer select a
+// provider); the Memory.* tuning fields still apply. Memory.EnableLLMCompress
+// keeps working: dino wraps the injected provider in chatstore.Hybrid, so the
+// caller does not need to implement compression itself. The same provider
+// instance is shared by all sessions of this factory — callers that need
+// per-session isolation must route internally by sessionID.
+func WithMemoryProvider(p chatstore.Provider) FactoryOption {
+	return func(f *dinoFactory) {
+		if p != nil {
+			f.memoryProvider = p
+		}
+	}
+}
+
 func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 	if cfg == nil {
 		cfg = DefaultConfig()
@@ -546,12 +583,17 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 
 	var loadedCortexSkills []*agentskills.Skill
 	skillRegistry := agentskills.NewRegistry()
-	if cfg.Skills.Path != "" && cfg.Skills.AutoLoad {
-		if err := skillRegistry.LoadFromDirs(context.Background(), logger.GetLogger(), []string{cfg.Skills.Path}); err != nil {
-			logger.Warn("failed to load skills", slog.String("path", cfg.Skills.Path), slog.String("error", err.Error()))
+	if skillRoots := cfg.Skills.SkillPaths(); len(skillRoots) > 0 && cfg.Skills.AutoLoad {
+		// Paths 顺序即优先级：LoadSkillsFromDirs 按 roots 顺序返回，先出现的根优先；
+		// 同名技能只保留第一个（registry.Register 是覆盖语义，后写赢，所以必须在
+		// 注册前按名去重）。
+		loaded, err := agentskills.LoadSkillsFromDirs(context.Background(), logger.GetLogger(), skillRoots)
+		if err != nil {
+			logger.Warn("failed to load skills", slog.Any("paths", skillRoots), slog.String("error", err.Error()))
 		} else {
+			skillRegistry.LoadSkills(dedupeSkillsFirstWins(loaded))
 			cortexSkills := skillRegistry.All()
-			logger.Info("loaded skills", slog.Int("count", len(cortexSkills)), slog.String("path", cfg.Skills.Path))
+			logger.Info("loaded skills", slog.Int("count", len(cortexSkills)), slog.Any("paths", skillRoots))
 			for _, s := range cortexSkills {
 				logger.Info("skill loaded", slog.String("name", s.Name))
 			}
@@ -970,7 +1012,8 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 
 	agent.AddTools(ctx, wrappedTools)
 
-	if f.config.Memory.MaxHistoryMessages > 0 || f.config.Memory.EnableCompress {
+	// 注入 provider 时无条件装配 memory（不受 MaxHistoryMessages/EnableCompress 门控）。
+	if f.memoryProvider != nil || f.config.Memory.MaxHistoryMessages > 0 || f.config.Memory.EnableCompress {
 		memConfig := &chatstore.Config{
 			MaxHistoryMessages:      f.config.Memory.MaxHistoryMessages,
 			EnableMemoryCompress:    f.config.Memory.EnableCompress,
@@ -992,7 +1035,12 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 		var memProvider chatstore.Provider
 		var err error
 
-		if f.config.Memory.Type == "sqlite" || f.config.Memory.PersistEnabled {
+		if f.memoryProvider != nil {
+			// WithMemoryProvider 注入：跳过 NewSQLite/NewInMemory 构造，
+			// Memory.Type / Memory.PersistEnabled 对该 factory 失效。
+			memProvider = f.memoryProvider
+			logger.Info("[DinoFactory] Using injected memory provider", slog.String("session_id", sessionID))
+		} else if f.config.Memory.Type == "sqlite" || f.config.Memory.PersistEnabled {
 			memProvider, err = chatstore.NewSQLite(sessionID, memConfig)
 			if err != nil {
 				logger.Warn("[DinoFactory] Failed to create SQLite memory, falling back to in-memory", slog.String("error", err.Error()))
