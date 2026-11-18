@@ -108,9 +108,45 @@ type ProviderConfig struct {
 	Headers map[string]string `yaml:"headers"`
 }
 
+// SkillsConfig configures skill roots.
+//
+// Paths is ordered by priority: an earlier root wins, so when two roots contain
+// a skill with the same name, only the skill from Paths[0] (or the earliest
+// root that defines it) is registered.
 type SkillsConfig struct {
-	Path     string `yaml:"path"`
+	// Paths is the priority-ordered list of skill roots. First occurrence wins
+	// on name collision.
+	Paths []string `yaml:"paths,omitempty"`
+	// Path is a single skill root.
+	//
+	// Deprecated: use Paths. When both are set, Path is appended after Paths
+	// (lowest priority) and the combined list follows first-wins dedupe.
+	Path     string `yaml:"path,omitempty"`
 	AutoLoad bool   `yaml:"auto_load"`
+}
+
+// SkillPaths returns the effective priority-ordered skill roots: Paths first,
+// then the deprecated Path appended at the end. Empty entries are dropped and
+// duplicate roots are collapsed (first occurrence wins), so a config that sets
+// both Path and Paths=["<same dir>"] loads that root once.
+func (c SkillsConfig) SkillPaths() []string {
+	roots := make([]string, 0, len(c.Paths)+1)
+	seen := make(map[string]struct{}, len(c.Paths)+1)
+	add := func(p string) {
+		if p == "" {
+			return
+		}
+		if _, ok := seen[p]; ok {
+			return
+		}
+		seen[p] = struct{}{}
+		roots = append(roots, p)
+	}
+	for _, p := range c.Paths {
+		add(p)
+	}
+	add(c.Path)
+	return roots
 }
 
 type ToolConfig struct {
@@ -240,7 +276,7 @@ func DefaultConfig() *Config {
 			MaxDiscoveredTools: 32,
 		},
 		Skills: SkillsConfig{
-			Path:     "",
+			Paths:    nil,
 			AutoLoad: true,
 		},
 		Provider: ProviderConfig{

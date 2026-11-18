@@ -43,7 +43,7 @@ Always provide clear and concise responses.`
 	cfg.Timeout = 60 * time.Second
 	cfg.ToolExecutionTimeout = 120 * time.Second
 
-	cfg.Skills.Path = "./skills"
+	cfg.Skills.Paths = []string{"./skills"}
 	cfg.Skills.AutoLoad = true
 
 	cfg.Tools.Allowed = []string{

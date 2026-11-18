@@ -492,6 +492,22 @@ func (f *dinoFactory) Detect(ctx context.Context, sessionID string, action agent
 	return f.loopDetector.Detect(ctx, sessionID, action)
 }
 
+// dedupeSkillsFirstWins keeps the first skill seen per name, preserving input
+// order. LoadSkillsFromDirs walks roots in order, so "first" == the skill from
+// the highest-priority root (Skills.Paths[0] wins).
+func dedupeSkillsFirstWins(skills []agentskills.Skill) []agentskills.Skill {
+	seen := make(map[string]struct{}, len(skills))
+	out := make([]agentskills.Skill, 0, len(skills))
+	for _, s := range skills {
+		if _, ok := seen[s.Name]; ok {
+			continue
+		}
+		seen[s.Name] = struct{}{}
+		out = append(out, s)
+	}
+	return out
+}
+
 type FactoryOption func(*dinoFactory)
 
 func WithStreamEventSender(sender StreamEventSender) FactoryOption {
@@ -567,12 +583,17 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 
 	var loadedCortexSkills []*agentskills.Skill
 	skillRegistry := agentskills.NewRegistry()
-	if cfg.Skills.Path != "" && cfg.Skills.AutoLoad {
-		if err := skillRegistry.LoadFromDirs(context.Background(), logger.GetLogger(), []string{cfg.Skills.Path}); err != nil {
-			logger.Warn("failed to load skills", slog.String("path", cfg.Skills.Path), slog.String("error", err.Error()))
+	if skillRoots := cfg.Skills.SkillPaths(); len(skillRoots) > 0 && cfg.Skills.AutoLoad {
+		// Paths 顺序即优先级：LoadSkillsFromDirs 按 roots 顺序返回，先出现的根优先；
+		// 同名技能只保留第一个（registry.Register 是覆盖语义，后写赢，所以必须在
+		// 注册前按名去重）。
+		loaded, err := agentskills.LoadSkillsFromDirs(context.Background(), logger.GetLogger(), skillRoots)
+		if err != nil {
+			logger.Warn("failed to load skills", slog.Any("paths", skillRoots), slog.String("error", err.Error()))
 		} else {
+			skillRegistry.LoadSkills(dedupeSkillsFirstWins(loaded))
 			cortexSkills := skillRegistry.All()
-			logger.Info("loaded skills", slog.Int("count", len(cortexSkills)), slog.String("path", cfg.Skills.Path))
+			logger.Info("loaded skills", slog.Int("count", len(cortexSkills)), slog.Any("paths", skillRoots))
 			for _, s := range cortexSkills {
 				logger.Info("skill loaded", slog.String("name", s.Name))
 			}
