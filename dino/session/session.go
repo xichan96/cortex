@@ -35,6 +35,9 @@ type Config struct {
 	// UserID 显式归属的 user；空 = 未显式指定（回退配置 DefaultUserID，再回退 "default"）。
 	// P3.2 user 全局合并：归属在 session 创建时固化（INSERT OR IGNORE），不动态变更。
 	UserID string
+	// ExtraSystemPrompt 会话级系统提示词，**追加**在工厂级 SystemPrompt 之后。
+	// 空 = 只用工厂级。用于「同一个 agent 在不同会话里承担不同角色」。
+	ExtraSystemPrompt string
 }
 
 func DefaultConfig() *Config {
@@ -61,6 +64,15 @@ func WithInputBufferSize(size int) Option {
 func WithOutputBufferSize(size int) Option {
 	return func(c *Config) {
 		c.OutputBufferSize = size
+	}
+}
+
+// WithExtraSystemPrompt 给本会话追加系统提示词（工厂级 SystemPrompt 之后）。
+// 追加而非替换：工厂级提示词承载工具选择、行为准则等全局约束，替换掉会让
+// 模型立刻偏离既定行为。
+func WithExtraSystemPrompt(prompt string) Option {
+	return func(c *Config) {
+		c.ExtraSystemPrompt = prompt
 	}
 }
 

@@ -49,8 +49,8 @@ type chunkMerger struct {
 	flushInterval time.Duration
 	sender        func(types.StreamResult) bool
 
-	sb         strings.Builder
-	lastFlush  time.Time
+	sb        strings.Builder
+	lastFlush time.Time
 }
 
 // newChunkMerger creates a merger that flushes every flushInterval and sends
@@ -109,6 +109,20 @@ func (ae *AgentEngine) getHooks() hooks.Hooks {
 		return ae.hooks
 	}
 	return hooks.NoOpHooks{}
+}
+
+// iterationDelay 每轮工具往返之间的等待。0（默认）= 不等待；
+// 负值 = 旧的 100ms 行为（兼容需要节流的调用方，如某些限流场景）。
+func (ae *AgentEngine) iterationDelay() time.Duration {
+	if c := ae.getConfig(); c != nil {
+		switch {
+		case c.IterationDelay < 0:
+			return types.IterationDelay
+		default:
+			return c.IterationDelay
+		}
+	}
+	return 0
 }
 
 func (ae *AgentEngine) getMaxIterations() int {
@@ -939,10 +953,15 @@ func (ae *AgentEngine) Execute(ctx context.Context, input types.AgentInput, prev
 		}
 		iteration++
 
-		// Avoid too fast execution - only delay if there are more iterations
+		// 迭代之间的额外等待。旧实现硬编码 100ms，而模型/网络本身延迟远大于此，
+		// 这段等待没有可观测收益，只是把几十轮工具往返的墙钟时间白白拉长。
+		// 现在由 AgentConfig.IterationDelay 决定：0 = 不等待（默认），
+		// 负值保留旧的 100ms 行为以兼容需要节流的调用方。
 		if iteration < maxIterations {
 			logger.LogExecution("Execute", iteration, "Preparing next iteration")
-			time.Sleep(types.IterationDelay)
+			if d := ae.iterationDelay(); d > 0 {
+				time.Sleep(d)
+			}
 		} else {
 			logger.LogExecution("Execute", iteration, "Reached maximum iterations")
 		}

@@ -617,13 +617,13 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 			MaxRepeats:          cfg.LoopDetection.MaxRepeats,
 			SimilarityThreshold: cfg.LoopDetection.SimilarityThreshold,
 		}),
-		budget:           NewBudget(&cfg.Budget),
-		cortexSkills:     loadedCortexSkills,
-		approvalStore:    approvalStore,
-		sessions:         make(map[string]*session.Session),
-		bus:              NewBus(),
-		sessionMailboxes: make(map[string]*dinoAgent.Mailbox),
-		sessionWakes:     make(map[string]*sessionWakeSource),
+		budget:                 NewBudget(&cfg.Budget),
+		cortexSkills:           loadedCortexSkills,
+		approvalStore:          approvalStore,
+		sessions:               make(map[string]*session.Session),
+		bus:                    NewBus(),
+		sessionMailboxes:       make(map[string]*dinoAgent.Mailbox),
+		sessionWakes:           make(map[string]*sessionWakeSource),
 		sessionDeferredTools:   make(map[string]map[string]types.Tool),
 		sessionDiscoveredTools: make(map[string][]string),
 		sessionTracers:         make(map[string]hooks.Tracer),
@@ -725,6 +725,11 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 
 	agentConfig := types.NewAgentConfig()
 	systemPrompt := f.config.SystemPrompt
+	// 会话级追加提示词（WithExtraSystemPrompt）。放在技能注入**之前**：
+	// 技能清单是「工具说明」，应当排在行为准则之后、离用户输入更近。
+	if extra := strings.TrimSpace(cfg.ExtraSystemPrompt); extra != "" {
+		systemPrompt += "\n\n# 本次会话的额外要求\n" + extra
+	}
 	if len(f.cortexSkills) > 0 {
 		systemPrompt += agentskills.BuildSystemPromptInjectionWithTriggers(f.cortexSkills)
 	}

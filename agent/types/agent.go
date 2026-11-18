@@ -18,8 +18,13 @@ const (
 	MaxTruncationLength  = 2048 // maximum truncation length
 	MinChannelBuffer     = 10   // minimum channel buffer size
 	// Performance-related constants
-	DefaultBufferPoolSize = 1024                   // default buffer pool size (1KB)
-	IterationDelay        = 100 * time.Millisecond // inter-iteration delay
+	DefaultBufferPoolSize = 1024 // default buffer pool size (1KB)
+	// IterationDelay 默认的迭代间隔（老版本的行为）。0 = 不额外等待。
+	//
+	// 曾经头上硬编码 100ms：一轮几十次工具往返就白白多花几秒，而模型与网络
+	// 本身的延迟远大于此，这段等待没有可观测的收益。改为 AgentConfig 可覆盖
+	// （见 AgentConfig.IterationDelay），默认值仍保留以兼容既有使用方。
+	IterationDelay = 100 * time.Millisecond
 )
 
 // Tool state constants (aligned with OpenCode)
@@ -52,21 +57,24 @@ const (
 
 // AgentConfig agent configuration
 type AgentConfig struct {
-	MaxIterations            int                                                               `json:"maxIterations"`
-	SystemMessage            string                                                            `json:"systemMessage"`
-	ChatMessageRole          string                                                            `json:"chatMessageRole,omitempty"`
-	Temperature              float32                                                           `json:"temperature"`
-	MaxTokens                int                                                               `json:"maxTokens,omitempty"`
-	MaxCompletionTokens      int                                                               `json:"maxCompletionTokens,omitempty"`
-	TopP                     float32                                                           `json:"topP"`
-	FrequencyPenalty         float32                                                           `json:"frequencyPenalty"`
-	PresencePenalty          float32                                                           `json:"presencePenalty"`
-	StopSequences            []string                                                          `json:"stopSequences"`
-	Timeout                  time.Duration                                                     `json:"timeout"`
-	ToolExecutionTimeout     time.Duration                                                     `json:"toolExecutionTimeout"`
-	ToolTimeouts             map[string]time.Duration                                          `json:"toolTimeouts"`
-	RetryAttempts            int                                                               `json:"retryAttempts"`
-	RetryDelay               time.Duration                                                     `json:"retryDelay"`
+	MaxIterations        int                      `json:"maxIterations"`
+	SystemMessage        string                   `json:"systemMessage"`
+	ChatMessageRole      string                   `json:"chatMessageRole,omitempty"`
+	Temperature          float32                  `json:"temperature"`
+	MaxTokens            int                      `json:"maxTokens,omitempty"`
+	MaxCompletionTokens  int                      `json:"maxCompletionTokens,omitempty"`
+	TopP                 float32                  `json:"topP"`
+	FrequencyPenalty     float32                  `json:"frequencyPenalty"`
+	PresencePenalty      float32                  `json:"presencePenalty"`
+	StopSequences        []string                 `json:"stopSequences"`
+	Timeout              time.Duration            `json:"timeout"`
+	ToolExecutionTimeout time.Duration            `json:"toolExecutionTimeout"`
+	ToolTimeouts         map[string]time.Duration `json:"toolTimeouts"`
+	RetryAttempts        int                      `json:"retryAttempts"`
+	RetryDelay           time.Duration            `json:"retryDelay"`
+	// IterationDelay 每轮工具往返之间的额外等待。0 = 使用 IterationDelay 默认值；
+	// 负数 = 完全不等待。交互式场景建议 0（默认 100ms 是无谓延迟）。
+	IterationDelay           time.Duration                                                     `json:"iterationDelay,omitempty"`
 	EnableToolRetry          bool                                                              `json:"enableToolRetry"`
 	MaxHistoryMessages       int                                                               `json:"maxHistoryMessages"`
 	MaxBudgetTokens          int                                                               `json:"maxBudgetTokens"`
@@ -89,14 +97,14 @@ type AgentConfig struct {
 	// breakpoints) and cache usage backfill. Default on: it is a pure cost
 	// optimization with no correctness impact. Set false for providers/proxies
 	// that choke on cache_control (R9 escape hatch).
-	PromptCaching bool `json:"promptCaching,omitempty"`
-	ToolParallelismLimit     int                                                               `json:"toolParallelismLimit,omitempty"` // 0=默认 max(4, GOMAXPROCS*2) 封顶 32；>0 用该值
-	StreamBufferSize         int                                                               `json:"streamBufferSize,omitempty"`     // 0=默认 50；>0 用该值
+	PromptCaching        bool `json:"promptCaching,omitempty"`
+	ToolParallelismLimit int  `json:"toolParallelismLimit,omitempty"` // 0=默认 max(4, GOMAXPROCS*2) 封顶 32；>0 用该值
+	StreamBufferSize     int  `json:"streamBufferSize,omitempty"`     // 0=默认 50；>0 用该值
 	// ChunkMergeFlushInterval batches consecutive stream "chunk" results and
 	// flushes them as one merged chunk. 0=default 50ms. Disable merging by
 	// setting a value <0 (each fragment is sent immediately). Merging never
 	// affects end/error/tool_event delivery — those bypass the buffer.
-	ChunkMergeFlushInterval time.Duration                                                    `json:"chunkMergeFlushInterval,omitempty"` // 0=默认 50ms；<0 禁用合并；>0 用该值
+	ChunkMergeFlushInterval time.Duration `json:"chunkMergeFlushInterval,omitempty"` // 0=默认 50ms；<0 禁用合并；>0 用该值
 	// CompactionPrefix enables prefix-preserving compaction: trimHistoryToTokenBudget
 	// keeps a head cache anchor, replaces the middle with a tail summary, and
 	// preserves the recent tail verbatim, so prompt-cache breakpoints 1-2
