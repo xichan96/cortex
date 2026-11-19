@@ -105,6 +105,10 @@ type HomeConfig struct {
 	CWD          string `yaml:"cwd"`           // default process working directory
 	SessionDir   string `yaml:"session_dir"`   // optional override
 	ProjectTrust string `yaml:"project_trust"` // "ask" | "always" | "never"
+	// ApplySettings opts into consuming the merged home settings (default
+	// provider/model, tool defaults, session dir, MCP servers) at factory
+	// construction. Explicit host values in Config always win.
+	ApplySettings bool `yaml:"apply_settings"`
 	// TrustOverride is a host/CLI decision (--approve / --no-approve).
 	// TrustUnknown means no override. Not settable from YAML: a project must
 	// not be able to grant itself trust.
