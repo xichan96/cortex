@@ -8,6 +8,7 @@ package approval
 
 import (
 	"path/filepath"
+	"strings"
 
 	"github.com/xichan96/cortex/agent/types"
 )
@@ -51,6 +52,19 @@ func (s ApprovalScope) IsValid() bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// ParseScope normalizes a configured scope string. The empty value and unknown
+// values fall back to ScopeOnce, so a typo can never widen what gets
+// remembered. Callers that want to warn about typos can compare the result
+// with ApprovalScope(strings.TrimSpace(raw)).
+func ParseScope(raw string) ApprovalScope {
+	switch s := ApprovalScope(strings.TrimSpace(raw)); s {
+	case ScopeSession, ScopeWorkspace, ScopeAlways:
+		return s
+	default:
+		return ScopeOnce
 	}
 }
 

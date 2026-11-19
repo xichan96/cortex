@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xichan96/cortex/agent/approval"
 	"github.com/xichan96/cortex/agent/engine"
 	"github.com/xichan96/cortex/agent/extensions"
 	"github.com/xichan96/cortex/agent/hooks"
@@ -694,12 +695,21 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 				// a second, different bound here.
 				brokerTimeout = 0
 			}
+			scope := cfg.ToolPipeline.EffectiveApprovalScope()
+			if raw := strings.TrimSpace(cfg.ToolPipeline.ApprovalScope); raw != "" && !approval.ApprovalScope(raw).IsValid() {
+				logger.Warn("[DinoFactory] Unknown tool_pipeline.approval_scope, falling back to once",
+					slog.String("approval_scope", raw))
+			}
 			authorizer = &permissionAuthorizer{
 				evaluator: permission.NewEvaluator(f.permissionRuleset()),
-				broker:    &approvalStoreBroker{store: approvalStore},
+				broker:    &approvalStoreBroker{store: approvalStore, scope: scope},
 				timeout:   brokerTimeout,
+				store:     newApprovalScopeStore(homeEnv),
+				scopes:    []approval.ApprovalScope{scope},
+				rule:      approvalRule,
 			}
-			logger.Info("[DinoFactory] Tool pipeline approval authorizer enabled")
+			logger.Info("[DinoFactory] Tool pipeline approval authorizer enabled",
+				slog.String("approval_scope", string(scope)))
 		default:
 			logger.Warn("[DinoFactory] Unknown tool_pipeline.authorizer, falling back to allow_all",
 				slog.String("authorizer", cfg.ToolPipeline.Authorizer))
