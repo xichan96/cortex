@@ -2628,6 +2628,9 @@ func TestQueue_Enqueue(t *testing.T) {
 		MaxSize:    100,
 		MaxPending: 10,
 		Timeout:    5 * time.Minute,
+		// 禁用 run() 消费协程，否则 Size() 断言与消费进度竞争，偶发少 1。
+		// 与 TestQueue_EnqueueFull 的写法保持一致。
+		DisableProcessor: true,
 	}
 
 	q := queue.New(cfg)
@@ -2654,6 +2657,9 @@ func TestQueue_EnqueueBatch(t *testing.T) {
 		MaxSize:    100,
 		MaxPending: 10,
 		Timeout:    5 * time.Minute,
+		// 禁用 run() 消费协程，否则 Size() 断言与消费进度竞争，偶发少 1。
+		// 与 TestQueue_EnqueueFull 的写法保持一致。
+		DisableProcessor: true,
 	}
 
 	q := queue.New(cfg)
