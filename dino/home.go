@@ -31,9 +31,13 @@ type homeEnv struct {
 // project layers. A nil result means HomeConfig.Enabled is false.
 //
 // Project-provided executable resources (settings, skills, SYSTEM.md) are only
-// loaded when ProjectTrust is "always". "ask" cannot prompt in a library
-// process, so it behaves like "never" for resource loading. Context files are
-// content, not executable resources, and load regardless of trust (design §2.3).
+// loaded when the trust decision is TrustAllowed. The decision follows the
+// agent/home order — CLI override > TrustHandler > trust.json > ProjectTrust —
+// evaluated in non-interactive mode, so "ask" and "never" both deny unless an
+// override or handler says otherwise. Trust resolution failures are
+// fail-closed: they deny project resources but never fail factory construction.
+// Context files are content, not executable resources, and load regardless of
+// trust (design §2.3).
 func loadHomeEnv(cfg HomeConfig) (*homeEnv, error) {
 	if !cfg.Enabled {
 		return nil, nil
@@ -48,7 +52,7 @@ func loadHomeEnv(cfg HomeConfig) (*homeEnv, error) {
 		return nil, fmt.Errorf("resolve agent home: %w", err)
 	}
 
-	trusted := home.ParseTrustPolicy(cfg.ProjectTrust) == home.TrustPolicyAlways
+	trusted := resolveProjectTrust(cfg, paths)
 	resolved, err := home.LoadPaths(paths, home.LoadOptions{ProjectUntrusted: !trusted})
 	if err != nil {
 		return nil, fmt.Errorf("load agent settings: %w", err)
@@ -74,6 +78,63 @@ func loadHomeEnv(cfg HomeConfig) (*homeEnv, error) {
 		appendSystemPrompt: appendPrompt,
 		trusted:            trusted,
 	}, nil
+}
+
+// resolveProjectTrust evaluates the trust decision chain for the resolved
+// workspace. Any error or unresolved (TrustUnknown) decision fails closed to
+// untrusted: project resources are skipped and a warning is logged, but the
+// factory is still constructed with user-level resources.
+func resolveProjectTrust(cfg HomeConfig, paths home.Paths) bool {
+	decision, err := home.ResolveTrust(context.Background(), home.TrustRequest{
+		CWD:     paths.CWD,
+		Reasons: projectTrustReasons(paths),
+		Mode:    home.TrustModeNonInteractive,
+	}, home.NewFileTrustStore(paths.TrustPath), home.TrustOptions{
+		CLIOverride:   cfg.TrustOverride,
+		Handler:       cfg.TrustHandler,
+		DefaultPolicy: home.ParseTrustPolicy(cfg.ProjectTrust),
+	})
+	if err != nil {
+		logger.Warn("[DinoFactory] project trust resolution failed; loading user resources only",
+			slog.String("cwd", paths.CWD), slog.String("error", err.Error()))
+		return false
+	}
+	switch decision {
+	case home.TrustAllowed:
+		return true
+	case home.TrustDenied:
+		return false
+	default:
+		logger.Warn("[DinoFactory] project trust unresolved; loading user resources only",
+			slog.String("cwd", paths.CWD))
+		return false
+	}
+}
+
+// projectTrustReasons lists the project-provided executable resources that
+// actually exist for this workspace. The list is informational (handlers and
+// prompts show it) and does not influence the default decision.
+func projectTrustReasons(paths home.Paths) []string {
+	candidates := []string{
+		paths.ProjectSettingsPath,
+		paths.ProjectMCPPath,
+		paths.ProjectSkillsDir,
+		paths.ProjectPromptsDir,
+		paths.ProjectAgentsDir,
+		paths.ProjectPluginsDir,
+		paths.ProjectSystemPromptPath,
+		paths.ProjectAppendSystemPromptPath,
+	}
+	reasons := make([]string, 0, len(candidates))
+	for _, p := range candidates {
+		if p == "" {
+			continue
+		}
+		if _, err := os.Stat(p); err == nil {
+			reasons = append(reasons, p)
+		}
+	}
+	return reasons
 }
 
 // loadHomeSystemPrompts reads SYSTEM.md / APPEND_SYSTEM.md. A trusted project
