@@ -60,6 +60,15 @@ type Config struct {
 	ToolPipeline ToolPipelineConfig `yaml:"tool_pipeline"`
 }
 
+// ToolPipeline authorizer modes. "allow_all" keeps the pipeline's authorization
+// gate open (the dino wrapper stack remains the gate); "approval" makes the
+// pipeline's authorize stage evaluate the permission ruleset and route ask
+// decisions to the approval broker.
+const (
+	ToolPipelineAuthorizerAllowAll = "allow_all"
+	ToolPipelineAuthorizerApproval = "approval"
+)
+
 // ToolPipelineConfig controls the P0 tool-call pipeline. It is opt-in so
 // existing deployments keep the legacy execution path.
 type ToolPipelineConfig struct {
@@ -67,6 +76,17 @@ type ToolPipelineConfig struct {
 	MaxConcurrent  int           `yaml:"max_concurrent"`
 	DefaultTimeout time.Duration `yaml:"default_timeout"`
 	Retries        int           `yaml:"retries"`
+	// Authorizer selects the pipeline's authorization gate: "allow_all"
+	// (default, empty is treated as allow_all) or "approval" (permission
+	// ruleset + approval broker). Unknown values fall back to allow_all.
+	Authorizer string `yaml:"authorizer"`
+}
+
+// UsesApprovalAuthorizer reports whether the pipeline owns tool approval: it
+// is enabled and configured with the "approval" authorizer. Callers use this to
+// avoid wrapping tools with the legacy ApprovalTool a second time.
+func (c ToolPipelineConfig) UsesApprovalAuthorizer() bool {
+	return c.Enabled && c.Authorizer == ToolPipelineAuthorizerApproval
 }
 
 // HomeConfig opts a factory into the agent-home layout. Project resources are

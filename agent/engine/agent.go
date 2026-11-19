@@ -109,6 +109,12 @@ type AgentEngine struct {
 	// Nil keeps the legacy executeToolWithTimeout path. Injected by the host
 	// (dino/factory) via SetToolPipeline; agent/engine does not construct it.
 	toolPipeline *pipeline.Pipeline
+
+	// sessionID identifies the conversation this engine belongs to. It is
+	// copied into pipeline.Call so approval brokers and recorders can route
+	// per session. Injected by the host via SetSessionID (may stay empty for
+	// standalone engines/tests).
+	sessionID string
 }
 
 // ResultSender is a function type for sending stream results
@@ -192,6 +198,22 @@ func (ae *AgentEngine) ToolPipeline() *pipeline.Pipeline {
 	ae.mu.RLock()
 	defer ae.mu.RUnlock()
 	return ae.toolPipeline
+}
+
+// SetSessionID records the conversation id that every pipeline.Call carries.
+// Hosts call it once when the session is created; an empty id means the engine
+// was not bound to a session (approval brokers then see an empty SessionID).
+func (ae *AgentEngine) SetSessionID(sessionID string) {
+	ae.mu.Lock()
+	defer ae.mu.Unlock()
+	ae.sessionID = sessionID
+}
+
+// SessionID returns the session id set by SetSessionID ("" when unset).
+func (ae *AgentEngine) SessionID() string {
+	ae.mu.RLock()
+	defer ae.mu.RUnlock()
+	return ae.sessionID
 }
 
 func (ae *AgentEngine) SetTracer(t hooks.Tracer) {
