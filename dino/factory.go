@@ -434,6 +434,10 @@ type dinoFactory struct {
 	// extensionRegistry is the host-owned in-process extension registry, when
 	// installed with WithExtensionRegistry.
 	extensionRegistry *extensions.Registry
+	// extensionEventSinks holds the per-session event bridge (P6-C), key =
+	// sessionID. Populated by attachExtensionEvents in CreateSession and
+	// released by detachExtensionEvents in CloseSession/CloseAll.
+	extensionEventSinks map[string]*extensionEventSink
 
 	// —— S3/S4 mailbox（subagent-s3s4 §4/§7.2）——
 	// bus 实例级事件总线（notifier 旁路事件用，评审 BLOCKER-1：factory 层注入回调，
@@ -687,6 +691,7 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 		sessionDeferredTools:   make(map[string]map[string]types.Tool),
 		sessionDiscoveredTools: make(map[string][]string),
 		sessionTracers:         make(map[string]hooks.Tracer),
+		extensionEventSinks:    make(map[string]*extensionEventSink),
 	}
 
 	if cfg.ToolPipeline.Enabled {
@@ -1221,6 +1226,10 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 
 	f.sessions[sessionID] = sess
 
+	// P6-C：in-process extension 事件桥。订阅须在 Start 之前完成，session_start
+	// 在 CreateSession 内同步派发（notification-only，handler 错误由 registry 隔离）。
+	f.attachExtensionEvents(sess, sessionID)
+
 	// 审批请求要能传到上层：注册「本会话的审批请求」发射器。
 	// 没有它，ApprovalStore 只会把请求交给 sender 回调（自动策略立刻答复），
 	// 而上层协议层（Dojo 的 WS）无从得知——用户永远看不到审批卡。
@@ -1266,8 +1275,12 @@ func (f *dinoFactory) CloseSession(sessionID string) {
 
 	sess, exists := f.sessions[sessionID]
 	if exists {
+		// P6-C：先停事件桥（取消订阅 + session_shutdown），再关 session loop。
+		f.detachExtensionEvents(sessionID, sess)
 		sess.Close()
 		delete(f.sessions, sessionID)
+	} else {
+		f.detachExtensionEvents(sessionID, nil)
 	}
 	// Transcript 实时双写：flush + fsync + 释放文件锁。只取 transcriptMu
 	// （叶子锁），不破坏 f.mu 的加锁顺序；sess 缺失时兜底回收残留 writer。
@@ -1305,7 +1318,9 @@ func (f *dinoFactory) CloseAll() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	for _, sess := range f.sessions {
+	for sid, sess := range f.sessions {
+		// P6-C：同 CloseSession，先派发 session_shutdown 再关闭 loop。
+		f.detachExtensionEvents(sid, sess)
 		sess.Close()
 	}
 	f.sessions = make(map[string]*session.Session)
