@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -59,7 +60,17 @@ type anthropicContentBlock struct {
 	Input        json.RawMessage        `json:"input,omitempty"`
 	ToolUseID    string                 `json:"tool_use_id,omitempty"`
 	Content      string                 `json:"content,omitempty"`
+	Source       *anthropicImageSource  `json:"source,omitempty"`
 	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
+}
+
+// anthropicImageSource 是 Anthropic image block 的 source：
+// 要么内联 base64，要么一个可被抓取的 URL。
+type anthropicImageSource struct {
+	Type      string `json:"type"` // "base64" | "url"
+	MediaType string `json:"media_type,omitempty"`
+	Data      string `json:"data,omitempty"`
+	URL       string `json:"url,omitempty"`
 }
 
 type anthropicTool struct {
@@ -497,11 +508,22 @@ func (p *NativeAnthropicProvider) buildRequest(messages []types.Message, tools [
 				case types.TextPart:
 					blocks = append(blocks, anthropicContentBlock{Type: "text", Text: pt.Text})
 				case types.ImageURLPart:
-					// For image URLs, wrap in a source block (simplified).
-					blocks = append(blocks, anthropicContentBlock{Type: "text", Text: "[image: " + pt.URL + "]"})
+					// 真正的 image block（URL source）。早期实现降级成
+					// `[image: url]` 文本，模型根本看不到图。
+					blocks = append(blocks, anthropicContentBlock{
+						Type:   "image",
+						Source: &anthropicImageSource{Type: "url", URL: pt.URL},
+					})
 				case types.ImageDataPart:
-					// Embed base64 image.
-					blocks = append(blocks, anthropicContentBlock{Type: "text", Text: fmt.Sprintf("[image data: %s]", pt.MIMEType)})
+					// 内联 base64：图片随请求走，不依赖上游能访问对象存储。
+					blocks = append(blocks, anthropicContentBlock{
+						Type: "image",
+						Source: &anthropicImageSource{
+							Type:      "base64",
+							MediaType: pt.MIMEType,
+							Data:      base64.StdEncoding.EncodeToString(pt.Data),
+						},
+					})
 				}
 			}
 			if len(blocks) == 0 {
