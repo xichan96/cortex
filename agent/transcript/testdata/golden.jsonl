@@ -1,0 +1,14 @@
+{"type":"session","version":1,"id":"sess-golden","timestamp":"2025-01-01T00:00:00Z","cwd":"/tmp/project"}
+{"type":"message","id":"m1","parentId":null,"timestamp":"2025-01-01T00:00:01Z","message":{"role":"user","content":"hello"}}
+{"type":"model_change","id":"mc","parentId":"m1","timestamp":"2025-01-01T00:00:02Z","provider":"anthropic","modelId":"claude-sonnet-5-5"}
+{"type":"thinking_level_change","id":"th","parentId":"mc","timestamp":"2025-01-01T00:00:03Z","thinkingLevel":"high"}
+{"type":"message","id":"a1","parentId":"th","timestamp":"2025-01-01T00:00:04Z","message":{"role":"assistant","content":"reading","tool_calls":[{"id":"call_1","type":"function","function":{"name":"read","arguments":{"path":"a.txt"}}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}}
+{"type":"message","id":"t1","parentId":"a1","timestamp":"2025-01-01T00:00:05Z","message":{"role":"tool","content":"file contents","name":"read","tool_call_id":"call_1"}}
+{"type":"usage","id":"u1","parentId":"t1","timestamp":"2025-01-01T00:00:06Z","kind":"cache_warm","provider":"anthropic","model":"claude-sonnet-5-5","usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":50000,"cached_tokens":50000}}
+{"type":"custom","id":"c1","parentId":"u1","timestamp":"2025-01-01T00:00:07Z","customType":"ext.state","data":{"count":42}}
+{"type":"custom_message","id":"cm1","parentId":"c1","timestamp":"2025-01-01T00:00:08Z","customType":"ext.inject","content":[{"type":"text","text":"injected context"}],"display":true}
+{"type":"label","id":"l1","parentId":"cm1","timestamp":"2025-01-01T00:00:09Z","targetId":"m1","label":"checkpoint-1"}
+{"type":"session_info","id":"si1","parentId":"l1","timestamp":"2025-01-01T00:00:10Z","name":"Golden session"}
+{"type":"branch_summary","id":"bs1","parentId":"si1","timestamp":"2025-01-01T00:00:11Z","summary":"Branch explored A","fromId":"m1"}
+{"type":"compaction","id":"cp1","parentId":"bs1","timestamp":"2025-01-01T00:00:12Z","summary":"Summary so far","firstKeptEntryId":"m1","tokensBefore":50000,"systemMessage":{"role":"system","content":"You are helpful."}}
+{"type":"message","id":"m2","parentId":"cp1","timestamp":"2025-01-01T00:00:13Z","message":{"role":"user","content":"continue"}}
