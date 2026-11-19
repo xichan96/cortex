@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -106,14 +107,20 @@ func (s *RuntimeServer) handleRPC(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *RuntimeServer) dispatch(r *http.Request, req RuntimeRequest) (any, error) {
-	ctx := r.Context()
+	return dispatchRuntimeCommand(r.Context(), s.rt, req)
+}
+
+// dispatchRuntimeCommand executes one transport-neutral runtime command. It is
+// shared by the HTTP /rpc endpoint and the WebSocket transport so both expose
+// identical semantics and error strings.
+func dispatchRuntimeCommand(ctx context.Context, rt runtime.Runtime, req RuntimeRequest) (any, error) {
 	switch req.Command {
 	case "prompt":
 		var in runtime.PromptInput
 		if err := decode(req.Data, &in); err != nil {
 			return nil, err
 		}
-		disp, err := s.rt.Prompt(ctx, in)
+		disp, err := rt.Prompt(ctx, in)
 		if err != nil {
 			return nil, err
 		}
@@ -124,13 +131,13 @@ func (s *RuntimeServer) dispatch(r *http.Request, req RuntimeRequest) (any, erro
 			return nil, err
 		}
 		if req.Command == "steer" {
-			return nil, s.rt.Steer(ctx, m)
+			return nil, rt.Steer(ctx, m)
 		}
-		return nil, s.rt.FollowUp(ctx, m)
+		return nil, rt.FollowUp(ctx, m)
 	case "abort":
-		return nil, s.rt.Abort(ctx)
+		return nil, rt.Abort(ctx)
 	case "get_state":
-		return s.rt.State(), nil
+		return rt.State(), nil
 	case "get_entries":
 		var q runtime.EntryQuery
 		if len(req.Data) > 0 {
@@ -138,14 +145,24 @@ func (s *RuntimeServer) dispatch(r *http.Request, req RuntimeRequest) (any, erro
 				return nil, err
 			}
 		}
-		return s.rt.Entries(ctx, q)
+		return rt.Entries(ctx, q)
 	case "settled":
 		select {
-		case <-s.rt.Settled():
+		case <-rt.Settled():
 			return map[string]any{"settled": true}, nil
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
+	case "clear_queue":
+		qc, ok := rt.(runtime.QueueController)
+		if !ok {
+			return nil, runtime.ErrUnsupported
+		}
+		steering, followUp := qc.ClearQueue(ctx)
+		return map[string]any{
+			"steering": steering,
+			"followUp": followUp,
+		}, nil
 	case "subscribe":
 		return nil, fmt.Errorf("use GET /events for subscriptions")
 	default:
