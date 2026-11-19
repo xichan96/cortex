@@ -586,6 +586,14 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Home settings are folded in before validation/provider construction so
+	// settings-provided defaults participate like any other config value. The
+	// overlay is opt-in and never overrides values the host set explicitly.
+	if cfg.Home.ApplySettings {
+		for _, d := range applyHomeSettings(cfg, homeEnv) {
+			logger.Warn("[DinoFactory] agent home settings", slog.String("diagnostic", d.Error()))
+		}
+	}
 
 	// 配置早校验：provider 类型/model 在构造前暴露清晰错误。
 	if err := ValidateConfig(cfg); err != nil {
