@@ -9,7 +9,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
 	"github.com/xichan96/cortex/agent/types"
@@ -53,9 +52,7 @@ func (m *MockLLM) GetModelMetadata() types.ModelMetadata {
 }
 
 func setupServiceTest(t *testing.T) (*scheduler.Service, *xcron.Scheduler, *MockLLM, *gorm.DB) {
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
-	assert.NoError(t, err)
-	db.AutoMigrate(&xcron.Job{})
+	db := newTestDB(t)
 
 	jobStore := xcron.NewGormJobStore(db)
 	cronScheduler := xcron.NewScheduler(jobStore)
@@ -143,9 +140,7 @@ func TestService_Integration_SerialAndConcurrent(t *testing.T) {
 }
 
 func TestService_AgentTaskExecutorBypassesAgentEngine(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
-	assert.NoError(t, err)
-	assert.NoError(t, db.AutoMigrate(&xcron.Job{}))
+	db := newTestDB(t)
 
 	jobStore := xcron.NewGormJobStore(db)
 	cronScheduler := xcron.NewScheduler(jobStore)
@@ -162,7 +157,7 @@ func TestService_AgentTaskExecutorBypassesAgentEngine(t *testing.T) {
 	cronScheduler.Start()
 	defer cronScheduler.Stop()
 
-	_, err = svc.ScheduleJob(context.Background(), scheduler.ScheduleJobInput{
+	_, err := svc.ScheduleJob(context.Background(), scheduler.ScheduleJobInput{
 		Name:      "exec-test",
 		Type:      "oneshot",
 		Schedule:  "10ms",

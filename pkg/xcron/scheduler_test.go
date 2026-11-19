@@ -3,8 +3,6 @@ package xcron
 import (
 	"context"
 	"errors"
-	"fmt"
-	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -16,28 +14,41 @@ import (
 	"gorm.io/gorm"
 )
 
-var testDBSeq uint64
+// setupTestDB 为每个测试创建独立的文件 SQLite DB（t.TempDir 下），测试结束
+// 自动关闭连接池并清理文件。文件 DB 才能正确启用 WAL + busy_timeout：job 并发
+// 执行时 wrapper 的 Get/UpdateStatus 并发读写同一 jobs 表，内存 cache=shared DB
+// 的 WAL 不生效会报 "table is locked"（TestScheduler_MaxConcurrent 间歇 Timeout
+// 的根因）。文件 DB + WAL 允许并发读，busy_timeout 让写等待锁；单连接限制
+// （MaxOpenConns(1)）避免同一文件上的连接池互相竞争。
+func setupTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
 
-// setupTestDB 为每个测试创建唯一文件名的 SQLite DB。文件 DB 才能正确启用
-// WAL + busy_timeout：job 并发执行时 wrapper 的 Get/UpdateStatus 并发读写同一
-// jobs 表，内存 cache=shared DB 的 WAL 不生效会报 "table is locked"
-// （TestScheduler_MaxConcurrent 间歇 Timeout 的根因）。文件 DB + WAL 允许并发读，
-// busy_timeout 让写等待锁。
-func setupTestDB() *gorm.DB {
-	n := atomic.AddUint64(&testDBSeq, 1)
-	dir := os.TempDir()
-	path := filepath.Join(dir, fmt.Sprintf("xcron_test_%d.db", n))
-	db, err := gorm.Open(sqlite.Open(path+"?_journal_mode=WAL&_busy_timeout=5000"), &gorm.Config{})
+	path := filepath.Join(t.TempDir(), "xcron-test.db") + "?_journal_mode=WAL&_busy_timeout=5000"
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
 	if err != nil {
-		panic(err)
+		t.Fatalf("open test database: %v", err)
 	}
-	db.AutoMigrate(&Job{})
-	db.Exec("DELETE FROM jobs") // Clear table
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get sql.DB: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+	t.Cleanup(func() {
+		if err := sqlDB.Close(); err != nil {
+			t.Errorf("close test database: %v", err)
+		}
+	})
+
+	if err := db.AutoMigrate(&Job{}); err != nil {
+		t.Fatalf("migrate test database: %v", err)
+	}
 	return db
 }
 
 func TestScheduler_OneShot(t *testing.T) {
-	db := setupTestDB()
+	db := setupTestDB(t)
 	store := NewGormJobStore(db)
 	scheduler := NewScheduler(store)
 
@@ -77,7 +88,7 @@ func TestScheduler_OneShot(t *testing.T) {
 }
 
 func TestScheduler_Retry(t *testing.T) {
-	db := setupTestDB()
+	db := setupTestDB(t)
 	store := NewGormJobStore(db)
 	scheduler := NewScheduler(store)
 
@@ -122,7 +133,7 @@ func TestScheduler_Retry(t *testing.T) {
 }
 
 func TestScheduler_NoHandler(t *testing.T) {
-	db := setupTestDB()
+	db := setupTestDB(t)
 	store := NewGormJobStore(db)
 	scheduler := NewScheduler(store)
 	scheduler.Start()
@@ -141,7 +152,7 @@ func TestScheduler_NoHandler(t *testing.T) {
 }
 
 func TestScheduler_Persistence(t *testing.T) {
-	db := setupTestDB()
+	db := setupTestDB(t)
 	store := NewGormJobStore(db)
 
 	// Create a job but don't start scheduler yet
@@ -184,7 +195,7 @@ func TestScheduler_Persistence(t *testing.T) {
 }
 
 func TestScheduler_Management(t *testing.T) {
-	db := setupTestDB()
+	db := setupTestDB(t)
 	store := NewGormJobStore(db)
 	scheduler := NewScheduler(store)
 	scheduler.Start()
@@ -214,7 +225,7 @@ func TestScheduler_Management(t *testing.T) {
 }
 
 func TestScheduler_PeriodicAndCron(t *testing.T) {
-	db := setupTestDB()
+	db := setupTestDB(t)
 	store := NewGormJobStore(db)
 	scheduler := NewScheduler(store)
 
@@ -251,7 +262,7 @@ func (m *MockLocker) Unlock(ctx context.Context, key string) error {
 }
 
 func TestScheduler_Locking(t *testing.T) {
-	db := setupTestDB()
+	db := setupTestDB(t)
 	store := NewGormJobStore(db)
 	scheduler := NewScheduler(store)
 	locker := &MockLocker{}
@@ -289,7 +300,7 @@ func TestScheduler_Locking(t *testing.T) {
 }
 
 func TestScheduler_FailureCallback(t *testing.T) {
-	db := setupTestDB()
+	db := setupTestDB(t)
 	store := NewGormJobStore(db)
 	scheduler := NewScheduler(store)
 
@@ -326,7 +337,7 @@ func TestScheduler_FailureCallback(t *testing.T) {
 }
 
 func TestScheduler_Errors(t *testing.T) {
-	db := setupTestDB()
+	db := setupTestDB(t)
 	store := NewGormJobStore(db)
 	scheduler := NewScheduler(store)
 
@@ -340,7 +351,7 @@ func TestScheduler_Errors(t *testing.T) {
 }
 
 func TestScheduler_Stats(t *testing.T) {
-	db := setupTestDB()
+	db := setupTestDB(t)
 	store := NewGormJobStore(db)
 	scheduler := NewScheduler(store)
 	scheduler.Start()
@@ -369,7 +380,7 @@ func TestScheduler_Stats(t *testing.T) {
 }
 
 func TestScheduler_StuckJobs(t *testing.T) {
-	db := setupTestDB()
+	db := setupTestDB(t)
 	store := NewGormJobStore(db)
 
 	// Create stuck job
@@ -398,7 +409,7 @@ func TestScheduler_StuckJobs(t *testing.T) {
 }
 
 func TestScheduler_OneShot_Restart_Delay_Fix(t *testing.T) {
-	db := setupTestDB()
+	db := setupTestDB(t)
 	store := NewGormJobStore(db)
 	scheduler := NewScheduler(store)
 
@@ -459,7 +470,7 @@ func TestScheduler_OneShot_Restart_Delay_Fix(t *testing.T) {
 }
 
 func TestScheduler_SerialExecution(t *testing.T) {
-	db := setupTestDB()
+	db := setupTestDB(t)
 	store := NewGormJobStore(db)
 	scheduler := NewScheduler(store)
 
@@ -506,7 +517,7 @@ func TestScheduler_SerialExecution(t *testing.T) {
 }
 
 func TestScheduler_MaxConcurrent(t *testing.T) {
-	db := setupTestDB()
+	db := setupTestDB(t)
 	store := NewGormJobStore(db)
 	scheduler := NewScheduler(store)
 	scheduler.SetMaxConcurrent(2)
@@ -553,4 +564,3 @@ func TestScheduler_MaxConcurrent(t *testing.T) {
 
 	assert.Equal(t, int32(2), atomic.LoadInt32(&peakConcurrentRuns), "Concurrency should be limited to 2")
 }
-
