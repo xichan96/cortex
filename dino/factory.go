@@ -458,6 +458,13 @@ type dinoFactory struct {
 	// sessionTracers 每 session 一个 trace recorder（context-trace），
 	// Trace.Enabled 时构造。CloseSession 时 Close（drain + fsync）。
 	sessionTracers map[string]hooks.Tracer
+
+	// —— Transcript 实时双写（P5-A）——
+	// liveTranscripts 每 session 一个 JSONL 写入器，Transcript.Enabled 时构造。
+	// transcriptMu 是叶子锁：持有时绝不获取 f.mu（CreateSession/CloseSession
+	// 都持 f.mu，反向加锁会死锁）。见 dino/transcript_live.go。
+	transcriptMu    sync.Mutex
+	liveTranscripts map[string]*liveTranscript
 }
 
 // cloneToolTimeouts 深拷贝 ToolTimeouts map，避免 CreateSession 注入 wait_agent
@@ -1221,6 +1228,10 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 		sess.EmitApprovalRequest(requestID, toolName, arguments)
 	})
 
+	// Transcript 实时双写（P5-A）：订阅须在 Start 之前完成，否则首个 turn 的
+	// Done 可能先于订阅到达。Enabled=false 时无任何开销。
+	f.startLiveTranscript(sess, sessionID)
+
 	sess.Start()
 
 	return sess, nil
@@ -1253,10 +1264,14 @@ func (f *dinoFactory) CloseSession(sessionID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if sess, exists := f.sessions[sessionID]; exists {
+	sess, exists := f.sessions[sessionID]
+	if exists {
 		sess.Close()
 		delete(f.sessions, sessionID)
 	}
+	// Transcript 实时双写：flush + fsync + 释放文件锁。只取 transcriptMu
+	// （叶子锁），不破坏 f.mu 的加锁顺序；sess 缺失时兜底回收残留 writer。
+	f.stopLiveTranscript(sessionID, sess)
 	// S3（评审 R5）：session 关闭 → mailbox Drop（显式回收孤儿结果）。
 	if mb, exists := f.sessionMailboxes[sessionID]; exists {
 		mb.Drop()
@@ -1312,6 +1327,8 @@ func (f *dinoFactory) CloseAll() {
 		_ = tr.Close()
 		delete(f.sessionTracers, sid)
 	}
+	// Transcript 实时双写：全部 writer flush + fsync + 关闭。
+	f.stopAllLiveTranscripts()
 }
 
 func (f *dinoFactory) GetTools() []types.Tool {
@@ -1502,6 +1519,9 @@ func (f *dinoFactory) Shutdown(ctx context.Context) error {
 			sess.Close()
 		}
 		f.sessions = make(map[string]*session.Session)
+
+		// Transcript 实时双写：buffer 仍可读，sync + fsync 后关闭文件。
+		f.stopAllLiveTranscripts()
 
 		if resettable, ok := f.budget.(interface{ ResetAll() }); ok {
 			resettable.ResetAll()

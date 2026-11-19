@@ -51,6 +51,20 @@ func (f *dinoFactory) ExportSessionTranscript(ctx context.Context, sessionID str
 		return "", fmt.Errorf("export transcript: read history: %w", err)
 	}
 
+	// Live dual-write (P5-A): when the session already streams into
+	// <dir>/<name>.jsonl, flush that file and return it. Replacing the file
+	// below (temp file + rename) would detach the live writer's open
+	// descriptor, so its later appends would vanish from the path. The live
+	// file is already the canonical copy; export just needs to ensure it is
+	// on disk.
+	if lt := f.liveTranscriptFor(sessionID); lt != nil {
+		if path, ok, err := lt.exportPath(ctx, mem); err != nil {
+			return "", fmt.Errorf("export transcript: flush live transcript: %w", err)
+		} else if ok {
+			return path, nil
+		}
+	}
+
 	dir := f.transcriptDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("export transcript: create dir %s: %w", dir, err)
