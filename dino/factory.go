@@ -1013,6 +1013,10 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	agentConfig.MaxToolCallsPerRound = f.config.MaxToolCallsPerRound
 	agentConfig.Timeout = f.config.Timeout
 	agentConfig.ToolExecutionTimeout = f.config.ToolExecutionTimeout
+	// 工具结果喂给模型前的默认长度：engine 的兜底是
+	// types.MaxTruncationLength(2048)，对 API/JSON/文件输出远远不够。
+	// 与 pipeline sanitize 共用同一预算（默认 120KB）。
+	agentConfig.DefaultToolResultMaxLen = pipelineTruncationBudget(f.config)
 	agentConfig.ToolTimeouts = cloneToolTimeouts(f.config.ToolTimeouts)
 	// 评审 BLOCKER-3：wait_agent 内部默认 30s，engine 外壳必须配得更高，否则
 	// engine ToolExecutionTimeout(60s)/ToolTimeouts 先 cancel → 父代理拿 tool error
