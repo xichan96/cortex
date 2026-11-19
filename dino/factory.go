@@ -84,13 +84,40 @@ func NewBudget(cfg *BudgetConfig) Budget {
 
 type memoryAdapter struct {
 	provider chatstore.Provider
+	// direct is set in P7-A transcript source-of-truth mode: the JSONL
+	// transcript is the only memory backend. Reads and lifecycle calls
+	// delegate to it and SaveContext writes land in it; provider is ignored.
+	// nil keeps the legacy chatstore path byte-for-byte unchanged.
+	direct types.MemoryProvider
 }
+
+// addMessage routes a message to whichever backend this adapter wraps.
+func (m *memoryAdapter) addMessage(ctx context.Context, msg types.Message) error {
+	if m.direct != nil {
+		w, ok := m.direct.(interface {
+			AddMessage(context.Context, types.Message) error
+		})
+		if !ok {
+			return fmt.Errorf("memory provider %T does not support AddMessage", m.direct)
+		}
+		return w.AddMessage(ctx, msg)
+	}
+	return m.provider.AddMessage(ctx, chatstore.Message{
+		Role:       msg.Role,
+		Content:    msg.Content,
+		Name:       msg.Name,
+		Parts:      msg.Parts,
+		ToolCalls:  msg.ToolCalls,
+		ToolCallID: msg.ToolCallID,
+	})
+}
+
 type memProvSaver struct {
-	p chatstore.Provider
+	m *memoryAdapter
 }
 
 func (s *memProvSaver) AddMessage(ctx context.Context, msg types.Message) error {
-	return s.p.AddMessage(ctx, msg)
+	return s.m.addMessage(ctx, msg)
 }
 
 func (m *memoryAdapter) LoadMemoryVariables(ctx context.Context) (map[string]interface{}, error) {
@@ -126,7 +153,7 @@ func (m *memoryAdapter) SaveContext(ctx context.Context, input, output map[strin
 					logger.Warn("[memoryAdapter] failed to marshal input", slog.String("error", err.Error()))
 					inputJSON = []byte(fmt.Sprintf("%v", input))
 				}
-				if err := m.provider.AddMessage(ctx, chatstore.Message{
+				if err := m.addMessage(ctx, types.Message{
 					Role:    role,
 					Content: fmt.Sprintf("Input: %s", string(inputJSON)),
 				}); err != nil {
@@ -134,7 +161,7 @@ func (m *memoryAdapter) SaveContext(ctx context.Context, input, output map[strin
 				}
 			} else {
 				msg := types.Message{Role: role, Content: inputMsg}
-				if err := m.provider.AddMessage(ctx, msg); err != nil {
+				if err := m.addMessage(ctx, msg); err != nil {
 					return err
 				}
 			}
@@ -150,7 +177,7 @@ func (m *memoryAdapter) SaveContext(ctx context.Context, input, output map[strin
 				logger.Warn("[memoryAdapter] failed to marshal input", slog.String("error", err.Error()))
 				inputJSON = []byte(fmt.Sprintf("%v", input))
 			}
-			if err := m.provider.AddMessage(ctx, chatstore.Message{
+			if err := m.addMessage(ctx, types.Message{
 				Role:    role,
 				Content: fmt.Sprintf("Input: %s", string(inputJSON)),
 			}); err != nil {
@@ -161,10 +188,13 @@ func (m *memoryAdapter) SaveContext(ctx context.Context, input, output map[strin
 	if output == nil {
 		return nil
 	}
-	return agentproviders.SaveOutputWithToolSteps(ctx, &memProvSaver{m.provider}, output)
+	return agentproviders.SaveOutputWithToolSteps(ctx, &memProvSaver{m: m}, output)
 }
 
 func (m *memoryAdapter) Clear(ctx context.Context) error {
+	if m.direct != nil {
+		return m.direct.Clear(ctx)
+	}
 	return m.provider.Clear(ctx)
 }
 
@@ -176,6 +206,11 @@ func (m *memoryAdapter) Clear(ctx context.Context) error {
 // 摘要由 Hybrid.GetMessages 尾部注入，此处返回空禁用 engine 头部注入，避免双注入。
 // 非 Hybrid 底层（新路径之外的内存/SQLite provider）仍走头部注入。
 func (m *memoryAdapter) GetSummary(ctx context.Context) (string, error) {
+	if m.direct != nil {
+		// Transcript source-of-truth has no summary channel: compaction is a
+		// no-op in P7-A, so there is nothing to inject.
+		return "", nil
+	}
 	if h, ok := m.provider.(*chatstore.Hybrid); ok && h.TailSummaryEnabled() {
 		return "", nil
 	}
@@ -183,6 +218,9 @@ func (m *memoryAdapter) GetSummary(ctx context.Context) (string, error) {
 }
 
 func (m *memoryAdapter) GetChatHistory(ctx context.Context) ([]types.Message, error) {
+	if m.direct != nil {
+		return m.direct.GetChatHistory(ctx)
+	}
 	msgs, err := m.provider.GetMessages(ctx, 0)
 	if err != nil {
 		return nil, err
@@ -202,10 +240,25 @@ func (m *memoryAdapter) GetChatHistory(ctx context.Context) ([]types.Message, er
 }
 
 func (m *memoryAdapter) StoredMessageCount(ctx context.Context) (int, error) {
+	if m.direct != nil {
+		if c, ok := m.direct.(interface {
+			StoredMessageCount(context.Context) (int, error)
+		}); ok {
+			return c.StoredMessageCount(ctx)
+		}
+		history, err := m.direct.GetChatHistory(ctx)
+		if err != nil {
+			return 0, err
+		}
+		return len(history), nil
+	}
 	return m.provider.StoredMessageCount(ctx)
 }
 
 func (m *memoryAdapter) CompressMemory(ctx context.Context, llm types.LLMProvider, maxMessages int) error {
+	if m.direct != nil {
+		return m.direct.CompressMemory(ctx, llm, maxMessages)
+	}
 	// llm 已由 engine 传入（agent_execution.go ae.model）；Hybrid 在 factory 构造时已
 	// 注入 LLMSummaryAdapter，无需在此二次传递（避免双源）。maxMessages（keepWindow）
 	// 留作尾部预算上限的提示——本版沿用 provider 内部 Config + LLMSummaryAdapter 输入
@@ -214,19 +267,27 @@ func (m *memoryAdapter) CompressMemory(ctx context.Context, llm types.LLMProvide
 }
 
 func (m *memoryAdapter) ReplayMessages(ctx context.Context, messages []types.Message) error {
+	if m.direct != nil {
+		// Prefer the provider's own replay so a transcript rewrite is atomic
+		// with respect to its log (Clear + ordered appends).
+		if r, ok := m.direct.(types.MemoryReplay); ok {
+			return r.ReplayMessages(ctx, messages)
+		}
+		if err := m.direct.Clear(ctx); err != nil {
+			return err
+		}
+		for _, msg := range messages {
+			if err := m.addMessage(ctx, msg); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	if err := m.provider.Clear(ctx); err != nil {
 		return err
 	}
 	for _, msg := range messages {
-		mm := chatstore.Message{
-			Role:       msg.Role,
-			Content:    msg.Content,
-			Name:       msg.Name,
-			Parts:      msg.Parts,
-			ToolCalls:  msg.ToolCalls,
-			ToolCallID: msg.ToolCallID,
-		}
-		if err := m.provider.AddMessage(ctx, mm); err != nil {
+		if err := m.addMessage(ctx, msg); err != nil {
 			return err
 		}
 	}
@@ -483,6 +544,10 @@ type dinoFactory struct {
 	// 都持 f.mu，反向加锁会死锁）。见 dino/transcript_live.go。
 	transcriptMu    sync.Mutex
 	liveTranscripts map[string]*liveTranscript
+	// transcriptSources 每 session 一个 source-of-truth JSONL provider
+	// （Transcript.SourceOfTruth）。与 liveTranscripts 共用 transcriptMu；
+	// 两种模式互斥（source-of-truth 时不再启动 mirror）。
+	transcriptSources map[string]*transcriptMemoryProvider
 }
 
 // cloneToolTimeouts 深拷贝 ToolTimeouts map，避免 CreateSession 注入 wait_agent
@@ -1170,8 +1235,28 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 
 	agent.AddTools(ctx, wrappedTools)
 
-	// 注入 provider 时无条件装配 memory（不受 MaxHistoryMessages/EnableCompress 门控）。
-	if f.memoryProvider != nil || f.config.Memory.MaxHistoryMessages > 0 || f.config.Memory.EnableCompress {
+	// P7-A：transcript source-of-truth（灰度）。开启时 JSONL 是会话唯一的记忆
+	// 真相源：写入直接 append，读取用 BuildContext 重建；不构造 chatstore，也
+	// 不启动 live mirror（同一文件只允许一个写者）。WithMemoryProvider 注入的
+	// provider 在该模式下不参与（单源优先）。打开失败显式返回错误而不是静默
+	// 回退，避免“声称 SoT 却在读 chatstore”。
+	if f.config.Transcript.SourceOfTruth {
+		src, srcErr := newTranscriptMemoryProvider(
+			f.transcriptDir(), sessionID, f.config.WorkspaceRoot,
+			f.config.Memory.MaxHistoryMessages,
+		)
+		if srcErr != nil {
+			return nil, fmt.Errorf("transcript source of truth: %w", srcErr)
+		}
+		if regErr := f.registerTranscriptSource(sessionID, src); regErr != nil {
+			_ = src.Close()
+			return nil, regErr
+		}
+		agent.SetMemory(ctx, &memoryAdapter{direct: src})
+		logger.Info("[DinoFactory] Transcript source of truth enabled",
+			slog.String("session_id", sessionID),
+			slog.String("path", src.Path()))
+	} else if f.memoryProvider != nil || f.config.Memory.MaxHistoryMessages > 0 || f.config.Memory.EnableCompress {
 		memConfig := &chatstore.Config{
 			MaxHistoryMessages:      f.config.Memory.MaxHistoryMessages,
 			EnableMemoryCompress:    f.config.Memory.EnableCompress,
@@ -1280,7 +1365,11 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 
 	// Transcript 实时双写（P5-A）：订阅须在 Start 之前完成，否则首个 turn 的
 	// Done 可能先于订阅到达。Enabled=false 时无任何开销。
-	f.startLiveTranscript(sess, sessionID)
+	// P7-A：source-of-truth 已有唯一写者直接写同一文件；再开 mirror 会撞 flock
+	// 并重复追加，因此该模式下跳过。
+	if !f.config.Transcript.SourceOfTruth {
+		f.startLiveTranscript(sess, sessionID)
+	}
 
 	sess.Start()
 
@@ -1326,6 +1415,8 @@ func (f *dinoFactory) CloseSession(sessionID string) {
 	// Transcript 实时双写：flush + fsync + 释放文件锁。只取 transcriptMu
 	// （叶子锁），不破坏 f.mu 的加锁顺序；sess 缺失时兜底回收残留 writer。
 	f.stopLiveTranscript(sessionID, sess)
+	// P7-A：source-of-truth log 在 session loop 停止后再关闭（先 flush）。
+	f.stopTranscriptSource(sessionID)
 	// S3（评审 R5）：session 关闭 → mailbox Drop（显式回收孤儿结果）。
 	if mb, exists := f.sessionMailboxes[sessionID]; exists {
 		mb.Drop()
@@ -1385,6 +1476,8 @@ func (f *dinoFactory) CloseAll() {
 	}
 	// Transcript 实时双写：全部 writer flush + fsync + 关闭。
 	f.stopAllLiveTranscripts()
+	// P7-A：全部 source-of-truth log 一并关闭。
+	f.stopAllTranscriptSources()
 }
 
 func (f *dinoFactory) GetTools() []types.Tool {
@@ -1578,6 +1671,8 @@ func (f *dinoFactory) Shutdown(ctx context.Context) error {
 
 		// Transcript 实时双写：buffer 仍可读，sync + fsync 后关闭文件。
 		f.stopAllLiveTranscripts()
+		// P7-A：source-of-truth log 同样 sync 后关闭。
+		f.stopAllTranscriptSources()
 
 		if resettable, ok := f.budget.(interface{ ResetAll() }); ok {
 			resettable.ResetAll()
