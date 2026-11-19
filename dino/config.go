@@ -74,6 +74,13 @@ type TranscriptConfig struct {
 	// Dir is the transcript directory. Empty derives it from the agent home
 	// session directory, then Memory.PersistDirectory/transcripts.
 	Dir string `yaml:"dir"`
+	// SourceOfTruth (P7-A grayscale) makes the per-session JSONL transcript the
+	// session's only memory: CreateSession opens
+	// <Dir>/<safe session id>.jsonl, reads rebuild from it and writes append to
+	// it. Default false keeps chatstore as the memory backend. When true, live
+	// dual-write (Enabled) is skipped: the transcript is written directly, and
+	// chatstore/WithMemoryProvider are not used for that session.
+	SourceOfTruth bool `yaml:"source_of_truth"`
 }
 
 // ToolPipeline authorizer modes. "allow_all" keeps the pipeline's authorization

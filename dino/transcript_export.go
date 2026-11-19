@@ -51,6 +51,16 @@ func (f *dinoFactory) ExportSessionTranscript(ctx context.Context, sessionID str
 		return "", fmt.Errorf("export transcript: read history: %w", err)
 	}
 
+	// Source-of-truth (P7-A): the memory provider's file is already canonical;
+	// flush it and return the path. Replacing it below (temp + rename) would
+	// detach the provider's open descriptor.
+	if src := f.transcriptSourceFor(sessionID); src != nil {
+		if err := src.Sync(); err != nil {
+			return "", fmt.Errorf("export transcript: flush source transcript: %w", err)
+		}
+		return src.Path(), nil
+	}
+
 	// Live dual-write (P5-A): when the session already streams into
 	// <dir>/<name>.jsonl, flush that file and return it. Replacing the file
 	// below (temp file + rename) would detach the live writer's open
