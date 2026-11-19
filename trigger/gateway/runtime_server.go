@@ -5,26 +5,42 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
+	"github.com/xichan96/cortex/agent/approval"
 	"github.com/xichan96/cortex/agent/runtime"
 )
 
 // RuntimeServer exposes an agent/runtime.Runtime over HTTP:
 //
-//	POST /rpc     one command per request, JSON {id,command,data}
-//	GET  /events  Server-Sent Events stream of runtime events
-//	GET  /health  liveness probe
+//	POST /rpc         one command per request, JSON {id,command,data}
+//	GET  /events      Server-Sent Events stream of runtime events
+//	GET  /ui/requests Server-Sent Events stream of approval/question/plan requests
+//	POST /ui/respond  answer a pending UI request by ID
+//	GET  /health      liveness probe
+//
+// The /ui/* endpoints are only available when an approval.InteractiveBridge is
+// configured with NewRuntimeServerWithBridge or SetBridge.
 //
 // It is transport-neutral with respect to the agent: any runtime (dino
 // SessionRuntime, MemoryRuntime, an embedded SDK runtime) can be mounted here.
 type RuntimeServer struct {
 	rt runtime.Runtime
+
+	mu     sync.RWMutex
+	bridge approval.InteractiveBridge
 }
 
 // NewRuntimeServer wraps rt in an HTTP handler.
 func NewRuntimeServer(rt runtime.Runtime) *RuntimeServer {
 	return &RuntimeServer{rt: rt}
+}
+
+// NewRuntimeServerWithBridge wraps rt and enables the /ui/* endpoints backed
+// by bridge.
+func NewRuntimeServerWithBridge(rt runtime.Runtime, bridge approval.InteractiveBridge) *RuntimeServer {
+	return &RuntimeServer{rt: rt, bridge: bridge}
 }
 
 // RuntimeRequest is the POST /rpc body.
@@ -52,6 +68,10 @@ func (s *RuntimeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleRPC(w, r)
 	case "/events":
 		s.handleEvents(w, r)
+	case "/ui/requests":
+		s.handleUIRequests(w, r)
+	case "/ui/respond":
+		s.handleUIRespond(w, r)
 	default:
 		http.NotFound(w, r)
 	}
