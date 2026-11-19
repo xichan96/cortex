@@ -766,6 +766,7 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	}
 	agentConfig.SystemMessage = systemPrompt
 	agentConfig.MaxIterations = f.config.MaxIterations
+	agentConfig.MaxToolCallsPerRound = f.config.MaxToolCallsPerRound
 	agentConfig.Timeout = f.config.Timeout
 	agentConfig.ToolExecutionTimeout = f.config.ToolExecutionTimeout
 	agentConfig.ToolTimeouts = cloneToolTimeouts(f.config.ToolTimeouts)

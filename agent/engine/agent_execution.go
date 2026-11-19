@@ -113,6 +113,14 @@ func (ae *AgentEngine) getHooks() hooks.Hooks {
 
 // iterationDelay 每轮工具往返之间的等待。0（默认）= 不等待；
 // 负值 = 旧的 100ms 行为（兼容需要节流的调用方，如某些限流场景）。
+// maxToolCallsPerRound 单轮并发工具上限。0 = 不限制。
+func (ae *AgentEngine) maxToolCallsPerRound() int {
+	if c := ae.getConfig(); c != nil {
+		return c.MaxToolCallsPerRound
+	}
+	return 0
+}
+
 func (ae *AgentEngine) iterationDelay() time.Duration {
 	if c := ae.getConfig(); c != nil {
 		switch {
@@ -1866,6 +1874,28 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 		}
 		logger.LogExecution("executeStreamIteration", iteration, "Processing tool calls",
 			slog.Int("tool_count", len(result.ToolCalls)))
+
+		// 单轮并发工具上限：模型一口气发十几个调用时，截断并把超出部分作为
+		// 错误结果回给模型。并发跑完再一次性看结果正是「一次查完所有接口」
+		// 的坏体验；上限强迫它「查一批 → 看结果 → 再决定」。
+		if cap := ae.maxToolCallsPerRound(); cap > 0 && len(result.ToolCalls) > cap {
+			dropped := result.ToolCalls[cap:]
+			result.ToolCalls = result.ToolCalls[:cap]
+			for _, tc := range dropped {
+				result.IntermediateSteps = append(result.IntermediateSteps, types.ToolCallData{
+					Action: types.ToolActionStep{
+						Tool:       tc.Tool,
+						ToolInput:  tc.ToolInput,
+						ToolCallID: tc.ToolCallID,
+						Log:        "skipped: too many tool calls in one round",
+					},
+					Observation: fmt.Sprintf(
+						`{"error":"单轮工具调用超过上限 %d，本次未执行。请一次只查少量接口，看到结果再决定下一步。"}`, cap),
+				})
+			}
+			logger.LogExecution("executeStreamIteration", iteration, "Truncated tool calls",
+				slog.Int("kept", cap), slog.Int("dropped", len(dropped)))
+		}
 
 		if iteration+1 >= maxIterations {
 			logger.LogExecution("executeStreamIteration", iteration, "Reached maximum iterations, skipping tool execution")

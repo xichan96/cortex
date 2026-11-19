@@ -74,7 +74,15 @@ type AgentConfig struct {
 	RetryDelay           time.Duration            `json:"retryDelay"`
 	// IterationDelay 每轮工具往返之间的额外等待。0 = 使用 IterationDelay 默认值；
 	// 负数 = 完全不等待。交互式场景建议 0（默认 100ms 是无谓延迟）。
-	IterationDelay           time.Duration                                                     `json:"iterationDelay,omitempty"`
+	IterationDelay time.Duration `json:"iterationDelay,omitempty"`
+	// MaxToolCallsPerRound 单次 LLM 响应里**允许并发执行**的工具调用数上限。
+	// 超出部分不执行，回一条错误结果告诉模型「一次别贪多」。
+	//
+	// 为什么需要：Anthropic 允许一轮返回多个 tool_use，模型很容易一口气发
+	// 十几二十个（实测有 22 个，含大量瞎猜的接口）。并发跑完再一次性看结果，
+	// 正是「一次性查询了所有工具」的坏体验；逐个「查完判断再决定」才是对的。
+	// 0 = 不限制（保持旧行为）。
+	MaxToolCallsPerRound     int                                                               `json:"maxToolCallsPerRound,omitempty"`
 	EnableToolRetry          bool                                                              `json:"enableToolRetry"`
 	MaxHistoryMessages       int                                                               `json:"maxHistoryMessages"`
 	MaxBudgetTokens          int                                                               `json:"maxBudgetTokens"`

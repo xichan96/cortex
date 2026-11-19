@@ -13,45 +13,47 @@ import (
 )
 
 type Config struct {
-	DefaultModel          string                   `yaml:"default_model"`
-	DefaultProvider       string                   `yaml:"default_provider"`
-	Temperature           float32                  `yaml:"temperature"`
-	MaxTokens             int                      `yaml:"max_tokens"`
-	TopP                  float32                  `yaml:"top_p"`
-	Timeout               time.Duration            `yaml:"timeout"`
-	SystemPrompt          string                   `yaml:"system_prompt"`
-	MaxIterations         int                      `yaml:"max_iterations"`
-	MaxSessions           int                      `yaml:"max_sessions"`
-	ToolExecutionTimeout  time.Duration            `yaml:"tool_execution_timeout"`
-	ToolTimeouts          map[string]time.Duration `yaml:"tool_timeouts"`
+	DefaultModel    string        `yaml:"default_model"`
+	DefaultProvider string        `yaml:"default_provider"`
+	Temperature     float32       `yaml:"temperature"`
+	MaxTokens       int           `yaml:"max_tokens"`
+	TopP            float32       `yaml:"top_p"`
+	Timeout         time.Duration `yaml:"timeout"`
+	SystemPrompt    string        `yaml:"system_prompt"`
+	MaxIterations   int           `yaml:"max_iterations"`
+	// MaxToolCallsPerRound 单轮并发工具上限（0=不限）。见 types.AgentConfig 的说明。
+	MaxToolCallsPerRound  int                                                               `yaml:"max_tool_calls_per_round"`
+	MaxSessions           int                                                               `yaml:"max_sessions"`
+	ToolExecutionTimeout  time.Duration                                                     `yaml:"tool_execution_timeout"`
+	ToolTimeouts          map[string]time.Duration                                          `yaml:"tool_timeouts"`
 	ToolTimeoutCalculator func(toolName string, input map[string]interface{}) time.Duration `json:"-" yaml:"-"`
-	LoopDetection         LoopDetectionConfig    `yaml:"loop_detection"`
-	Budget                BudgetConfig           `yaml:"budget"`
-	Tools                 ToolConfig             `yaml:"tools"`
-	Permission            map[string]interface{} `yaml:"permission"`
-	WorkspaceRoot         string                 `yaml:"workspace_root"`
-	Skills                SkillsConfig           `yaml:"skills"`
-	Provider              ProviderConfig         `yaml:"provider"`
-	PlannerMode           PlannerModeConfig      `yaml:"planner_mode"`
-	Memory                MemoryConfig           `yaml:"memory"`
-	PromptCaching         PromptCachingConfig    `yaml:"prompt_caching"`
-	LongTermMemory        MemLongTermConfig      `yaml:"long_term_memory"`
-	Subagent              agent.SubagentConfig   `yaml:"subagent"`
-	MCP                   MCPConfig              `yaml:"mcp"`
-	Trace                 TraceConfig            `yaml:"trace"`
+	LoopDetection         LoopDetectionConfig                                               `yaml:"loop_detection"`
+	Budget                BudgetConfig                                                      `yaml:"budget"`
+	Tools                 ToolConfig                                                        `yaml:"tools"`
+	Permission            map[string]interface{}                                            `yaml:"permission"`
+	WorkspaceRoot         string                                                            `yaml:"workspace_root"`
+	Skills                SkillsConfig                                                      `yaml:"skills"`
+	Provider              ProviderConfig                                                    `yaml:"provider"`
+	PlannerMode           PlannerModeConfig                                                 `yaml:"planner_mode"`
+	Memory                MemoryConfig                                                      `yaml:"memory"`
+	PromptCaching         PromptCachingConfig                                               `yaml:"prompt_caching"`
+	LongTermMemory        MemLongTermConfig                                                 `yaml:"long_term_memory"`
+	Subagent              agent.SubagentConfig                                              `yaml:"subagent"`
+	MCP                   MCPConfig                                                         `yaml:"mcp"`
+	Trace                 TraceConfig                                                       `yaml:"trace"`
 }
 
 // TraceConfig controls the context-trace event log (docs/design/context-trace.md).
 // Enabled=false (default) means no recorder is constructed at all — the engine's
 // tracer stays nil (zero overhead).
 type TraceConfig struct {
-	Enabled              bool   `yaml:"enabled"`
-	Dir                  string `yaml:"dir,omitempty"` // default "./dino_sessions/traces"
-	QueueSize            int    `yaml:"queue_size,omitempty"`
-	FlushIntervalMs      int    `yaml:"flush_interval_ms,omitempty"`
-	CaptureFullMessages  bool   `yaml:"capture_full_messages,omitempty"`
-	CaptureFullToolOutput bool  `yaml:"capture_full_tool_output,omitempty"`
-	CaptureChunks        bool   `yaml:"capture_chunks,omitempty"`
+	Enabled               bool   `yaml:"enabled"`
+	Dir                   string `yaml:"dir,omitempty"` // default "./dino_sessions/traces"
+	QueueSize             int    `yaml:"queue_size,omitempty"`
+	FlushIntervalMs       int    `yaml:"flush_interval_ms,omitempty"`
+	CaptureFullMessages   bool   `yaml:"capture_full_messages,omitempty"`
+	CaptureFullToolOutput bool   `yaml:"capture_full_tool_output,omitempty"`
+	CaptureChunks         bool   `yaml:"capture_chunks,omitempty"`
 }
 
 type MemoryConfig struct {
@@ -83,7 +85,7 @@ type MemoryConfig struct {
 // a partial YAML block (e.g. only `enabled: false`) override just that field
 // instead of silently zeroing the other toggles.
 type PromptCachingConfig struct {
-	Enabled          bool  `yaml:"enabled"`             // default true (pure cost optimization)
+	Enabled          bool  `yaml:"enabled"` // default true (pure cost optimization)
 	SystemBreakpoint *bool `yaml:"system_breakpoint,omitempty"`
 	ToolsBreakpoint  *bool `yaml:"tools_breakpoint,omitempty"`
 	HistoryEveryN    *int  `yaml:"history_every_n,omitempty"` // history breakpoint budget (≤ remaining of 4); 0 = none
@@ -150,14 +152,14 @@ func (c SkillsConfig) SkillPaths() []string {
 }
 
 type ToolConfig struct {
-	Profile                    string   `yaml:"profile"`
-	Allowed                    []string `yaml:"allowed"`
-	ApprovalRequired           []string `yaml:"approval_required"`
-	Denied                     []string `yaml:"denied"`
-	MaxToolParallelism         int      `yaml:"max_tool_parallelism,omitempty"`          // 0=默认 max(4, GOMAXPROCS*2)；>0 用该值
-	StreamBufferSize           int      `yaml:"stream_buffer_size,omitempty"`            // 0=默认 50
-	ResultLimiterMaxBytes      int      `yaml:"result_limiter_max_bytes,omitempty"`      // 0=默认 120_000
-	ResultLimiterMaxStringBytes int     `yaml:"result_limiter_max_string_bytes,omitempty"` // 0=默认 60_000
+	Profile                     string   `yaml:"profile"`
+	Allowed                     []string `yaml:"allowed"`
+	ApprovalRequired            []string `yaml:"approval_required"`
+	Denied                      []string `yaml:"denied"`
+	MaxToolParallelism          int      `yaml:"max_tool_parallelism,omitempty"`            // 0=默认 max(4, GOMAXPROCS*2)；>0 用该值
+	StreamBufferSize            int      `yaml:"stream_buffer_size,omitempty"`              // 0=默认 50
+	ResultLimiterMaxBytes       int      `yaml:"result_limiter_max_bytes,omitempty"`        // 0=默认 120_000
+	ResultLimiterMaxStringBytes int      `yaml:"result_limiter_max_string_bytes,omitempty"` // 0=默认 60_000
 	// ToolSearchEnabled 控制是否注入 tool_search 工具并启用 Deferred 工具的
 	// 延迟发现（E2）。默认 true。
 	ToolSearchEnabled bool `yaml:"tool_search_enabled,omitempty"`
@@ -208,12 +210,12 @@ type BudgetConfig struct {
 
 func DefaultConfig() *Config {
 	return &Config{
-		DefaultModel:         "gpt-4o-mini",
-		DefaultProvider:      "openai",
-		Temperature:          0.7,
-		MaxTokens:            4096,
-		TopP:                 1.0,
-		Timeout:              30 * time.Second,
+		DefaultModel:    "gpt-4o-mini",
+		DefaultProvider: "openai",
+		Temperature:     0.7,
+		MaxTokens:       4096,
+		TopP:            1.0,
+		Timeout:         30 * time.Second,
 		SystemPrompt: `You are an interactive AI coding assistant. Use the tools available to help the user with software engineering tasks.
 
 # Doing tasks
@@ -325,14 +327,14 @@ func DefaultConfig() *Config {
 			DefaultUserID:       "",
 		},
 		Subagent: agent.SubagentConfig{
-			Enabled:              true,
-			MaxHistoryMessages:   48,
-			NotifyCompletion:     true,
-			CompletionMaxRunes:   agent.DefaultDelegateTruncatedRunes,
-			DelegateReturnMode:   agent.DelegateReturnModeEnvelope,
-			MaxConcurrentSpawns:  agent.DefaultMaxConcurrentSpawns,
-			SpawnTimeout:         agent.DefaultSpawnTimeout,
-			WakeOnCompletion:     false, // S4 灰度开关：默认关，显式开启才启用 B2 唤醒（评审 RECOMMENDED-1）
+			Enabled:             true,
+			MaxHistoryMessages:  48,
+			NotifyCompletion:    true,
+			CompletionMaxRunes:  agent.DefaultDelegateTruncatedRunes,
+			DelegateReturnMode:  agent.DelegateReturnModeEnvelope,
+			MaxConcurrentSpawns: agent.DefaultMaxConcurrentSpawns,
+			SpawnTimeout:        agent.DefaultSpawnTimeout,
+			WakeOnCompletion:    false, // S4 灰度开关：默认关，显式开启才启用 B2 唤醒（评审 RECOMMENDED-1）
 		},
 		MCP: MCPConfig{
 			Enabled: false,
