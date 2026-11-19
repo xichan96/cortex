@@ -431,6 +431,20 @@ type dinoFactory struct {
 	// safe for concurrent use). nil means ToolPipeline.Enabled is false.
 	toolPipeline *pipeline.Pipeline
 
+	// —— P6-A approval UI bridge ——
+	// uiBridge is the host-injected UI bridge (WithUIBridge). Non-nil routes
+	// pipeline ask decisions through it; nil keeps the ApprovalStore sender
+	// path unchanged.
+	uiBridge approval.Bridge
+	// approvalAuthorizer is the pipeline authorizer built when
+	// ToolPipeline.Authorizer == "approval". It is retained so WithUIBridge can
+	// swap its broker: FactoryOptions are applied after the pipeline is built,
+	// and no calls can be in flight until NewDinoFactory returns.
+	approvalAuthorizer *permissionAuthorizer
+	// storeBroker is the ApprovalStore-backed broker installed at construction
+	// time. WithUIBridge(nil) restores it.
+	storeBroker approval.Broker
+
 	// extensionRegistry is the host-owned in-process extension registry, when
 	// installed with WithExtensionRegistry.
 	extensionRegistry *extensions.Registry
@@ -554,6 +568,26 @@ func WithApprovalSender(sender ApprovalSender) FactoryOption {
 		if sender != nil && f.approvalStore != nil {
 			f.approvalStore.SetSender(sender)
 		}
+	}
+}
+
+// WithUIBridge installs a host-provided approval UI bridge (design §5.4). When
+// the tool pipeline runs in approval mode, ask decisions are routed to the
+// bridge instead of the ApprovalStore sender; the two channels never prompt in
+// parallel. Passing nil (or not using the option) keeps the ApprovalStore path
+// unchanged, and the option has no effect when ToolPipeline.Enabled is false or
+// the authorizer is not "approval".
+func WithUIBridge(b approval.Bridge) FactoryOption {
+	return func(f *dinoFactory) {
+		f.uiBridge = b
+		if f.approvalAuthorizer == nil {
+			return
+		}
+		if b == nil {
+			f.approvalAuthorizer.broker = f.storeBroker
+			return
+		}
+		f.approvalAuthorizer.broker = &bridgeBroker{bridge: b}
 	}
 }
 
@@ -713,14 +747,21 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 				logger.Warn("[DinoFactory] Unknown tool_pipeline.approval_scope, falling back to once",
 					slog.String("approval_scope", raw))
 			}
-			authorizer = &permissionAuthorizer{
+			// The store-backed broker is the default approval channel. A host
+			// UI bridge replaced it later through WithUIBridge (options are
+			// applied after construction); storeBroker is retained so nil can
+			// restore it.
+			f.storeBroker = &approvalStoreBroker{store: approvalStore, scope: scope}
+			permissionAuth := &permissionAuthorizer{
 				evaluator: permission.NewEvaluator(f.permissionRuleset()),
-				broker:    &approvalStoreBroker{store: approvalStore, scope: scope},
+				broker:    f.storeBroker,
 				timeout:   brokerTimeout,
 				store:     newApprovalScopeStore(homeEnv),
 				scopes:    []approval.ApprovalScope{scope},
 				rule:      approvalRule,
 			}
+			f.approvalAuthorizer = permissionAuth
+			authorizer = permissionAuth
 			logger.Info("[DinoFactory] Tool pipeline approval authorizer enabled",
 				slog.String("approval_scope", string(scope)))
 		default:
