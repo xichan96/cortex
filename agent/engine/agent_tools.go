@@ -78,7 +78,7 @@ func (ae *AgentEngine) executeToolCallWithTimeout(ctx context.Context, tool type
 		var val any
 		var err error
 		if p != nil {
-			val, err = executeViaPipeline(ctx, p, tool, toolCallID, args)
+			val, err = ae.executeViaPipeline(ctx, p, tool, toolCallID, args)
 		} else {
 			val, err = tool.Execute(ctx, args)
 		}
@@ -100,15 +100,16 @@ func (ae *AgentEngine) executeToolCallWithTimeout(ctx context.Context, tool type
 // contract. Recoverable errors become a non-fatal {ok:false} observation (like
 // dino's nonFatalTool), so the model can recover; only fatal pipeline errors
 // propagate to the caller.
-func executeViaPipeline(ctx context.Context, p *pipeline.Pipeline, tool types.Tool, toolCallID string, args map[string]any) (any, error) {
+func (ae *AgentEngine) executeViaPipeline(ctx context.Context, p *pipeline.Pipeline, tool types.Tool, toolCallID string, args map[string]any) (any, error) {
 	if toolCallID == "" {
 		toolCallID = uuid.NewString()
 	}
 	res, err := p.ExecuteOne(ctx, &pipeline.Call{
-		ID:   toolCallID,
-		Name: tool.Name(),
-		Args: args,
-		Tool: tool,
+		ID:        toolCallID,
+		Name:      tool.Name(),
+		Args:      args,
+		Tool:      tool,
+		SessionID: ae.SessionID(),
 	})
 	if err != nil {
 		return nil, err

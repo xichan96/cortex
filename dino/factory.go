@@ -480,19 +480,23 @@ func (f *dinoFactory) GetAgent(name string) (*dinoAgent.Info, bool) {
 	return info, exists
 }
 
+// permissionRuleset is the single construction point for the session permission
+// ruleset. CreateSession (tool exposure filter), the pipeline approval
+// authorizer, and GetParentRuleset all share it so the gates cannot drift.
+func (f *dinoFactory) permissionRuleset() permission.Ruleset {
+	if len(f.config.Permission) > 0 {
+		return permission.Merge(permission.FromConfig(f.config.Permission), permission.DefaultRuleset())
+	}
+	return permission.Merge(
+		permission.FromAllowDenyAsk(f.config.Tools.Denied, f.config.Tools.ApprovalRequired, f.config.Tools.Allowed),
+		permission.DefaultRuleset(),
+	)
+}
+
 // GetParentRuleset 返回父代理权限约束（restrict-only，P2.4）。
 // 子代理 filterTools 时与自身权限取交集：仅同时被两边 allow 的工具可用。
 func (f *dinoFactory) GetParentRuleset() permission.Ruleset {
-	var ruleset permission.Ruleset
-	if len(f.config.Permission) > 0 {
-		ruleset = permission.Merge(permission.FromConfig(f.config.Permission), permission.DefaultRuleset())
-	} else {
-		ruleset = permission.Merge(
-			permission.FromAllowDenyAsk(f.config.Tools.Denied, f.config.Tools.ApprovalRequired, f.config.Tools.Allowed),
-			permission.DefaultRuleset(),
-		)
-	}
-	return ruleset
+	return f.permissionRuleset()
 }
 
 func (f *dinoFactory) RecordLoop(sessionID string, action agentutils.LoopDetectAction) {
@@ -665,12 +669,36 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 	}
 
 	if cfg.ToolPipeline.Enabled {
-		// Existing dino wrappers (permission/approval/loop detection) remain the
-		// gate; the pipeline adds validation, lifecycle hooks, result
-		// normalization, and sanitization. Migrating the gate to a
-		// pipeline.BrokerAuthorizer is the next step.
+		// Authorizer modes:
+		//   allow_all (default) — the dino wrapper stack remains the gate; the
+		//     pipeline adds validation, lifecycle hooks, normalization, and
+		//     sanitization.
+		//   approval — the pipeline's authorize stage evaluates the shared
+		//     permission ruleset and routes ask decisions to the approval
+		//     broker; CreateSession then stops adding the legacy ApprovalTool
+		//     wrapper (see pipelineHandlesApproval).
+		authorizer := pipeline.Authorizer(pipeline.AllowAllAuthorizer{})
+		switch cfg.ToolPipeline.Authorizer {
+		case "", ToolPipelineAuthorizerAllowAll:
+		case ToolPipelineAuthorizerApproval:
+			brokerTimeout := approvalTimeout
+			if brokerTimeout < 0 {
+				// ApprovalStore already applies its 5-minute default; do not add
+				// a second, different bound here.
+				brokerTimeout = 0
+			}
+			authorizer = &permissionAuthorizer{
+				evaluator: permission.NewEvaluator(f.permissionRuleset()),
+				broker:    &approvalStoreBroker{store: approvalStore},
+				timeout:   brokerTimeout,
+			}
+			logger.Info("[DinoFactory] Tool pipeline approval authorizer enabled")
+		default:
+			logger.Warn("[DinoFactory] Unknown tool_pipeline.authorizer, falling back to allow_all",
+				slog.String("authorizer", cfg.ToolPipeline.Authorizer))
+		}
 		f.toolPipeline = pipeline.New(pipeline.Config{
-			Authorizer: pipeline.AllowAllAuthorizer{},
+			Authorizer: authorizer,
 			Limits: pipeline.Limits{
 				MaxConcurrent:  cfg.ToolPipeline.MaxConcurrent,
 				DefaultTimeout: cfg.ToolPipeline.DefaultTimeout,
@@ -859,6 +887,9 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	agentConfig.MemoryCompressThreshold = compressTh
 
 	agent := engine.NewAgentEngine(f.llmProvider, agentConfig)
+	// The pipeline stamps every Call with this id so the approval broker can
+	// route requests (and session emitters) per conversation.
+	agent.SetSessionID(sessionID)
 	if f.toolPipeline != nil {
 		agent.SetToolPipeline(f.toolPipeline)
 	}
@@ -915,16 +946,7 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	sessionTools := f.tools.GetAllVisible()
 
 	logger.Info("[DinoFactory] Total tools in registry", slog.Int("count", len(sessionTools)))
-	var ruleset permission.Ruleset
-	if len(f.config.Permission) > 0 {
-		ruleset = permission.Merge(permission.FromConfig(f.config.Permission), permission.DefaultRuleset())
-	} else {
-		ruleset = permission.Merge(
-			permission.FromAllowDenyAsk(f.config.Tools.Denied, f.config.Tools.ApprovalRequired, f.config.Tools.Allowed),
-			permission.DefaultRuleset(),
-		)
-	}
-	evaluator := permission.NewEvaluator(ruleset)
+	evaluator := permission.NewEvaluator(f.permissionRuleset())
 	senderAdapter := &toolEventSenderAdapter{sender: f.streamSender}
 	var wrappedTools []types.Tool
 	needApproval := make(map[string]bool)
@@ -1342,6 +1364,14 @@ func (f *dinoFactory) RestoreSessionSnapshot(ctx context.Context, sessionID stri
 	return session.ApplySnapshotToSession(ctx, s, snap)
 }
 
+// pipelineHandlesApproval reports whether the installed tool pipeline owns
+// approval decisions. When true, wrapSessionTool must not add the legacy
+// ApprovalTool: every engine tool call already passes through the pipeline's
+// authorize stage, and stacking both would prompt twice.
+func (f *dinoFactory) pipelineHandlesApproval() bool {
+	return f.toolPipeline != nil && f.config.ToolPipeline.UsesApprovalAuthorizer()
+}
+
 // wrapSessionTool applies the full tool wrapper stack for a session tool, from
 // innermost to outermost: approval (path + explicit) -> result limiter ->
 // nonFatal -> loop detection.
@@ -1355,9 +1385,13 @@ func (f *dinoFactory) RestoreSessionSnapshot(ctx context.Context, sessionID stri
 //     the model, but passes through loop and approval-rejection errors;
 //  4. loopDetection is outermost so it observes every real call and its
 //     LoopDetectedError pierces nonFatal to stop the loop.
+//
+// When the pipeline approval authorizer is active, the explicit ApprovalTool
+// layer is skipped (the pipeline is the single approval gate); path approval,
+// limiter, nonFatal, and loop detection remain.
 func (f *dinoFactory) wrapSessionTool(t types.Tool, sessionID string, senderAdapter *toolEventSenderAdapter, needApproval map[string]bool) types.Tool {
 	wrapped := wrapWorkspacePathTools(t, f.config.WorkspaceRoot, sessionID, f.approvalStore, f.config.AllowedReadRoots)
-	if needApproval[t.Name()] {
+	if needApproval[t.Name()] && !f.pipelineHandlesApproval() {
 		wrapped = NewApprovalTool(wrapped, sessionID, f.approvalStore, needApproval)
 	}
 	wrapped = dinoTools.WrapToolResultLimiter(wrapped, f.config.Tools.ResultLimiterMaxBytes, f.config.Tools.ResultLimiterMaxStringBytes)
