@@ -25,6 +25,10 @@ type homeEnv struct {
 	systemPrompt       string
 	appendSystemPrompt string
 	trusted            bool
+
+	// Resources is the discovered prompts/agents/plugins/models/auth/memory
+	// snapshot. Discovery is additive: no session wiring consumes it yet.
+	Resources HomeResources
 }
 
 // loadHomeEnv resolves the ~/.cortex + <cwd>/.cortex layout and loads the
@@ -70,6 +74,12 @@ func loadHomeEnv(cfg HomeConfig) (*homeEnv, error) {
 	}
 
 	systemPrompt, appendPrompt := loadHomeSystemPrompts(paths, trusted)
+	resources := loadHomeResources(paths, trusted)
+	for _, d := range resources.Diagnostics {
+		if d.Severity >= home.SeverityWarning {
+			logger.Warn("[DinoFactory] agent home resource", slog.String("diagnostic", d.Error()))
+		}
+	}
 	return &homeEnv{
 		paths:              paths,
 		resolved:           resolved,
@@ -77,6 +87,7 @@ func loadHomeEnv(cfg HomeConfig) (*homeEnv, error) {
 		systemPrompt:       systemPrompt,
 		appendSystemPrompt: appendPrompt,
 		trusted:            trusted,
+		Resources:          resources,
 	}, nil
 }
 
