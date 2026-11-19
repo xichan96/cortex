@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -107,8 +108,9 @@ func (t *LazySkillTool) Metadata() types.ToolMetadata {
 
 // FormatSkillExpansion renders a skill body the way the model should see it:
 // the skill name, the absolute location, the directory relative references
-// resolve against, the declared constraints, and finally the body (plus the
-// caller's input appended as <args> when present).
+// resolve against, the declared constraints (both human-readable lines and a
+// machine-readable Policy line), and finally the body (plus the caller's input
+// appended as <args> when present).
 func FormatSkillExpansion(entry *skills.Entry, body, input string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Skill: %s\n", entry.Name)
@@ -119,6 +121,14 @@ func FormatSkillExpansion(entry *skills.Entry, body, input string) string {
 	}
 	if paths := entry.Paths(); len(paths) > 0 {
 		fmt.Fprintf(&b, "Paths: %s\n", strings.Join(paths, ", "))
+	}
+	// The structured policy lets hosts and the model apply the constraints
+	// without parsing the prose lines. It is additive: the body format below
+	// and the skill_name/input parameters are unchanged.
+	if policy := skills.FromEntry(entry); !policy.Empty() {
+		if encoded, err := json.Marshal(policy); err == nil {
+			fmt.Fprintf(&b, "Policy: %s\n", encoded)
+		}
 	}
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "<skill name=%q location=%q>\n", entry.Name, entry.Path)

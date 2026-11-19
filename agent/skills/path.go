@@ -7,12 +7,15 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 )
 
-func (s *Skill) MatchesPath(filePath string) bool {
-	if len(s.Paths) == 0 {
+// MatchPathPatterns reports whether filePath matches at least one doublestar
+// glob pattern. Patterns are trimmed and normalized to slash form; empty
+// patterns are ignored. Invalid patterns simply do not match.
+func MatchPathPatterns(patterns []string, filePath string) bool {
+	if len(patterns) == 0 {
 		return false
 	}
 	fp := filepath.ToSlash(filepath.Clean(filePath))
-	for _, pattern := range s.Paths {
+	for _, pattern := range patterns {
 		p := strings.TrimSpace(pattern)
 		if p == "" {
 			continue
@@ -23,6 +26,20 @@ func (s *Skill) MatchesPath(filePath string) bool {
 		}
 	}
 	return false
+}
+
+func (s *Skill) MatchesPath(filePath string) bool {
+	return MatchPathPatterns(s.Paths, filePath)
+}
+
+// MatchesPath reports whether filePath matches one of the entry's declared
+// paths globs. An entry with no paths never path-matches; callers that treat
+// "no paths" as "always applicable" must check that first.
+func (e *Entry) MatchesPath(filePath string) bool {
+	if e == nil {
+		return false
+	}
+	return MatchPathPatterns(e.Paths(), filePath)
 }
 
 func FilterSkillsForActivePaths(skills []Skill, activePaths []string) []Skill {
