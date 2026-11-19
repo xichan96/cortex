@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xichan96/cortex/agent/approval"
 	"github.com/xichan96/cortex/agent/home"
 	"github.com/xichan96/cortex/agent/llm"
 	"github.com/xichan96/cortex/agent/types"
@@ -81,6 +82,12 @@ type ToolPipelineConfig struct {
 	// (default, empty is treated as allow_all) or "approval" (permission
 	// ruleset + approval broker). Unknown values fall back to allow_all.
 	Authorizer string `yaml:"authorizer"`
+	// ApprovalScope is how long an approval routed through the pipeline broker
+	// is remembered: "once" (default, nothing is persisted), "session" (in
+	// memory for this process), "workspace" (<cwd>/.cortex/permissions.json,
+	// only when the project is trusted), or "always" (~/.cortex/permissions.json).
+	// Unknown values fall back to "once".
+	ApprovalScope string `yaml:"approval_scope"`
 }
 
 // UsesApprovalAuthorizer reports whether the pipeline owns tool approval: it
@@ -88,6 +95,13 @@ type ToolPipelineConfig struct {
 // avoid wrapping tools with the legacy ApprovalTool a second time.
 func (c ToolPipelineConfig) UsesApprovalAuthorizer() bool {
 	return c.Enabled && c.Authorizer == ToolPipelineAuthorizerApproval
+}
+
+// EffectiveApprovalScope is the normalized approval_scope. It never widens to a
+// persistent scope because of a typo: anything other than session/workspace/
+// always means "once".
+func (c ToolPipelineConfig) EffectiveApprovalScope() approval.ApprovalScope {
+	return approval.ParseScope(c.ApprovalScope)
 }
 
 // HomeConfig opts a factory into the agent-home layout.
