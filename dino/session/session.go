@@ -270,6 +270,24 @@ func (s *Session) notifyObservers(event *Event) {
 	}
 }
 
+// EmitApprovalRequest 把一次「工具等待审批」推给观察者。
+//
+// 为什么需要导出：审批是**阻塞等待用户输入**的（ApprovalStore 里 select 等
+// channel），而消费方（上层 UI/网关）只有通过事件才知道「现在有一个审批在等」。
+// 没有这条事件，用户永远看不到请求，只能等超时——那和「静默拒绝」没区别。
+//
+// 与 EventTypeApproval 的区别：那个是**策略已给出结论**（如自动批准），
+// 这条是**请求尚在等待**，载荷带 requestID 供消费方回灌决议。
+func (s *Session) EmitApprovalRequest(requestID, toolName, arguments string) {
+	s.emit(&Event{
+		Type:            EventTypeApproval,
+		ToolName:        toolName,
+		RequestID:       requestID,
+		Content:         arguments,
+		ApprovalPending: true,
+	})
+}
+
 func (s *Session) emit(event *Event) {
 	event.Timestamp = time.Now()
 	event.SessionID = s.id

@@ -1115,6 +1115,13 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 
 	f.sessions[sessionID] = sess
 
+	// 审批请求要能传到上层：注册「本会话的审批请求」发射器。
+	// 没有它，ApprovalStore 只会把请求交给 sender 回调（自动策略立刻答复），
+	// 而上层协议层（Dojo 的 WS）无从得知——用户永远看不到审批卡。
+	f.approvalStore.SetSessionEmitter(sessionID, func(requestID, toolName, arguments string) {
+		sess.EmitApprovalRequest(requestID, toolName, arguments)
+	})
+
 	sess.Start()
 
 	return sess, nil
@@ -1156,6 +1163,8 @@ func (f *dinoFactory) CloseSession(sessionID string) {
 		mb.Drop()
 		delete(f.sessionMailboxes, sessionID)
 	}
+	// 审批请求发射器随会话一起注销：会话没了，再发也没人消费。
+	f.approvalStore.SetSessionEmitter(sessionID, nil)
 	// S4（评审 RECOMMENDED-7）：唤醒适配器反注册 SubscribeAll。
 	if w, exists := f.sessionWakes[sessionID]; exists {
 		w.Close()

@@ -232,6 +232,11 @@ type ApprovalStore struct {
 	pending map[string]chan bool
 	sender  ApprovalSender
 	timeout time.Duration
+	// emitters 按 sessionID 暴露审批请求事件的能力（由 factory 注入）。
+	// 有了它，消费方（Dojo 的 WS 层）才能在**等待期间**看到请求；
+	// 只有 SendToolApprovalRequest 回调的话，请求是发给了「某个 sender」，
+	// 而上层协议层无从得知。
+	emitters map[string]func(requestID, toolName, arguments string)
 }
 
 type ApprovalSender interface {
@@ -244,9 +249,22 @@ func NewApprovalStore(timeout time.Duration) *ApprovalStore {
 		timeout = 5 * time.Minute
 	}
 	return &ApprovalStore{
-		pending: make(map[string]chan bool),
-		timeout: timeout,
+		pending:  make(map[string]chan bool),
+		timeout:  timeout,
+		emitters: make(map[string]func(requestID, toolName, arguments string)),
 	}
+}
+
+// SetSessionEmitter 注册「把审批请求告诉消费方」的回调（每会话一个）。
+// 传 nil 表示该会话不再需要（会话关闭时调用）。
+func (s *ApprovalStore) SetSessionEmitter(sessionID string, fn func(requestID, toolName, arguments string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if fn == nil {
+		delete(s.emitters, sessionID)
+		return
+	}
+	s.emitters[sessionID] = fn
 }
 
 func (s *ApprovalStore) SetSender(sender ApprovalSender) {
@@ -276,6 +294,15 @@ func (s *ApprovalStore) RequestApproval(
 	s.mu.Unlock()
 
 	sendRequest := func() {
+		// 先让消费方看到「有请求在等」，再走 sender 回调（自动策略会立刻答复）。
+		// 顺序很重要：事件必须在等待开始之前发出，否则消费方拿到时请求可能已被
+		// 自动批准，用户看到一条已经失效的审批卡。
+		s.mu.Lock()
+		emit := s.emitters[sessionID]
+		s.mu.Unlock()
+		if emit != nil {
+			emit(requestID, toolName, arguments)
+		}
 		sender.SendToolApprovalRequest(sessionID, requestID, toolName, arguments)
 	}
 

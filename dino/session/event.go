@@ -43,9 +43,15 @@ type Event struct {
 	ToolOutput any            `json:"tool_output,omitempty"`
 	Error      string         `json:"error,omitempty"`
 	Approved   bool           `json:"approved,omitempty"`
-	Usage      *Usage         `json:"usage,omitempty"`
-	Plan       *Plan          `json:"plan,omitempty"`
-	StopCause  string         `json:"stop_cause,omitempty"`
+	// ApprovalPending 为 true 时，这次 EventTypeApproval 表示「请求尚在等待
+	// 用户决议」（RequestID 可用于回灌），而不是「策略已给出结论」。
+	ApprovalPending bool `json:"approval_pending,omitempty"`
+	// RequestID 审批请求 ID（ApprovalPending 为 true 时有值）。
+	// 消费方拿到后调 DinoFactory.RespondToolApproval(requestID, approved) 回灌。
+	RequestID string `json:"request_id,omitempty"`
+	Usage     *Usage `json:"usage,omitempty"`
+	Plan      *Plan  `json:"plan,omitempty"`
+	StopCause string `json:"stop_cause,omitempty"`
 	// Question question 工具向用户提问的内容（P2.1）。配套 QuestionID 供回答注入。
 	QuestionID string `json:"question_id,omitempty"`
 	Question   string `json:"question,omitempty"`
