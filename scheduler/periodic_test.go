@@ -3,13 +3,11 @@ package scheduler_test
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
 	"github.com/xichan96/cortex/agent/skills"
@@ -93,9 +91,7 @@ func setupComponents(t *testing.T, db *gorm.DB) (*scheduler.Service, *xcron.Sche
 }
 
 func TestPeriodicTask_NormalExecution(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
-	assert.NoError(t, err)
-	db.AutoMigrate(&xcron.Job{})
+	db := newTestDB(t)
 
 	svc, cronScheduler, mockLLM, _ := setupComponents(t, db)
 
@@ -127,11 +123,9 @@ func TestPeriodicTask_NormalExecution(t *testing.T) {
 }
 
 func TestPeriodicTask_PersistenceAndResume(t *testing.T) {
-	// Use a shared in-memory DB (file based for persistence across connections)
-	dbName := fmt.Sprintf("file:test_periodic_%d.db?mode=memory&cache=shared", time.Now().UnixNano())
-	db, err := gorm.Open(sqlite.Open(dbName), &gorm.Config{})
-	assert.NoError(t, err)
-	db.AutoMigrate(&xcron.Job{})
+	// One temp-file DB is shared by both scheduler instances below; the file
+	// persists across connections, which is what this test exercises.
+	db := newTestDB(t)
 
 	// 1. Create Job and run once
 	{
@@ -185,9 +179,7 @@ func TestPeriodicTask_PersistenceAndResume(t *testing.T) {
 }
 
 func TestPeriodicTask_SkillUpdate(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
-	assert.NoError(t, err)
-	db.AutoMigrate(&xcron.Job{})
+	db := newTestDB(t)
 
 	svc, cronScheduler, mockLLM, registry := setupComponents(t, db)
 
