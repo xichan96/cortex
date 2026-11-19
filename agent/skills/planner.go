@@ -8,17 +8,26 @@ import (
 	"github.com/xichan96/cortex/pkg/logger"
 )
 
-// Planner handles skill intention recognition and execution planning
+// Planner handles skill intention recognition and execution planning.
+//
+// Deprecated: routing is now driven by skill descriptions and the model rather
+// than an extra LLM planning pass. Planner and ExecutionPlan are kept for
+// internal orchestration and backwards compatibility; new code should use
+// Discover/Index plus explicit invocation.
 type Planner struct {
 	registry *Registry
 }
 
-// NewPlanner creates a new skill planner
+// NewPlanner creates a new skill planner.
+//
+// Deprecated: see Planner.
 func NewPlanner(r *Registry) *Planner {
 	return &Planner{registry: r}
 }
 
-// Plan creates an execution plan based on the input text
+// Plan creates an execution plan based on the input text.
+//
+// Deprecated: see Planner.
 func (p *Planner) Plan(ctx context.Context, input string) (*ExecutionPlan, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

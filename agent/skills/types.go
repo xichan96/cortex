@@ -1,6 +1,9 @@
 package skills
 
-import "time"
+import (
+	"path/filepath"
+	"time"
+)
 
 // Trigger represents a skill activation trigger
 type Trigger struct {
@@ -25,6 +28,17 @@ type Skill struct {
 	Paths        []string               `yaml:"paths"`
 	WhenToUse    string                 `yaml:"when_to_use"`
 	AllowedTools []string               `yaml:"allowed_tools"`
+
+	// Portable agentskills.io fields (new in Skill v2; additive).
+	License                string `yaml:"license,omitempty"`
+	Compatibility          string `yaml:"compatibility,omitempty"`
+	DisableModelInvocation bool   `yaml:"disable-model-invocation,omitempty"`
+}
+
+// BaseDir returns the directory that relative references in the skill should
+// be resolved against.
+func (s *Skill) BaseDir() string {
+	return filepath.Dir(s.Path)
 }
 
 // ExecutionMode defines how a group of skills should be executed
