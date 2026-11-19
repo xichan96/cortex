@@ -1309,7 +1309,7 @@ func (f *dinoFactory) RestoreSessionSnapshot(ctx context.Context, sessionID stri
 //  4. loopDetection is outermost so it observes every real call and its
 //     LoopDetectedError pierces nonFatal to stop the loop.
 func (f *dinoFactory) wrapSessionTool(t types.Tool, sessionID string, senderAdapter *toolEventSenderAdapter, needApproval map[string]bool) types.Tool {
-	wrapped := wrapWorkspacePathTools(t, f.config.WorkspaceRoot, sessionID, f.approvalStore)
+	wrapped := wrapWorkspacePathTools(t, f.config.WorkspaceRoot, sessionID, f.approvalStore, f.config.AllowedReadRoots)
 	if needApproval[t.Name()] {
 		wrapped = NewApprovalTool(wrapped, sessionID, f.approvalStore, needApproval)
 	}
@@ -1360,10 +1360,10 @@ func (f *dinoFactory) discoverTool(ctx context.Context, sessionID, name string, 
 	return nil
 }
 
-func wrapWorkspacePathTools(t types.Tool, workspaceRoot, sessionID string, store *ApprovalStore) types.Tool {
+func wrapWorkspacePathTools(t types.Tool, workspaceRoot, sessionID string, store *ApprovalStore, extraRoots []string) types.Tool {
 	switch t.Name() {
 	case "read_file", "write_file", "edit_file", "list_directory", "glob", "grep":
-		return NewExternalPathApprovalTool(t, workspaceRoot, sessionID, store)
+		return NewExternalPathApprovalTool(t, workspaceRoot, sessionID, store, extraRoots...)
 	default:
 		return t
 	}

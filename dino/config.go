@@ -26,7 +26,13 @@ type Config struct {
 	// ApprovalTimeout 人工审批的等待上限。0 = 永不超时（手动审批模式的正确
 	// 取值：用户可能几分钟后才回来看，静默拒绝等于让任务白跑且用户不知情）。
 	// 负值 = 默认 5 分钟（历史行为）。
-	ApprovalTimeout       time.Duration                                                     `yaml:"approval_timeout"`
+	ApprovalTimeout time.Duration `yaml:"approval_timeout"`
+
+	// AllowedReadRoots 工作区之外、但**不需要审批**的额外可读根。
+	// 典型用途：宿主机的技能目录——agent 读技能正文是正常行为，不配这个
+	// 的话每读一次技能文件都要用户点一次批准，几十次下来完全没法用。
+	// 只影响「算不算外部路径」，不影响写权限（写仍受各工具自身约束）。
+	AllowedReadRoots      []string                                                          `yaml:"allowed_read_roots"`
 	MaxSessions           int                                                               `yaml:"max_sessions"`
 	ToolExecutionTimeout  time.Duration                                                     `yaml:"tool_execution_timeout"`
 	ToolTimeouts          map[string]time.Duration                                          `yaml:"tool_timeouts"`

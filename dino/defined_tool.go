@@ -529,14 +529,41 @@ func collectOutsideAbsPaths(workspace, toolName string, input map[string]interfa
 }
 
 type ExternalPathApprovalTool struct {
-	inner     types.Tool
-	workspace string
-	sessionID string
-	store     *ApprovalStore
+	// extraRoots 视同工作区的额外根（如技能目录），只影响「算不算外部」，
+	// 不影响写权限——写仍受各工具自身的路径约束。
+	extraRoots []string
+	inner      types.Tool
+	workspace  string
+	sessionID  string
+	store      *ApprovalStore
 }
 
-func NewExternalPathApprovalTool(inner types.Tool, workspace, sessionID string, store *ApprovalStore) *ExternalPathApprovalTool {
-	return &ExternalPathApprovalTool{inner: inner, workspace: workspace, sessionID: sessionID, store: store}
+// NewExternalPathApprovalTool workspace 之外的路径要人工审批。
+//
+// extraReadRoots 里的路径**不算外部**：典型场景是宿主的技能目录——它不在
+// 会话工作区里，但 agent 读它是正常且必要的（技能正文里就是这些路径）。
+// 不给这个口子，模型每读一次技能文件就要用户点一次批准，几十次下来完全没法用。
+func NewExternalPathApprovalTool(inner types.Tool, workspace, sessionID string, store *ApprovalStore, extraReadRoots ...string) *ExternalPathApprovalTool {
+	return &ExternalPathApprovalTool{
+		inner:      inner,
+		workspace:  workspace,
+		sessionID:  sessionID,
+		store:      store,
+		extraRoots: normalizeRoots(extraReadRoots),
+	}
+}
+
+// normalizeRoots 去空、去尾斜杠，保持绝对路径语义。
+func normalizeRoots(roots []string) []string {
+	out := make([]string, 0, len(roots))
+	for _, r := range roots {
+		r = strings.TrimSpace(r)
+		if r == "" {
+			continue
+		}
+		out = append(out, strings.TrimRight(r, string(filepath.Separator)))
+	}
+	return out
 }
 
 func (e *ExternalPathApprovalTool) Name() string {
@@ -562,6 +589,16 @@ func (e *ExternalPathApprovalTool) Execute(ctx context.Context, input map[string
 	outside, err := collectOutsideAbsPaths(e.workspace, e.inner.Name(), input)
 	if err != nil {
 		return nil, err
+	}
+	// 额外可读根（如技能目录）下的路径不算外部。
+	if len(outside) > 0 && len(e.extraRoots) > 0 {
+		kept := outside[:0]
+		for _, p := range outside {
+			if !underAnyRoot(p, e.extraRoots) {
+				kept = append(kept, p)
+			}
+		}
+		outside = kept
 	}
 	if len(outside) == 0 {
 		return e.inner.Execute(ctx, input)
@@ -634,3 +671,17 @@ const (
 // resuming the loop. Defined in dino/tools so both the approval wrappers here
 // and nonFatalTool (in dino/tools) can share it without an import cycle.
 type ApprovalRejectedError = dinoTools.ApprovalRejectedError
+
+// underAnyRoot 路径是否落在任一根之下（含根本身）。
+func underAnyRoot(path string, roots []string) bool {
+	clean := filepath.Clean(path)
+	for _, root := range roots {
+		if clean == root {
+			return true
+		}
+		if strings.HasPrefix(clean, root+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}

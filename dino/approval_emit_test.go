@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/xichan96/cortex/agent/types"
 )
 
 // TestApprovalStoreEmitsRequest 审批请求必须在**等待之前**推给消费方。
@@ -94,4 +96,46 @@ func TestApprovalStoreNoTimeoutWaitsForever(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("did not return after ctx cancel")
 	}
+}
+
+// TestExtraReadRootsSkipApproval 技能目录这类额外可读根不该触发审批——
+// 否则模型每读一次技能文件都要用户点一次，几十次下来没法用。
+func TestExtraReadRootsSkipApproval(t *testing.T) {
+	store := NewApprovalStore(0)
+	asked := false
+	store.SetSessionEmitter("s", func(string, string, string) { asked = true })
+	store.SetSender(&noopSender{})
+
+	inner := &fakePathTool{}
+	tool := NewExternalPathApprovalTool(inner, "/work", "s", store, "/data/skills")
+
+	// 技能目录内的路径：直接执行，不审批
+	if _, err := tool.Execute(context.Background(), map[string]interface{}{
+		"path": "/data/skills/dojo-api/SKILL.md",
+	}); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if asked {
+		t.Error("技能目录内的读取不应触发审批")
+	}
+
+	// 真正的外部路径：仍要审批（这里会阻塞，用带超时的 store 单独验）
+	store2 := NewApprovalStore(30 * time.Millisecond)
+	store2.SetSender(&noopSender{})
+	tool2 := NewExternalPathApprovalTool(inner, "/work", "s", store2, "/data/skills")
+	if _, err := tool2.Execute(context.Background(), map[string]interface{}{
+		"path": "/etc/passwd",
+	}); err == nil {
+		t.Error("/etc/passwd 仍应走审批（并因无人答复而失败）")
+	}
+}
+
+type fakePathTool struct{}
+
+func (f *fakePathTool) Name() string                   { return "read_file" }
+func (f *fakePathTool) Description() string            { return "fake" }
+func (f *fakePathTool) Schema() map[string]interface{} { return nil }
+func (f *fakePathTool) Metadata() types.ToolMetadata   { return types.ToolMetadata{} }
+func (f *fakePathTool) Execute(context.Context, map[string]interface{}) (interface{}, error) {
+	return "ok", nil
 }
