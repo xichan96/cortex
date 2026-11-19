@@ -22,7 +22,11 @@ type Config struct {
 	SystemPrompt    string        `yaml:"system_prompt"`
 	MaxIterations   int           `yaml:"max_iterations"`
 	// MaxToolCallsPerRound 单轮并发工具上限（0=不限）。见 types.AgentConfig 的说明。
-	MaxToolCallsPerRound  int                                                               `yaml:"max_tool_calls_per_round"`
+	MaxToolCallsPerRound int `yaml:"max_tool_calls_per_round"`
+	// ApprovalTimeout 人工审批的等待上限。0 = 永不超时（手动审批模式的正确
+	// 取值：用户可能几分钟后才回来看，静默拒绝等于让任务白跑且用户不知情）。
+	// 负值 = 默认 5 分钟（历史行为）。
+	ApprovalTimeout       time.Duration                                                     `yaml:"approval_timeout"`
 	MaxSessions           int                                                               `yaml:"max_sessions"`
 	ToolExecutionTimeout  time.Duration                                                     `yaml:"tool_execution_timeout"`
 	ToolTimeouts          map[string]time.Duration                                          `yaml:"tool_timeouts"`

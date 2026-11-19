@@ -606,7 +606,12 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 		}
 	}
 
-	approvalStore := NewApprovalStore(5 * time.Minute)
+	// 审批等待上限：0 = 永不超时（手动模式），负值 = 默认 5 分钟。
+	approvalTimeout := time.Duration(-1)
+	if cfg.ApprovalTimeout != 0 {
+		approvalTimeout = cfg.ApprovalTimeout
+	}
+	approvalStore := NewApprovalStore(approvalTimeout)
 
 	f := &dinoFactory{
 		config:      cfg,

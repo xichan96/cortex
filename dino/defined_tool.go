@@ -244,8 +244,16 @@ type ApprovalSender interface {
 	SendToolApprovalResponse(sessionID, requestID, toolName string, approved bool)
 }
 
+// NewApprovalStore timeout 是**人工审批**的等待上限。
+//
+// 语义区分（重要）：
+//   - timeout > 0：超时后自动拒绝并返回 ErrApprovalTimeout（旧的自动策略用法）
+//   - timeout == 0：**永不超时**，一直等到用户答复或被 ctx 取消。
+//     手动审批模式下必须用这个——用户可能几分钟后才回来看，静默拒绝
+//     等于让任务白跑，而且用户根本不知道发生过什么。
+//   - timeout < 0：按默认 5 分钟处理（历史行为）
 func NewApprovalStore(timeout time.Duration) *ApprovalStore {
-	if timeout <= 0 {
+	if timeout < 0 {
 		timeout = 5 * time.Minute
 	}
 	return &ApprovalStore{
@@ -312,10 +320,25 @@ func (s *ApprovalStore) RequestApproval(
 		s.mu.Unlock()
 	}
 
+	sendRequest()
+
+	// timeout == 0 → 永不超时，一直等。见 NewApprovalStore 的语义说明。
+	// 手动审批模式下会话会**卡在这里**直到用户答复或请求被取消——这是刻意的：
+	// 没有人工答复就绝不往下执行（宁可卡住，也不静默执行危险操作）。
+	if s.timeout <= 0 {
+		select {
+		case approved = <-ch:
+			cleanup()
+			sender.SendToolApprovalResponse(sessionID, requestID, toolName, approved)
+			return approved, nil
+		case <-ctx.Done():
+			cleanup()
+			return false, ctx.Err()
+		}
+	}
+
 	timer := time.NewTimer(s.timeout)
 	defer timer.Stop()
-
-	sendRequest()
 
 	select {
 	case approved = <-ch:
