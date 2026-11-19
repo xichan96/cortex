@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/xichan96/cortex/agent/engine"
+	"github.com/xichan96/cortex/agent/extensions"
 	"github.com/xichan96/cortex/agent/hooks"
+	"github.com/xichan96/cortex/agent/pipeline"
 	agentproviders "github.com/xichan96/cortex/agent/providers"
 	agentTools "github.com/xichan96/cortex/agent/tools/builtin/fs"
 	runtimeTools "github.com/xichan96/cortex/agent/tools/builtin/runtime"
@@ -367,6 +369,7 @@ type DinoFactory interface {
 	CloseAll()
 	GetTools() []types.Tool
 	GetSkills() []*Skill
+	GetToolPipeline() *pipeline.Pipeline
 	Shutdown(ctx context.Context) error
 	GetLLMProvider() types.LLMProvider
 	GetPlannerConfig() *PlannerModeConfig
@@ -396,6 +399,18 @@ type dinoFactory struct {
 	// 非 nil 时 CreateSession 跳过 Memory.Type / PersistEnabled 的 provider 构造；
 	// Hybrid（EnableLLMCompress）仍包裹在它外面。
 	memoryProvider chatstore.Provider
+
+	// home is the resolved ~/.cortex + <cwd>/.cortex layout (HomeConfig).
+	// nil means the home layout is disabled.
+	home *homeEnv
+
+	// toolPipeline is shared by every session (the pipeline is stateless and
+	// safe for concurrent use). nil means ToolPipeline.Enabled is false.
+	toolPipeline *pipeline.Pipeline
+
+	// extensionRegistry is the host-owned in-process extension registry, when
+	// installed with WithExtensionRegistry.
+	extensionRegistry *extensions.Registry
 
 	// —— S3/S4 mailbox（subagent-s3s4 §4/§7.2）——
 	// bus 实例级事件总线（notifier 旁路事件用，评审 BLOCKER-1：factory 层注入回调，
@@ -561,6 +576,13 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 		cfg = DefaultConfig()
 	}
 
+	// Resolve the agent-home layout before provider/skill construction so its
+	// settings and skill roots participate in the factory's normal resolution.
+	homeEnv, err := loadHomeEnv(cfg.Home)
+	if err != nil {
+		return nil, err
+	}
+
 	// 配置早校验：provider 类型/model 在构造前暴露清晰错误。
 	if err := ValidateConfig(cfg); err != nil {
 		return nil, err
@@ -583,7 +605,14 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 
 	var loadedCortexSkills []*agentskills.Skill
 	skillRegistry := agentskills.NewRegistry()
-	if skillRoots := cfg.Skills.SkillPaths(); len(skillRoots) > 0 && cfg.Skills.AutoLoad {
+	skillRoots := cfg.Skills.SkillPaths()
+	if homeEnv != nil {
+		// Home roots come after explicitly configured roots: config wins on a
+		// name collision because LoadSkillsFromDirs + dedupeFirstWins keeps the
+		// first occurrence.
+		skillRoots = appendUniqueStrings(skillRoots, homeEnv.skillRoots()...)
+	}
+	if len(skillRoots) > 0 && cfg.Skills.AutoLoad {
 		// Paths 顺序即优先级：LoadSkillsFromDirs 按 roots 顺序返回，先出现的根优先；
 		// 同名技能只保留第一个（registry.Register 是覆盖语义，后写赢，所以必须在
 		// 注册前按名去重）。
@@ -617,6 +646,7 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 		config:      cfg,
 		llmProvider: llmProvider,
 		tools:       toolRegistry,
+		home:        homeEnv,
 		loopDetector: agentutils.NewLoopDetector(&agentutils.LoopDetectConfig{
 			Enabled:             cfg.LoopDetection.Enabled,
 			MaxRepeats:          cfg.LoopDetection.MaxRepeats,
@@ -632,6 +662,21 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 		sessionDeferredTools:   make(map[string]map[string]types.Tool),
 		sessionDiscoveredTools: make(map[string][]string),
 		sessionTracers:         make(map[string]hooks.Tracer),
+	}
+
+	if cfg.ToolPipeline.Enabled {
+		// Existing dino wrappers (permission/approval/loop detection) remain the
+		// gate; the pipeline adds validation, lifecycle hooks, result
+		// normalization, and sanitization. Migrating the gate to a
+		// pipeline.BrokerAuthorizer is the next step.
+		f.toolPipeline = pipeline.New(pipeline.Config{
+			Authorizer: pipeline.AllowAllAuthorizer{},
+			Limits: pipeline.Limits{
+				MaxConcurrent:  cfg.ToolPipeline.MaxConcurrent,
+				DefaultTimeout: cfg.ToolPipeline.DefaultTimeout,
+				Retries:        cfg.ToolPipeline.Retries,
+			},
+		})
 	}
 
 	f.subagentManager = dinoAgent.NewSubagentManager(&cfg.Subagent, f)
@@ -708,6 +753,7 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 	for _, opt := range opts {
 		opt(f)
 	}
+	f.registerExtensionTools()
 	return f, nil
 }
 
@@ -729,15 +775,9 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	}
 
 	agentConfig := types.NewAgentConfig()
-	systemPrompt := f.config.SystemPrompt
-	// 会话级追加提示词（WithExtraSystemPrompt）。放在技能注入**之前**：
-	// 技能清单是「工具说明」，应当排在行为准则之后、离用户输入更近。
-	if extra := strings.TrimSpace(cfg.ExtraSystemPrompt); extra != "" {
-		systemPrompt += "\n\n# 本次会话的额外要求\n" + extra
-	}
-	if len(f.cortexSkills) > 0 {
-		systemPrompt += agentskills.BuildSystemPromptInjectionWithTriggers(f.cortexSkills)
-	}
+	// 会话级追加提示词（WithExtraSystemPrompt）在 composeSystemPrompt 中处理：
+	// 顺序为 SYSTEM/APPEND → context 文件 → 会话额外要求 → 技能清单。
+	systemPrompt := f.composeSystemPrompt(cfg.ExtraSystemPrompt)
 	// 长期记忆 user 全局合并（P3.2）：
 	//   - UserMergeEnabled=true 时，把 session 归属到 user（WithUserID > DefaultUserID
 	//     > "default"），写 metadata 'user_id'（INSERT OR IGNORE 固化）；失败仅记日志，
@@ -819,6 +859,9 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	agentConfig.MemoryCompressThreshold = compressTh
 
 	agent := engine.NewAgentEngine(f.llmProvider, agentConfig)
+	if f.toolPipeline != nil {
+		agent.SetToolPipeline(f.toolPipeline)
+	}
 	// 三段式前缀保留（P3.1）：SummaryGenerator 由构造方注入确定性压缩闭包，
 	// engine 自身不 import dino/chatstore（评审 BLOCKER B1）。P3.4 换 LLM 摘要
 	// 时只需替换此闭包，engine 侧接口（func(existingSummary, mid)) 不变（R3）。
@@ -1222,6 +1265,10 @@ func (f *dinoFactory) CloseAll() {
 
 func (f *dinoFactory) GetTools() []types.Tool {
 	return f.tools.GetAll()
+}
+
+func (f *dinoFactory) GetToolPipeline() *pipeline.Pipeline {
+	return f.toolPipeline
 }
 
 func (f *dinoFactory) GetSkills() []*Skill {

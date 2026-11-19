@@ -51,6 +51,33 @@ type Config struct {
 	Subagent              agent.SubagentConfig                                              `yaml:"subagent"`
 	MCP                   MCPConfig                                                         `yaml:"mcp"`
 	Trace                 TraceConfig                                                       `yaml:"trace"`
+	// Home enables the ~/.cortex + <cwd>/.cortex layout (P0 wiring).
+	// Disabled by default so existing hosts keep their current behavior.
+	Home HomeConfig `yaml:"home"`
+	// ToolPipeline routes model-issued tool calls through agent/pipeline.
+	// Disabled by default; existing dino tool wrappers remain the permission
+	// gate until the pipeline's authorizer is migrated in a later step.
+	ToolPipeline ToolPipelineConfig `yaml:"tool_pipeline"`
+}
+
+// ToolPipelineConfig controls the P0 tool-call pipeline. It is opt-in so
+// existing deployments keep the legacy execution path.
+type ToolPipelineConfig struct {
+	Enabled        bool          `yaml:"enabled"`
+	MaxConcurrent  int           `yaml:"max_concurrent"`
+	DefaultTimeout time.Duration `yaml:"default_timeout"`
+	Retries        int           `yaml:"retries"`
+}
+
+// HomeConfig opts a factory into the agent-home layout. Project resources are
+// only loaded when ProjectTrust is "always"; "ask" and "never" both behave as
+// untrusted in a library process (there is no interactive prompt here).
+type HomeConfig struct {
+	Enabled      bool   `yaml:"enabled"`
+	Root         string `yaml:"root"`          // default ~/.cortex
+	CWD          string `yaml:"cwd"`           // default process working directory
+	SessionDir   string `yaml:"session_dir"`   // optional override
+	ProjectTrust string `yaml:"project_trust"` // "ask" | "always" | "never"
 }
 
 // TraceConfig controls the context-trace event log (docs/design/context-trace.md).
@@ -352,6 +379,13 @@ func DefaultConfig() *Config {
 		},
 		Trace: TraceConfig{
 			Enabled: false, // context-trace default off (zero overhead)
+		},
+		Home: HomeConfig{
+			Enabled:      false, // opt-in: existing hosts keep their current layout
+			ProjectTrust: "ask", // non-interactive library: ask behaves as untrusted
+		},
+		ToolPipeline: ToolPipelineConfig{
+			Enabled: false, // opt-in: legacy execution remains the default
 		},
 	}
 }

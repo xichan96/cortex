@@ -624,7 +624,7 @@ func (ae *AgentEngine) runToolCallsByLayerIter(ctx context.Context, sortedToolCa
 						callback.OnToolInputEnd(tool.Name(), toolCallID, args)
 					}
 					toolTimeout := ae.getToolTimeout(tool.Name(), args)
-					toolResult, err = ae.executeToolWithTimeout(gctx, tool, args, toolTimeout)
+					toolResult, err = ae.executeToolCallWithTimeout(gctx, tool, toolCallID, args, toolTimeout)
 					if err == nil {
 						results[idx] = stepResult{result: toolResult, cached: false, duration: time.Since(start)}
 						ae.recordTrace(hooks.TraceEvent{

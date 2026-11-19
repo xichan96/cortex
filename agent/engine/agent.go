@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/xichan96/cortex/agent/hooks"
+	"github.com/xichan96/cortex/agent/pipeline"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/agent/utils"
 )
@@ -81,7 +82,7 @@ type AgentEngine struct {
 	totalUsage types.Usage // Total token usage
 
 	memoryCompletedTurns atomic.Uint32
-	memoryCompressMu   sync.Mutex
+	memoryCompressMu     sync.Mutex
 
 	// Tool callback for real-time events
 	toolCallback types.ToolCallback
@@ -102,6 +103,12 @@ type AgentEngine struct {
 	// dino/factory via SetTracer; the interface lives in agent/hooks so
 	// agent/engine never imports dino (design §3.2④).
 	tracer hooks.Tracer
+
+	// toolPipeline, when non-nil, routes each tool call through the P0
+	// validate → authorize → before → execute → after → sanitize stages.
+	// Nil keeps the legacy executeToolWithTimeout path. Injected by the host
+	// (dino/factory) via SetToolPipeline; agent/engine does not construct it.
+	toolPipeline *pipeline.Pipeline
 }
 
 // ResultSender is a function type for sending stream results
@@ -169,6 +176,24 @@ func (ae *AgentEngine) RestoreMemoryTurnCounter(v uint32) {
 
 // SetTracer injects (or clears, with nil) the trace handle. Called by the dino
 // layer at session construction; the engine stays ignorant of dino.
+// SetToolPipeline installs the tool-call pipeline used by every model-issued
+// tool call. A nil pipeline restores the legacy execution path. The engine
+// keeps the pipeline pointer as-is; callers are responsible for configuring
+// its authorizer, executor, and limits.
+func (ae *AgentEngine) SetToolPipeline(p *pipeline.Pipeline) {
+	ae.mu.Lock()
+	defer ae.mu.Unlock()
+	ae.toolPipeline = p
+}
+
+// ToolPipeline returns the installed pipeline, if any. Tests and hosts use it
+// to inspect configuration without reaching into the struct.
+func (ae *AgentEngine) ToolPipeline() *pipeline.Pipeline {
+	ae.mu.RLock()
+	defer ae.mu.RUnlock()
+	return ae.toolPipeline
+}
+
 func (ae *AgentEngine) SetTracer(t hooks.Tracer) {
 	ae.mu.Lock()
 	defer ae.mu.Unlock()

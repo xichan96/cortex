@@ -6,6 +6,9 @@ import (
 	"sort"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/xichan96/cortex/agent/pipeline"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
 )
@@ -42,12 +45,21 @@ func (ae *AgentEngine) AddTools(ctx context.Context, tools []types.Tool) {
 // This is an acceptable trade-off since the Tool interface doesn't support context cancellation.
 // The goroutine will finish and clean up resources automatically, preventing leaks.
 func (ae *AgentEngine) executeToolWithTimeout(ctx context.Context, tool types.Tool, args map[string]any, timeout time.Duration) (any, error) {
+	return ae.executeToolCallWithTimeout(ctx, tool, "", args, timeout)
+}
+
+// executeToolCallWithTimeout is executeToolWithTimeout with the model's
+// toolCallID. When a pipeline is installed, the call runs through the pipeline
+// stages; otherwise it falls back to the legacy direct execution path.
+func (ae *AgentEngine) executeToolCallWithTimeout(ctx context.Context, tool types.Tool, toolCallID string, args map[string]any, timeout time.Duration) (any, error) {
 	// Create context with timeout if specified
 	var cancel context.CancelFunc
 	if timeout > 0 {
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
+
+	p := ae.ToolPipeline()
 
 	// Use goroutine to allow execution to be interrupted by context
 	type result struct {
@@ -63,8 +75,13 @@ func (ae *AgentEngine) executeToolWithTimeout(ctx context.Context, tool types.To
 			}
 		}()
 
-		// Pass context to tool execution
-		val, err := tool.Execute(ctx, args)
+		var val any
+		var err error
+		if p != nil {
+			val, err = executeViaPipeline(ctx, p, tool, toolCallID, args)
+		} else {
+			val, err = tool.Execute(ctx, args)
+		}
 		resultChan <- result{value: val, err: err}
 	}()
 
@@ -77,6 +94,45 @@ func (ae *AgentEngine) executeToolWithTimeout(ctx context.Context, tool types.To
 		}
 		return nil, ctx.Err()
 	}
+}
+
+// executeViaPipeline adapts a pipeline.Result back to the engine's tool-output
+// contract. Recoverable errors become a non-fatal {ok:false} observation (like
+// dino's nonFatalTool), so the model can recover; only fatal pipeline errors
+// propagate to the caller.
+func executeViaPipeline(ctx context.Context, p *pipeline.Pipeline, tool types.Tool, toolCallID string, args map[string]any) (any, error) {
+	if toolCallID == "" {
+		toolCallID = uuid.NewString()
+	}
+	res, err := p.ExecuteOne(ctx, &pipeline.Call{
+		ID:   toolCallID,
+		Name: tool.Name(),
+		Args: args,
+		Tool: tool,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if res == nil {
+		return nil, fmt.Errorf("tool pipeline returned no result for %s", tool.Name())
+	}
+	if res.IsError {
+		return map[string]any{
+			"ok":    false,
+			"tool":  tool.Name(),
+			"error": res.Text(),
+		}, nil
+	}
+	if text := res.Text(); text != "" {
+		return text, nil
+	}
+	if res.Structured != nil {
+		return res.Structured, nil
+	}
+	if res.Details != nil {
+		return res.Details, nil
+	}
+	return "", nil
 }
 
 func (ae *AgentEngine) getToolTimeout(toolName string, args map[string]interface{}) time.Duration {
