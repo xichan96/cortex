@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xichan96/cortex/agent/home"
 	"github.com/xichan96/cortex/agent/llm"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/dino/agent"
@@ -69,15 +70,28 @@ type ToolPipelineConfig struct {
 	Retries        int           `yaml:"retries"`
 }
 
-// HomeConfig opts a factory into the agent-home layout. Project resources are
-// only loaded when ProjectTrust is "always"; "ask" and "never" both behave as
-// untrusted in a library process (there is no interactive prompt here).
+// HomeConfig opts a factory into the agent-home layout.
+//
+// Project-provided executable resources (settings, skills, prompts, agents,
+// plugins, SYSTEM.md) are loaded only when the trust decision resolves to
+// TrustAllowed. The decision order is TrustOverride > TrustHandler >
+// <root>/trust.json > ProjectTrust, evaluated in non-interactive mode: "ask"
+// and "never" both deny unless an override or handler says otherwise, while
+// "always" allows. Context files always load. Trust resolution errors fail
+// closed (project resources are skipped) and never abort construction.
 type HomeConfig struct {
 	Enabled      bool   `yaml:"enabled"`
 	Root         string `yaml:"root"`          // default ~/.cortex
 	CWD          string `yaml:"cwd"`           // default process working directory
 	SessionDir   string `yaml:"session_dir"`   // optional override
 	ProjectTrust string `yaml:"project_trust"` // "ask" | "always" | "never"
+	// TrustOverride is a host/CLI decision (--approve / --no-approve).
+	// TrustUnknown means no override. Not settable from YAML: a project must
+	// not be able to grant itself trust.
+	TrustOverride home.TrustDecision `yaml:"-"`
+	// TrustHandler is an extension hook evaluated before trust.json. Returning
+	// handled=false defers to the store and ProjectTrust.
+	TrustHandler home.ProjectTrustHandler `yaml:"-"`
 }
 
 // TraceConfig controls the context-trace event log (docs/design/context-trace.md).
