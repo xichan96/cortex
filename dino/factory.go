@@ -606,6 +606,27 @@ func (f *dinoFactory) permissionRuleset() permission.Ruleset {
 	)
 }
 
+// defaultPipelineTruncationBytes 与 Tools.ResultLimiterMaxBytes 的默认值一致。
+const defaultPipelineTruncationBytes = 120_000
+
+// pipelineTruncationBudget 决定 pipeline sanitize 阶段的单工具结果预算。
+//
+// pipeline.New 自己的兜底是 types.MaxTruncationLength（2048 字节）——那是
+// 为文本片段设计的，不是为工具结果。开启 pipeline 后若不覆盖，所有 API /
+// JSON / 文件输出都会被砍到 2KB，模型读不完全、反复重试，最终任务超时。
+func pipelineTruncationBudget(cfg *Config) int {
+	if cfg == nil {
+		return defaultPipelineTruncationBytes
+	}
+	if n := cfg.ToolPipeline.TruncationMaxBytes; n > 0 {
+		return n
+	}
+	if n := cfg.Tools.ResultLimiterMaxBytes; n > 0 {
+		return n
+	}
+	return defaultPipelineTruncationBytes
+}
+
 // GetParentRuleset 返回父代理权限约束（restrict-only，P2.4）。
 // 子代理 filterTools 时与自身权限取交集：仅同时被两边 allow 的工具可用。
 func (f *dinoFactory) GetParentRuleset() permission.Ruleset {
@@ -844,6 +865,9 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 				MaxConcurrent:  cfg.ToolPipeline.MaxConcurrent,
 				DefaultTimeout: cfg.ToolPipeline.DefaultTimeout,
 				Retries:        cfg.ToolPipeline.Retries,
+			},
+			Truncation: pipeline.Truncation{
+				DefaultMaxBytes: pipelineTruncationBudget(cfg),
 			},
 		})
 	}

@@ -109,6 +109,11 @@ type ToolPipelineConfig struct {
 	// only when the project is trusted), or "always" (~/.cortex/permissions.json).
 	// Unknown values fall back to "once".
 	ApprovalScope string `yaml:"approval_scope"`
+	// TruncationMaxBytes is the per-tool-result budget of the pipeline's
+	// sanitize stage. Zero uses Tools.ResultLimiterMaxBytes (120_000 by
+	// default). The pipeline's own fallback is types.MaxTruncationLength
+	// (2048), which is far too small for API/JSON tool output.
+	TruncationMaxBytes int `yaml:"truncation_max_bytes"`
 }
 
 // UsesApprovalAuthorizer reports whether the pipeline owns tool approval: it
