@@ -60,6 +60,20 @@ type Config struct {
 	// Disabled by default; existing dino tool wrappers remain the permission
 	// gate until the pipeline's authorizer is migrated in a later step.
 	ToolPipeline ToolPipelineConfig `yaml:"tool_pipeline"`
+	// Transcript controls JSONL transcript export/import (agent/transcript).
+	// Live dual-write is not enabled yet; ExportSessionTranscript works
+	// regardless and uses Dir (or a derived default).
+	Transcript TranscriptConfig `yaml:"transcript"`
+}
+
+// TranscriptConfig controls where dino exports JSONL transcripts.
+type TranscriptConfig struct {
+	// Enabled reserves the live dual-write switch for a later step; export
+	// and import APIs are explicit calls and work even when false.
+	Enabled bool `yaml:"enabled"`
+	// Dir is the transcript directory. Empty derives it from the agent home
+	// session directory, then Memory.PersistDirectory/transcripts.
+	Dir string `yaml:"dir"`
 }
 
 // ToolPipeline authorizer modes. "allow_all" keeps the pipeline's authorization
@@ -438,6 +452,9 @@ func DefaultConfig() *Config {
 		},
 		ToolPipeline: ToolPipelineConfig{
 			Enabled: false, // opt-in: legacy execution remains the default
+		},
+		Transcript: TranscriptConfig{
+			Enabled: false, // live dual-write is a later step
 		},
 	}
 }

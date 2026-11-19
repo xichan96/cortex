@@ -387,6 +387,12 @@ type DinoFactory interface {
 	RespondToolApproval(requestID string, approved bool)
 	SaveSessionSnapshot(ctx context.Context, sessionID string, dir string) (string, error)
 	RestoreSessionSnapshot(ctx context.Context, sessionID string, snapPath string) error
+	// ExportSessionTranscript writes the session's current chat history as a
+	// JSONL transcript (agent/transcript) and returns the file path.
+	ExportSessionTranscript(ctx context.Context, sessionID string) (string, error)
+	// ImportSessionTranscript rebuilds model-visible messages from a JSONL
+	// transcript file.
+	ImportSessionTranscript(ctx context.Context, path string) ([]types.Message, error)
 }
 
 type dinoFactory struct {
