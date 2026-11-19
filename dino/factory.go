@@ -368,7 +368,16 @@ type DinoFactory interface {
 	CloseSession(sessionID string)
 	CloseAll()
 	GetTools() []types.Tool
+	// GetSkills returns metadata only (Name/Description/AllowedTools/Paths).
+	// Skill bodies are lazy: use the "skill" tool or SkillIndex().LoadBody to
+	// read instructions.
 	GetSkills() []*Skill
+	// SkillIndex exposes the metadata-only skill index (nil when skills are
+	// not loaded). Bodies are read on demand.
+	SkillIndex() *agentskills.Index
+	// ReloadSkills re-scans the configured skill roots; no-op when skills are
+	// not loaded.
+	ReloadSkills(ctx context.Context) error
 	GetToolPipeline() *pipeline.Pipeline
 	Shutdown(ctx context.Context) error
 	GetLLMProvider() types.LLMProvider
@@ -380,11 +389,18 @@ type DinoFactory interface {
 }
 
 type dinoFactory struct {
-	config               *Config
-	llmProvider          types.LLMProvider
-	tools                *dinoTools.Registry
-	loopDetector         agentutils.LoopDetector
-	budget               Budget
+	config       *Config
+	llmProvider  types.LLMProvider
+	tools        *dinoTools.Registry
+	loopDetector agentutils.LoopDetector
+	budget       Budget
+	// skillIndex is the metadata-only skill view built by NewDinoFactory.
+	// Bodies are read on demand through LoadBody (see dino/skill_lazy.go).
+	skillIndex *agentskills.Index
+	// cortexSkills is retained for compatibility with the legacy hook in
+	// dino/home.go composeSystemPrompt. NewDinoFactory leaves it empty: the
+	// index is injected from CreateSession via skillIndexPrompt so skill
+	// bodies stay lazy and prompt composition keeps a single source of truth.
 	cortexSkills         []*agentskills.Skill
 	approvalStore        *ApprovalStore
 	sessions             map[string]*session.Session
@@ -511,22 +527,6 @@ func (f *dinoFactory) Detect(ctx context.Context, sessionID string, action agent
 	return f.loopDetector.Detect(ctx, sessionID, action)
 }
 
-// dedupeSkillsFirstWins keeps the first skill seen per name, preserving input
-// order. LoadSkillsFromDirs walks roots in order, so "first" == the skill from
-// the highest-priority root (Skills.Paths[0] wins).
-func dedupeSkillsFirstWins(skills []agentskills.Skill) []agentskills.Skill {
-	seen := make(map[string]struct{}, len(skills))
-	out := make([]agentskills.Skill, 0, len(skills))
-	for _, s := range skills {
-		if _, ok := seen[s.Name]; ok {
-			continue
-		}
-		seen[s.Name] = struct{}{}
-		out = append(out, s)
-	}
-	return out
-}
-
 type FactoryOption func(*dinoFactory)
 
 func WithStreamEventSender(sender StreamEventSender) FactoryOption {
@@ -607,34 +607,33 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 		return nil, fmt.Errorf("load builtin tools: %w", err)
 	}
 
-	var loadedCortexSkills []*agentskills.Skill
-	skillRegistry := agentskills.NewRegistry()
+	var skillIndex *agentskills.Index
 	skillRoots := cfg.Skills.SkillPaths()
 	if homeEnv != nil {
 		// Home roots come after explicitly configured roots: config wins on a
-		// name collision because LoadSkillsFromDirs + dedupeFirstWins keeps the
+		// name collision because discovery scans roots in order and keeps the
 		// first occurrence.
 		skillRoots = appendUniqueStrings(skillRoots, homeEnv.skillRoots()...)
 	}
 	if len(skillRoots) > 0 && cfg.Skills.AutoLoad {
-		// Paths 顺序即优先级：LoadSkillsFromDirs 按 roots 顺序返回，先出现的根优先；
-		// 同名技能只保留第一个（registry.Register 是覆盖语义，后写赢，所以必须在
-		// 注册前按名去重）。
-		loaded, err := agentskills.LoadSkillsFromDirs(context.Background(), logger.GetLogger(), skillRoots)
+		// 只读元数据：正文由 "skill" 工具按需通过 Index.LoadBody 读取，
+		// 启动时不再把全部 SKILL.md 正文放进内存 / 系统提示。
+		ix, diags, err := agentskills.LoadIndex(context.Background(), skillRoots, agentskills.DiscoverOptions{})
+		logSkillDiagnostics(diags)
 		if err != nil {
-			logger.Warn("failed to load skills", slog.Any("paths", skillRoots), slog.String("error", err.Error()))
+			logger.Warn("failed to load skill index", slog.Any("paths", skillRoots), slog.String("error", err.Error()))
 		} else {
-			skillRegistry.LoadSkills(dedupeSkillsFirstWins(loaded))
-			cortexSkills := skillRegistry.All()
-			logger.Info("loaded skills", slog.Int("count", len(cortexSkills)), slog.Any("paths", skillRoots))
-			for _, s := range cortexSkills {
-				logger.Info("skill loaded", slog.String("name", s.Name))
+			skillIndex = ix
+			entries := ix.All()
+			logger.Info("indexed skills (bodies lazy)", slog.Int("count", len(entries)), slog.Any("paths", skillRoots))
+			for _, entry := range entries {
+				logger.Info("skill indexed", slog.String("name", entry.Name), slog.String("path", entry.Path))
 			}
-			loadedCortexSkills = cortexSkills
-			if len(cortexSkills) > 0 {
-				if err := toolRegistry.Register(dinoTools.NewSkillTool(cortexSkills)); err != nil {
+			if len(entries) > 0 {
+				if err := toolRegistry.Register(dinoTools.NewLazySkillTool(ix)); err != nil {
 					logger.Warn("failed to register skill tool", slog.String("error", err.Error()))
 				}
+				warnUnknownSkillTools(toolRegistry, entries)
 			}
 		}
 	}
@@ -657,7 +656,7 @@ func NewDinoFactory(cfg *Config, opts ...FactoryOption) (DinoFactory, error) {
 			SimilarityThreshold: cfg.LoopDetection.SimilarityThreshold,
 		}),
 		budget:                 NewBudget(&cfg.Budget),
-		cortexSkills:           loadedCortexSkills,
+		skillIndex:             skillIndex,
 		approvalStore:          approvalStore,
 		sessions:               make(map[string]*session.Session),
 		bus:                    NewBus(),
@@ -804,7 +803,8 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 
 	agentConfig := types.NewAgentConfig()
 	// 会话级追加提示词（WithExtraSystemPrompt）在 composeSystemPrompt 中处理：
-	// 顺序为 SYSTEM/APPEND → context 文件 → 会话额外要求 → 技能清单。
+	// 顺序为 SYSTEM/APPEND → context 文件 → 会话额外要求。技能索引只含元数据，
+	// 在记忆层之后追加（skillIndexPrompt，见 dino/skill_lazy.go）。
 	systemPrompt := f.composeSystemPrompt(cfg.ExtraSystemPrompt)
 	// 长期记忆 user 全局合并（P3.2）：
 	//   - UserMergeEnabled=true 时，把 session 归属到 user（WithUserID > DefaultUserID
@@ -836,6 +836,11 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 		if l1 := f.longTermMem.BuildLayeredPrompt(ctx, l1UID); l1 != "" {
 			systemPrompt += "\n\n" + l1
 		}
+	}
+	// 技能索引：仅 name/description/location + 约束元数据；正文由 "skill" 工具
+	// 按需读取，不进入系统提示。
+	if skillIndexPrompt := f.skillIndexPrompt(); skillIndexPrompt != "" {
+		systemPrompt += "\n\n" + skillIndexPrompt
 	}
 	agentConfig.SystemMessage = systemPrompt
 	agentConfig.MaxIterations = f.config.MaxIterations
@@ -1293,14 +1298,22 @@ func (f *dinoFactory) GetToolPipeline() *pipeline.Pipeline {
 	return f.toolPipeline
 }
 
+// GetSkills reports the indexed skills as metadata only. Prompt is left empty
+// on purpose: bodies are lazy (see the "skill" tool and
+// agentskills.Index.LoadBody), so eager body caching no longer happens.
 func (f *dinoFactory) GetSkills() []*Skill {
-	result := make([]*Skill, len(f.cortexSkills))
-	for i, s := range f.cortexSkills {
-		result[i] = &Skill{
-			Name:        s.Name,
-			Description: s.Description,
-			Prompt:      s.Content,
-		}
+	if f.skillIndex == nil {
+		return nil
+	}
+	entries := f.skillIndex.All()
+	result := make([]*Skill, 0, len(entries))
+	for _, entry := range entries {
+		result = append(result, &Skill{
+			Name:         entry.Name,
+			Description:  entry.Description,
+			AllowedTools: entry.AllowedTools(),
+			Paths:        entry.Paths(),
+		})
 	}
 	return result
 }

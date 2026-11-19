@@ -25,10 +25,18 @@ type StreamEventSender interface {
 	SendStreamEvent(sessionID string, event interface{})
 }
 
+// Skill is the host-facing, metadata-only view of a skill. Prompt is empty
+// unless the host loaded the body itself: bodies are lazy in Skill v2.
 type Skill struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	Prompt      string `json:"prompt"`
+	// Prompt is retained for backwards compatibility; it is empty for skills
+	// loaded by DinoFactory (bodies are read on demand).
+	Prompt string `json:"prompt"`
+	// AllowedTools and Paths expose the skill's constraint metadata so hosts
+	// can display (and enforce) it without loading the body.
+	AllowedTools []string `json:"allowed_tools,omitempty"`
+	Paths        []string `json:"paths,omitempty"`
 }
 
 type Session = session.Session
@@ -70,7 +78,7 @@ const (
 	StreamEventDone       = session.EventTypeDone
 	StreamEventApproval   = session.EventTypeApproval
 
-	EventSourceUser    = session.EventSourceUser
+	EventSourceUser     = session.EventSourceUser
 	EventSourceSubagent = session.EventSourceSubagent
 )
 
