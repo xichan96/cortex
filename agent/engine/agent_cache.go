@@ -175,6 +175,32 @@ func (ae *AgentEngine) setCachedToolResult(toolName string, args map[string]any,
 	ae.addToHead(entry)
 }
 
+// InvalidateToolCache drops every cached tool result. Tools that mutate shared
+// state (filesystem writes, shell commands) declare MetaData().Extra
+// ["invalidates_cache"]=true; the engine calls this after a successful run so
+// later reads cannot observe pre-write content. Concurrent-safe.
+func (ae *AgentEngine) InvalidateToolCache() {
+	ae.toolCacheMu.Lock()
+	defer ae.toolCacheMu.Unlock()
+	ae.toolCache = make(map[string]*types.ToolCacheEntry)
+	ae.toolCacheHead = nil
+	ae.toolCacheTail = nil
+}
+
+// toolInvalidatesCache reports whether the tool declared that a successful run
+// must clear the tool result cache.
+func toolInvalidatesCache(tool types.Tool) bool {
+	if tool == nil {
+		return false
+	}
+	meta := tool.Metadata()
+	if meta.Extra == nil {
+		return false
+	}
+	v, ok := meta.Extra["invalidates_cache"].(bool)
+	return ok && v
+}
+
 // removeExpiredEntries removes all expired cache entries
 func (ae *AgentEngine) removeExpiredEntries() {
 	now := time.Now()
