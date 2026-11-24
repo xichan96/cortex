@@ -4,4 +4,4 @@
 Usage notes:
   - Requires the `file_path` of the file to read.
   - For large files, pass `offset` (1-based start line) and/or `limit` (line count) to read a window; the result states how to continue.
-  - If the given path is a directory, its entries are listed instead.
+  - `file_path` must be a file. To list directory entries, use Glob (e.g. pattern `dir/*`).

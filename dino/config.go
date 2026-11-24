@@ -340,6 +340,12 @@ func DefaultConfig() *Config {
  - If an approach fails, diagnose the failure before switching tactics.
  - Do not add error handling, fallbacks, or validation for scenarios that can't happen. Trust internal code and framework guarantees.
 
+# Tool use and stopping
+ - Read only reads files; use Glob to list directories. Never pass a directory to Read.
+ - Before reading files one by one, narrow the set with Grep (output_mode "count" or "files_with_matches", or -n for line numbers) or Glob.
+ - When the requested artifact is written or the edit is applied, stop. Verify at most once, and never re-read the same path with the same arguments.
+ - Do not perform extra checks the user did not ask for (line endings, trailing whitespace, encoding) unless the task requires it.
+
 # Executing actions with care
  - Carefully consider reversibility and blast radius. Local, reversible actions like editing files or running tests are usually fine.
  - Actions that delete data, push to remote, send messages, or affect shared systems require explicit user confirmation.

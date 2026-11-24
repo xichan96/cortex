@@ -130,21 +130,14 @@ func TestReadAfterEditSeesNewContent(t *testing.T) {
 	}
 }
 
-func TestReadDirListing(t *testing.T) {
+func TestReadRejectsDirectory(t *testing.T) {
 	ws := t.TempDir()
 	if err := os.Mkdir(filepath.Join(ws, "sub"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(ws, "f.txt"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	tool := NewReadTool(ws)
-	res, err := tool.Execute(context.Background(), map[string]interface{}{"file_path": "."})
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := res.(string)
-	if !strings.Contains(s, "sub/") || !strings.Contains(s, "f.txt") {
-		t.Errorf("directory listing = %q", s)
+	_, err := tool.Execute(context.Background(), map[string]interface{}{"file_path": "."})
+	if err == nil || !strings.Contains(err.Error(), "Use Glob") {
+		t.Fatalf("Read(directory) error = %v, want Glob hint", err)
 	}
 }
