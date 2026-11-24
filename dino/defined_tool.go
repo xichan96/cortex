@@ -485,19 +485,21 @@ func collectOutsideAbsPaths(workspace, toolName string, input map[string]interfa
 		return nil
 	}
 	switch toolName {
-	case "read_file", "write_file", "edit_file", "list_directory":
+	case "read_file", "write_file", "edit_file":
 		if p, ok := input["path"].(string); ok {
 			if err := add(p); err != nil {
 				return nil, err
 			}
 		}
-	case "glob":
-		if p, ok := input["pattern"].(string); ok {
+	case "Glob":
+		// The search root is `path` when present; otherwise the pattern itself
+		// is relative to the workspace and cannot escape it.
+		if p, ok := input["path"].(string); ok && p != "" {
 			if err := add(p); err != nil {
 				return nil, err
 			}
 		}
-	case "grep":
+	case "Grep":
 		if p, ok := input["path"].(string); ok && p != "" {
 			if err := add(p); err != nil {
 				return nil, err

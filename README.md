@@ -189,7 +189,7 @@ llmProvider, _ := llm.VolceClient("ak-...", "doubao-pro-32k")
 
 - `Config.Tools`: `Allowed`, `Denied`, `ApprovalRequired`; `ToolTimeouts` plus `ToolTimeoutCalculator` for dynamic limits.
 - `defined_tool`: `DefinedTool`, `ToolContext`, and approval storage for human-in-the-loop risky operations.
-- Builtins cover read/write/edit files, `glob`/`grep`, `bash`, `list_directory`, and more; wire MCP and filesystem skills via `cfg.Skills`.
+- Builtins cover read/write/edit files, `Grep`/`Glob`, `Bash`, `WebFetch`/`WebSearch`, and more; wire MCP and filesystem skills via `cfg.Skills`.
 
 ### Resources and stability
 
@@ -247,11 +247,11 @@ Builtins live under `agent/tools/builtin/` by package; register `types.Tool` ins
 | Package | Tool names |
 |---------|------------|
 | `fs/` | `read_file`, `write_file`, `edit_file`, `file` |
-| `search/` | `glob`, `grep`, `codesearch` (placeholder) |
+| `search/` | `Glob`, `Grep`, `codesearch` (placeholder) |
 | `runtime/` | `command`, `question`, `job_kill`, `job_output` |
 | `task/` | `todo` (in-process tasks: IDs, pending / in_progress / completed / cancelled, list & update) |
 | `net/` | `ssh`, `net_check` |
-| `web/` | `web_search`, `web_fetch` |
+| `web/` | `WebSearch`, `WebFetch` |
 | `system/` | `get_time`, `http_request` |
 | `email/` | `send_email` |
 | `math/` | `math_calculate` |

@@ -166,7 +166,7 @@ func TestDroppedEventsCounter(t *testing.T) {
 
 func TestExternalizePayloadsNotEnabledByDefault(t *testing.T) {
 	r, _ := newTestRecorder(t, DefaultConfig())
-	r.Record(hooks.TraceEvent{Type: EventToolResult, Payload: ToolResultPayload{ToolName: "bash", Output: "hi"}})
+	r.Record(hooks.TraceEvent{Type: EventToolResult, Payload: ToolResultPayload{ToolName: "Bash", Output: "hi"}})
 	if err := r.Flush(); err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestVolumeControlTruncation(t *testing.T) {
 
 	long := strings.Repeat("x", 100)
 	r.Record(hooks.TraceEvent{Type: EventLLMCall, Payload: LLMCallPayload{Messages: []types.Message{{Content: long}}}})
-	r.Record(hooks.TraceEvent{Type: EventToolResult, Payload: ToolResultPayload{ToolName: "bash", Output: long}})
+	r.Record(hooks.TraceEvent{Type: EventToolResult, Payload: ToolResultPayload{ToolName: "Bash", Output: long}})
 	if err := r.Flush(); err != nil {
 		t.Fatal(err)
 	}

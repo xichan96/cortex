@@ -50,34 +50,33 @@ Always provide clear and concise responses.`
 		"read_file",
 		"write_file",
 		"edit_file",
-		"glob",
-		"grep",
-		"bash",
-		"list_directory",
+		"Glob",
+		"Grep",
+		"Bash",
 		"skill",
 		"question",
 		"job_kill",
 		"job_output",
-		"web_fetch",
-		"web_search",
+		"WebFetch",
+		"WebSearch",
 		"todo",
 	}
 	cfg.Tools.ApprovalRequired = []string{}
 	cfg.Tools.Denied = []string{}
 
 	cfg.ToolTimeouts = map[string]time.Duration{
-		"bash":       120 * time.Second,
-		"web_fetch":  30 * time.Second,
-		"web_search": 45 * time.Second,
-		"glob":       10 * time.Second,
-		"grep":       30 * time.Second,
+		"Bash":       120 * time.Second,
+		"WebFetch":   30 * time.Second,
+		"WebSearch":  45 * time.Second,
+		"Glob":       10 * time.Second,
+		"Grep":       30 * time.Second,
 		"read_file":  15 * time.Second,
 		"write_file": 30 * time.Second,
 		"edit_file":  15 * time.Second,
 	}
 
 	cfg.ToolTimeoutCalculator = func(toolName string, input map[string]interface{}) time.Duration {
-		if toolName == "bash" {
+		if toolName == "Bash" {
 			if cmd, ok := input["command"].(string); ok {
 				cmdLower := strings.ToLower(cmd)
 				if strings.Contains(cmdLower, "sleep") {
@@ -101,7 +100,7 @@ Always provide clear and concise responses.`
 				}
 			}
 		}
-		if toolName == "web_search" {
+		if toolName == "WebSearch" {
 			return 60 * time.Second
 		}
 		return 0

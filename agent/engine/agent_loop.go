@@ -45,7 +45,7 @@ func (s *doomLoopState) shouldStop(threshold int, onDoomLoop func(string, map[st
 }
 
 func generateLoopKey(toolName string, args map[string]interface{}) string {
-	if toolName == "execute_command" || toolName == "bash" {
+	if toolName == "execute_command" || toolName == "Bash" {
 		if cmd, ok := args["command"].(string); ok {
 			cmd = strings.TrimSpace(cmd)
 			parts := strings.Fields(cmd)

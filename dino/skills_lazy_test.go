@@ -342,8 +342,8 @@ func TestSkillsLazy_ConstraintsVisible(t *testing.T) {
 // TestRestrictToolNames covers the allowed_tools filtering helper. Round-level
 // enforcement lives in the engine; this pins the helper it will use.
 func TestRestrictToolNames(t *testing.T) {
-	available := []string{"read", "write", "bash"}
-	if got := RestrictToolNames(available, []string{"bash", "read"}); len(got) != 2 || got[0] != "read" || got[1] != "bash" {
+	available := []string{"read", "write", "Bash"}
+	if got := RestrictToolNames(available, []string{"Bash", "read"}); len(got) != 2 || got[0] != "read" || got[1] != "Bash" {
 		t.Errorf("RestrictToolNames = %v, want [read bash] (available order)", got)
 	}
 	if got := RestrictToolNames(available, nil); len(got) != 3 {

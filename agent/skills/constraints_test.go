@@ -42,7 +42,7 @@ func TestSkillPolicyFromEntry(t *testing.T) {
 }
 
 func TestSkillPolicyFilterToolNames(t *testing.T) {
-	available := []string{"read", "write", "bash"}
+	available := []string{"read", "write", "Bash"}
 
 	filtered, unknown := FilterToolNames(available, nil)
 	if !reflect.DeepEqual(filtered, available) {
@@ -56,8 +56,8 @@ func TestSkillPolicyFilterToolNames(t *testing.T) {
 		t.Error("empty allowed must return a copy, not alias the input")
 	}
 
-	filtered, unknown = FilterToolNames(available, []string{"bash", "read"})
-	if !reflect.DeepEqual(filtered, []string{"read", "bash"}) {
+	filtered, unknown = FilterToolNames(available, []string{"Bash", "read"})
+	if !reflect.DeepEqual(filtered, []string{"read", "Bash"}) {
 		t.Errorf("subset = %v, want available order [read bash]", filtered)
 	}
 	if unknown != nil {

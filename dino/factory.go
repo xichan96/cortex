@@ -1698,7 +1698,7 @@ func (f *dinoFactory) discoverTool(ctx context.Context, sessionID, name string, 
 
 func wrapWorkspacePathTools(t types.Tool, workspaceRoot, sessionID string, store *ApprovalStore, extraRoots []string) types.Tool {
 	switch t.Name() {
-	case "read_file", "write_file", "edit_file", "list_directory", "glob", "grep":
+	case "read_file", "write_file", "edit_file", "Glob", "Grep":
 		return NewExternalPathApprovalTool(t, workspaceRoot, sessionID, store, extraRoots...)
 	default:
 		return t
@@ -1764,7 +1764,6 @@ func loadBuiltinTools(reg *dinoTools.Registry, workspace string) error {
 		dinoTools.NewBashTool(workspace),
 		dinoTools.NewGlobTool(workspace),
 		dinoTools.NewGrepTool(workspace),
-		dinoTools.NewListDirectoryTool(workspace),
 		dinoTools.NewQuestionTool(),
 		dinoTools.NewJobKillTool(),
 		dinoTools.NewJobOutputTool(),

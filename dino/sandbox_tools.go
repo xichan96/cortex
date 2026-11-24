@@ -2,8 +2,8 @@ package dino
 
 // Sandboxed tool wrappers.
 //
-// These wrappers route the builtin tool surface (bash, read_file, write_file,
-// list_directory) through a sandbox.Sandbox so that path confinement, timeouts,
+// These wrappers route the builtin tool surface (Bash, read_file, write_file)
+// through a sandbox.Sandbox so that path confinement, timeouts,
 // output limits and (for future backends) process isolation are enforced in one
 // place instead of in each tool. They are additive: nothing here is wired into
 // the factory yet, and WrapToolWithSandbox leaves unknown tools untouched.
@@ -28,15 +28,14 @@ import (
 // sandboxableToolNames lists the builtin tools that WrapToolWithSandbox knows
 // how to route through a Sandbox. Anything else is returned unchanged.
 var sandboxableToolNames = map[string]struct{}{
-	"bash":           {},
-	"read_file":      {},
-	"write_file":     {},
-	"list_directory": {},
+	"Bash":       {},
+	"read_file":  {},
+	"write_file": {},
 }
 
 // WrapToolWithSandbox returns a sandboxed equivalent of tool. It recognizes the
-// builtin bash/read_file/write_file/list_directory tools and returns false for
-// anything else, in which case the original tool is returned unchanged.
+// builtin Bash/read_file/write_file tools and returns false for anything else,
+// in which case the original tool is returned unchanged.
 func WrapToolWithSandbox(tool types.Tool, sb sandbox.Sandbox) (types.Tool, bool) {
 	if tool == nil || sb == nil {
 		return tool, false
@@ -45,14 +44,12 @@ func WrapToolWithSandbox(tool types.Tool, sb sandbox.Sandbox) (types.Tool, bool)
 		return tool, false
 	}
 	switch tool.Name() {
-	case "bash":
+	case "Bash":
 		return NewSandboxedBashTool(tool, sb), true
 	case "read_file":
 		return NewSandboxedReadFileTool(tool, sb), true
 	case "write_file":
 		return NewSandboxedWriteFileTool(tool, sb), true
-	case "list_directory":
-		return NewSandboxedListDirectoryTool(tool, sb), true
 	default:
 		return tool, false
 	}
@@ -121,7 +118,7 @@ func NewSandboxedBashTool(inner types.Tool, sb sandbox.Sandbox) *SandboxedBashTo
 	return &SandboxedBashTool{inner: inner, sb: sb}
 }
 
-func (t *SandboxedBashTool) Name() string { return wrapperName(t.inner, "bash") }
+func (t *SandboxedBashTool) Name() string { return wrapperName(t.inner, "Bash") }
 
 func (t *SandboxedBashTool) Description() string {
 	return wrapperDescription(t.inner, "Execute a command inside the sandbox and return stdout, stderr and the exit code.")
@@ -388,49 +385,7 @@ func (t *SandboxedWriteFileTool) Execute(ctx context.Context, input map[string]i
 }
 
 // -----------------------------------------------------------------------------
-// list_directory
-
-// SandboxedListDirectoryTool lists directories through a sandbox backend that
-// implements sandbox.DirLister.
-type SandboxedListDirectoryTool struct {
-	inner types.Tool
-	sb    sandbox.Sandbox
-}
-
-// NewSandboxedListDirectoryTool wraps inner (which may be nil) with the given
-// sandbox.
-func NewSandboxedListDirectoryTool(inner types.Tool, sb sandbox.Sandbox) *SandboxedListDirectoryTool {
-	return &SandboxedListDirectoryTool{inner: inner, sb: sb}
-}
-
-func (t *SandboxedListDirectoryTool) Name() string { return wrapperName(t.inner, "list_directory") }
-
-func (t *SandboxedListDirectoryTool) Description() string {
-	return wrapperDescription(t.inner, "List files in a directory inside the sandbox.")
-}
-
-func (t *SandboxedListDirectoryTool) Schema() map[string]interface{} {
-	return wrapperSchema(t.inner, map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"path": map[string]interface{}{"type": "string"},
-		},
-		"required": []string{"path"},
-	})
-}
-
-func (t *SandboxedListDirectoryTool) Metadata() types.ToolMetadata { return wrapperMeta(t.inner) }
-
-func (t *SandboxedListDirectoryTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
-	if t.sb == nil {
-		return nil, fmt.Errorf("sandboxed list_directory: no sandbox backend")
-	}
-	path, ok := input["path"].(string)
-	if !ok || path == "" {
-		return nil, fmt.Errorf("invalid path parameter")
-	}
-	return sandboxListEntries(ctx, t.sb, path)
-}
+// directory helpers
 
 // sandboxListNames returns entry names, appending "/" to directories, matching
 // the legacy read_file directory listing.
@@ -450,25 +405,6 @@ func sandboxListNames(ctx context.Context, sb sandbox.Sandbox, path string) ([]s
 	return names, nil
 }
 
-// sandboxListEntries returns the legacy list_directory result shape.
-func sandboxListEntries(ctx context.Context, sb sandbox.Sandbox, path string) (interface{}, error) {
-	entries, err := sandboxReadDir(ctx, sb, path)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]map[string]interface{}, 0, len(entries))
-	for _, info := range entries {
-		result = append(result, map[string]interface{}{
-			"name":     info.Name,
-			"is_dir":   info.IsDir,
-			"size":     info.Size,
-			"mode":     info.Mode.String(),
-			"mod_time": info.ModTime.Unix(),
-		})
-	}
-	return result, nil
-}
-
 func sandboxReadDir(ctx context.Context, sb sandbox.Sandbox, path string) ([]sandbox.FileInfo, error) {
 	lister, ok := sb.(sandbox.DirLister)
 	if !ok {
@@ -476,7 +412,7 @@ func sandboxReadDir(ctx context.Context, sb sandbox.Sandbox, path string) ([]san
 	}
 	entries, err := lister.ReadDir(ctx, path)
 	if err != nil {
-		return nil, fmt.Errorf("sandboxed list_directory: %w", err)
+		return nil, fmt.Errorf("sandboxed read_dir: %w", err)
 	}
 	return entries, nil
 }

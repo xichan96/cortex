@@ -60,8 +60,8 @@ func TestEngineProviderChatWithTools(t *testing.T) {
 				{Type: StreamTextDelta, Delta: "Hel"},
 				{Type: StreamTextDelta, Delta: "lo"},
 				{Type: StreamThinkingDelta, Delta: "think"},
-				{Type: StreamToolDelta, ToolCall: &ToolCallDelta{Index: 0, ID: "call-1", Name: "bash", ArgumentsDelta: `{"cmd":`}},
-				{Type: StreamToolEnd, ToolCall: &ToolCallDelta{Index: 0, ID: "call-1", Name: "bash", Arguments: map[string]any{"cmd": "ls"}}},
+				{Type: StreamToolDelta, ToolCall: &ToolCallDelta{Index: 0, ID: "call-1", Name: "Bash", ArgumentsDelta: `{"cmd":`}},
+				{Type: StreamToolEnd, ToolCall: &ToolCallDelta{Index: 0, ID: "call-1", Name: "Bash", Arguments: map[string]any{"cmd": "ls"}}},
 				{Type: StreamDone, Message: &AssistantMessage{
 					Content:    []ContentBlock{{Type: ContentText, Text: "Hello"}},
 					Usage:      Usage{Input: 10, Output: 2, TotalTokens: 12},
@@ -84,7 +84,7 @@ func TestEngineProviderChatWithTools(t *testing.T) {
 	if got.Content != "Hello" {
 		t.Errorf("content = %q", got.Content)
 	}
-	if len(got.ToolCalls) != 1 || got.ToolCalls[0].Function.Name != "bash" {
+	if len(got.ToolCalls) != 1 || got.ToolCalls[0].Function.Name != "Bash" {
 		t.Fatalf("tool calls = %+v", got.ToolCalls)
 	}
 	if got.ToolCalls[0].Function.Arguments["cmd"] != "ls" {

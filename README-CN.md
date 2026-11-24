@@ -189,7 +189,7 @@ llmProvider, _ := llm.VolceClient("ak-...", "doubao-pro-32k")
 
 - `Config.Tools`：`Allowed` / `Denied` / `ApprovalRequired` 控制面；`ToolTimeouts` 与 `ToolTimeoutCalculator` 按工具与入参细化超时。
 - `defined_tool`：`DefinedTool`、`ToolContext`、审批存储（危险操作可阻塞至人工确认）。
-- 内置工具覆盖读写编辑文件、`glob`/`grep`、`bash`、`list_directory` 等；可接 MCP 与基于目录的 Skills（`cfg.Skills`）。
+- 内置工具覆盖读写编辑文件、`Grep`/`Glob`、`Bash`、`WebFetch`/`WebSearch` 等；可接 MCP 与基于目录的 Skills（`cfg.Skills`）。
 
 ### 资源与稳定性
 
@@ -247,11 +247,11 @@ func main() {
 | 目录 | 工具名 |
 |------|--------|
 | `fs/` | `read_file`、`write_file`、`edit_file`、`file` |
-| `search/` | `glob`、`grep`、`codesearch`（当前为占位实现） |
+| `search/` | `Glob`、`Grep`、`codesearch`（当前为占位实现） |
 | `runtime/` | `command`（本地 Shell）、`question`（向用户澄清）、`job_kill`、`job_output`（后台命令任务） |
 | `task/` | `todo`（进程内任务：ID、pending / in_progress / completed / cancelled，支持列出与更新） |
 | `net/` | `ssh`、`net_check`（连通性检测） |
-| `web/` | `web_search`、`web_fetch` |
+| `web/` | `WebSearch`、`WebFetch` |
 | `system/` | `get_time`、`http_request` |
 | `email/` | `send_email` |
 | `math/` | `math_calculate` |

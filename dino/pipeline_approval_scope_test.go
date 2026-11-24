@@ -53,7 +53,7 @@ func TestApprovalStoreBrokerScopePassthrough(t *testing.T) {
 
 			resp, err := broker.Request(context.Background(), approval.ApprovalRequest{
 				SessionID: "sess-1",
-				ToolName:  "bash",
+				ToolName:  "Bash",
 				Scopes:    approval.AllScopes(),
 			})
 			if err != nil {
@@ -78,7 +78,7 @@ func TestApprovalStoreBrokerDefaultScopeIsOnce(t *testing.T) {
 	store.SetSender(sender)
 
 	resp, err := (&approvalStoreBroker{store: store}).Request(context.Background(), approval.ApprovalRequest{
-		ToolName: "bash",
+		ToolName: "Bash",
 		Scopes:   approval.AllScopes(),
 	})
 	if err != nil {
@@ -99,7 +99,7 @@ func TestApprovalStoreBrokerClampsPersistentScopeForNarrowedRequest(t *testing.T
 	broker := &approvalStoreBroker{store: store, scope: approval.ScopeAlways}
 
 	resp, err := broker.Request(context.Background(), approval.ApprovalRequest{
-		ToolName: "bash",
+		ToolName: "Bash",
 		Scopes:   []approval.ApprovalScope{approval.ScopeOnce, approval.ScopeSession},
 	})
 	if err != nil {
@@ -114,14 +114,14 @@ func TestApprovalStoreBrokerClampsPersistentScopeForNarrowedRequest(t *testing.T
 // a remembered allow executes without asking, a remembered deny blocks without
 // asking.
 func TestBrokerAuthorizerHonorsRememberedDecisions(t *testing.T) {
-	call := &pipeline.Call{Name: "bash", Args: map[string]any{"command": "git push origin main"}}
+	call := &pipeline.Call{Name: "Bash", Args: map[string]any{"command": "git push origin main"}}
 	if got := approvalRule(call); got != "git push" {
 		t.Fatalf("approvalRule = %q, want %q", got, "git push")
 	}
 
 	allowStore := approval.NewScopeStore(approval.NewMemoryStore(), nil, nil)
 	if err := allowStore.Session.Put(approval.PermissionRecord{
-		Tool: "bash", Pattern: "git push", Scope: approval.ScopeSession, Decision: approval.ActionAllow,
+		Tool: "Bash", Pattern: "git push", Scope: approval.ScopeSession, Decision: approval.ActionAllow,
 	}); err != nil {
 		t.Fatalf("Put allow: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestBrokerAuthorizerHonorsRememberedDecisions(t *testing.T) {
 
 	denyStore := approval.NewScopeStore(approval.NewMemoryStore(), nil, nil)
 	if err := denyStore.Session.Put(approval.PermissionRecord{
-		Tool: "bash", Pattern: "git push", Scope: approval.ScopeSession, Decision: approval.ActionDeny,
+		Tool: "Bash", Pattern: "git push", Scope: approval.ScopeSession, Decision: approval.ActionDeny,
 	}); err != nil {
 		t.Fatalf("Put deny: %v", err)
 	}
@@ -212,10 +212,10 @@ func scopedApprovalFactory(t *testing.T, scope string, homeCfg HomeConfig) *dino
 
 func runBashApproval(t *testing.T, df *dinoFactory, command string) *pipeline.Result {
 	t.Helper()
-	tool := &countingPipeTool{name: "bash"}
+	tool := &countingPipeTool{name: "Bash"}
 	res, err := df.GetToolPipeline().ExecuteOne(context.Background(), &pipeline.Call{
 		ID:        "call-" + command,
-		Name:      "bash",
+		Name:      "Bash",
 		Tool:      tool,
 		SessionID: "sess-scope",
 		Args:      map[string]any{"command": command},
@@ -260,7 +260,7 @@ func TestNewDinoFactoryApprovalScopeWorkspacePersists(t *testing.T) {
 	}
 
 	path := approval.WorkspacePermissionsPath(cwd)
-	rec, ok := approval.NewFileStore(path).Lookup("bash", "git push")
+	rec, ok := approval.NewFileStore(path).Lookup("Bash", "git push")
 	if !ok {
 		t.Fatalf("no remembered record in %s", path)
 	}
@@ -292,7 +292,7 @@ func TestNewDinoFactoryApprovalScopeAlwaysPersistsToUserHome(t *testing.T) {
 	runBashApproval(t, df, "git status")
 
 	path := approval.UserPermissionsPath(userHome)
-	rec, ok := approval.NewFileStore(path).Lookup("bash", "git status")
+	rec, ok := approval.NewFileStore(path).Lookup("Bash", "git status")
 	if !ok {
 		t.Fatalf("no remembered record in %s", path)
 	}
@@ -348,10 +348,10 @@ func TestNewDinoFactoryRememberedDenyBlocksWithoutAsking(t *testing.T) {
 	sender := &capturingApprovalSender{store: df.approvalStore, approve: false}
 	df.approvalStore.SetSender(sender)
 
-	tool := &countingPipeTool{name: "bash"}
+	tool := &countingPipeTool{name: "Bash"}
 	res, err := df.GetToolPipeline().ExecuteOne(context.Background(), &pipeline.Call{
 		ID:        "c1",
-		Name:      "bash",
+		Name:      "Bash",
 		Tool:      tool,
 		SessionID: "sess-deny",
 		Args:      map[string]any{"command": "rm -rf build"},
@@ -366,10 +366,10 @@ func TestNewDinoFactoryRememberedDenyBlocksWithoutAsking(t *testing.T) {
 		t.Fatalf("denied tool executed %d times", tool.CallCount())
 	}
 
-	tool2 := &countingPipeTool{name: "bash"}
+	tool2 := &countingPipeTool{name: "Bash"}
 	res, err = df.GetToolPipeline().ExecuteOne(context.Background(), &pipeline.Call{
 		ID:        "c2",
-		Name:      "bash",
+		Name:      "Bash",
 		Tool:      tool2,
 		SessionID: "sess-deny",
 		Args:      map[string]any{"command": "rm -rf build"},
@@ -395,9 +395,9 @@ func TestApprovalRulePatterns(t *testing.T) {
 		args map[string]any
 		want string
 	}{
-		{"bash", map[string]any{"command": "  git   push   origin main "}, "git push"},
-		{"bash", map[string]any{"command": "ls"}, "ls"},
-		{"bash", map[string]any{}, "*"},
+		{"Bash", map[string]any{"command": "  git   push   origin main "}, "git push"},
+		{"Bash", map[string]any{"command": "ls"}, "ls"},
+		{"Bash", map[string]any{}, "*"},
 		{"execute_command", map[string]any{"command": "git push"}, "git push"},
 		{"write_file", map[string]any{"path": "./a/../b.txt"}, "b.txt"},
 		{"edit_file", map[string]any{"file_path": "/tmp/x.go"}, "/tmp/x.go"},

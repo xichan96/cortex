@@ -37,14 +37,14 @@ func TestLoadLayersMerge(t *testing.T) {
 		"default_provider": "anthropic",
 		"default_model": "user-model",
 		"default_thinking": "low",
-		"tools": {"default": ["read", "+grep"], "exclude": ["rm"]},
+		"tools": {"default": ["read", "+Grep"], "exclude": ["rm"]},
 		"compaction": {"enabled": true, "min_messages": 10},
 		"resources": {"skills": ["/u/skills"], "prompts": ["/u/prompts"]},
 		"packages": [{"name": "a"}]
 	}`)
 	writeTestFile(t, projectPath, `{
 		"default_model": "project-model",
-		"tools": {"default": ["-grep"], "exclude": ["rm", "bash"]},
+		"tools": {"default": ["-Grep"], "exclude": ["rm", "Bash"]},
 		"compaction": {"keep_recent_tokens": 1000},
 		"resources": {"skills": ["/p/skills", "/u/skills"], "agents": ["/p/agents"]},
 		"packages": [{"name": "a"}, {"name": "b"}]
@@ -72,14 +72,14 @@ func TestLoadLayersMerge(t *testing.T) {
 		t.Errorf("default_thinking source = %v", res.Sources["default_thinking"])
 	}
 
-	wantDefault := []string{"read", "+grep", "-grep"}
+	wantDefault := []string{"read", "+Grep", "-Grep"}
 	if !reflect.DeepEqual(s.Tools.Default, wantDefault) {
 		t.Errorf("Tools.Default = %v, want %v", s.Tools.Default, wantDefault)
 	}
 	if got := ResolveDefaultTools(s.Tools.Default, []string{"builtin"}); !reflect.DeepEqual(got, []string{"read"}) {
 		t.Errorf("ResolveDefaultTools = %v, want [read]", got)
 	}
-	if !reflect.DeepEqual(s.Tools.Exclude, []string{"rm", "bash"}) {
+	if !reflect.DeepEqual(s.Tools.Exclude, []string{"rm", "Bash"}) {
 		t.Errorf("Tools.Exclude = %v", s.Tools.Exclude)
 	}
 

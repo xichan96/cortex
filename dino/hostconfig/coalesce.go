@@ -186,7 +186,7 @@ func CoalesceDinoFromHost(in *dino.Config, host *HostAppConfig, brand *HostDinoB
 	}
 
 	if brand != nil && brand.DefaultWebTools {
-		out.Tools.Allowed = append(out.Tools.Allowed, "web_fetch", "web_search")
+		out.Tools.Allowed = append(out.Tools.Allowed, "WebFetch", "WebSearch")
 	}
 	if brand != nil && strings.TrimSpace(brand.MemoryToolName) != "" {
 		appendUniqueString(&out.Tools.Allowed, strings.TrimSpace(brand.MemoryToolName))

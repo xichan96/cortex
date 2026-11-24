@@ -48,7 +48,7 @@ func TestMemoryBridgeRoundTrip(t *testing.T) {
 	b := NewMemoryBridge()
 	defer b.Close()
 
-	payload := json.RawMessage(`{"tool":"bash","args":{"command":"ls"}}`)
+	payload := json.RawMessage(`{"tool":"Bash","args":{"command":"ls"}}`)
 	done := startBridgeRequest(b, BridgeRequest{
 		Kind:      KindApproval,
 		SessionID: "session-1",

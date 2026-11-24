@@ -21,7 +21,7 @@ func makeReplayEvents() []TraceEvent {
 			SchemaVersion: 1, Seq: 2, WallTimeUnixMS: 1100,
 			TraceID: "t1", SessionID: "s1", TurnID: 1, Type: EventLLMCall,
 			Iteration: intPtr(0),
-			Payload: mustJSON(LLMCallPayload{Messages: []types.Message{{Role: "user", Content: "hi"}}, EstTokensIn: 10}),
+			Payload:   mustJSON(LLMCallPayload{Messages: []types.Message{{Role: "user", Content: "hi"}}, EstTokensIn: 10}),
 		},
 		{
 			SchemaVersion: 1, Seq: 3, WallTimeUnixMS: 1600,
@@ -151,7 +151,7 @@ func TestReplaySubagentTree(t *testing.T) {
 
 func TestReplayDanglingToolCall(t *testing.T) {
 	evts := []TraceEvent{
-		{SchemaVersion: 1, Seq: 1, WallTimeUnixMS: 1000, TraceID: "t1", SessionID: "s1", TurnID: 1, Type: EventToolCall, Payload: mustJSON(ToolCallPayload{ToolName: "bash", ToolCallID: "cX", Input: map[string]any{"cmd": "ls"}})},
+		{SchemaVersion: 1, Seq: 1, WallTimeUnixMS: 1000, TraceID: "t1", SessionID: "s1", TurnID: 1, Type: EventToolCall, Payload: mustJSON(ToolCallPayload{ToolName: "Bash", ToolCallID: "cX", Input: map[string]any{"cmd": "ls"}})},
 		{SchemaVersion: 1, Seq: 2, WallTimeUnixMS: 1000, TraceID: "t1", SessionID: "s1", TurnID: 1, Type: EventTurnEnd, Payload: mustJSON(TurnEndPayload{Iterations: 1, WallMS: 0})},
 	}
 	turns := Reduce(evts)

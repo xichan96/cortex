@@ -20,7 +20,7 @@ import (
 // errors into {ok:false}, loop detection is the outermost shell).
 func TestWrapSessionTool_Order(t *testing.T) {
 	store := NewApprovalStore(0)
-	needApproval := map[string]bool{"bash": true}
+	needApproval := map[string]bool{"Bash": true}
 
 	f := &dinoFactory{
 		config:        DefaultConfig(),
@@ -29,7 +29,7 @@ func TestWrapSessionTool_Order(t *testing.T) {
 	}
 	senderAdapter := &toolEventSenderAdapter{}
 
-	raw := &mockTool{name: "bash", description: "run bash"}
+	raw := &mockTool{name: "Bash", description: "run bash"}
 	wrapped := f.wrapSessionTool(raw, "sess-1", senderAdapter, needApproval)
 
 	// Outermost wrapper must be the loop-detection tool.
@@ -41,12 +41,12 @@ func TestWrapSessionTool_Order(t *testing.T) {
 	// Behavior: an oversized bash result must be limited (limiter applied
 	// inside), not pass through raw.
 	big := &mockTool{
-		name: "bash",
+		name: "Bash",
 		executeFunc: func(input map[string]interface{}) (interface{}, error) {
 			return strings.Repeat("x", 70_000), nil
 		},
 	}
-	needApprovalBig := map[string]bool{"bash": false}
+	needApprovalBig := map[string]bool{"Bash": false}
 	wrappedBig := f.wrapSessionTool(big, "sess-1", senderAdapter, needApprovalBig)
 	res, err := wrappedBig.Execute(context.Background(), map[string]interface{}{"command": "ls"})
 	if err != nil {
@@ -65,12 +65,12 @@ func TestWrapSessionTool_Order(t *testing.T) {
 	// Note bash in the real factory goes through ApprovalTool which requires a
 	// sender; with needApproval=false the approval wrapper is skipped.
 	erring := &mockTool{
-		name: "bash",
+		name: "Bash",
 		executeFunc: func(input map[string]interface{}) (interface{}, error) {
 			return nil, errors.New("boom")
 		},
 	}
-	wrappedErr := f.wrapSessionTool(erring, "sess-1", senderAdapter, map[string]bool{"bash": false})
+	wrappedErr := f.wrapSessionTool(erring, "sess-1", senderAdapter, map[string]bool{"Bash": false})
 	res, err = wrappedErr.Execute(context.Background(), map[string]interface{}{"command": "ls"})
 	if err != nil {
 		t.Fatalf("nonFatal should convert recoverable error to result, got error: %v", err)
@@ -100,9 +100,9 @@ func (d *neverLoopDetector) GetStats(sessionID string) agentutils.LoopDetectStat
 // {ok:false} result by nonFatalTool — it must surface as a real error.
 func TestNonFatal_ApprovalRejectedPassthrough(t *testing.T) {
 	rejecting := &mockTool{
-		name: "bash",
+		name: "Bash",
 		executeFunc: func(input map[string]interface{}) (interface{}, error) {
-			return nil, &tools.ApprovalRejectedError{ToolName: "bash"}
+			return nil, &tools.ApprovalRejectedError{ToolName: "Bash"}
 		},
 	}
 	nonFatal := tools.WrapNonFatalTool(rejecting)
@@ -118,7 +118,7 @@ func TestNonFatal_ApprovalRejectedPassthrough(t *testing.T) {
 	if !errors.As(err, &apErr) {
 		t.Fatalf("expected ApprovalRejectedError, got %T: %v", err, err)
 	}
-	if apErr.ToolName != "bash" {
+	if apErr.ToolName != "Bash" {
 		t.Errorf("expected ToolName bash, got %q", apErr.ToolName)
 	}
 }
@@ -130,8 +130,8 @@ func TestApprovalTool_RejectionIsApprovalRejectedError(t *testing.T) {
 	sender := &recordingApprovalSender{}
 	store.SetSender(sender)
 
-	inner := &mockTool{name: "bash"}
-	approvalTool := NewApprovalTool(inner, "sess", store, map[string]bool{"bash": true})
+	inner := &mockTool{name: "Bash"}
+	approvalTool := NewApprovalTool(inner, "sess", store, map[string]bool{"Bash": true})
 
 	go func() {
 		// The approval store receives the request and immediately rejects it.
@@ -161,8 +161,8 @@ func TestApprovalTool_RejectionIsApprovalRejectedError(t *testing.T) {
 func TestApprovalTool_ChannelErrorIsNotVeto(t *testing.T) {
 	store := NewApprovalStore(0) // no sender → RequestApproval returns ErrApprovalNotAvailable
 
-	inner := &mockTool{name: "bash"}
-	approvalTool := NewApprovalTool(inner, "sess", store, map[string]bool{"bash": true})
+	inner := &mockTool{name: "Bash"}
+	approvalTool := NewApprovalTool(inner, "sess", store, map[string]bool{"Bash": true})
 
 	_, err := approvalTool.Execute(context.Background(), map[string]interface{}{"command": "ls"})
 	if err == nil {
@@ -188,7 +188,7 @@ func TestApprovalTool_ChannelErrorIsNotVeto(t *testing.T) {
 // real error, not be converted to {ok:false}.
 func TestNonFatal_FatalPassthrough(t *testing.T) {
 	fatal := &mockTool{
-		name: "bash",
+		name: "Bash",
 		executeFunc: func(input map[string]interface{}) (interface{}, error) {
 			return nil, &types.FatalToolError{Err: errors.New("bad input"), Reason: "schema"}
 		},

@@ -106,7 +106,7 @@ func (p *Pipeline) sanitize(ctx context.Context, c *Call, r *Result) {
 			if path, err := p.trunc.Spill.Spill(ctx, c, text); err == nil && path != "" {
 				header.SavedPath = path
 				display := types.BuildOutputHeader(header) +
-					"\nFull output saved to: " + path + " — use read_file/grep to view.\n"
+					"\nFull output saved to: " + path + " — use read_file/Grep to view.\n"
 				if len(display) > budget {
 					// The path hint must survive even a tiny budget; TruncateMiddle
 					// counts its marker inside the budget.

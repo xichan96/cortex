@@ -7,7 +7,7 @@ import (
 
 // DirLister is an optional Sandbox extension implemented by backends that can
 // enumerate directory entries. The core Sandbox interface only exposes Stat, so
-// tools that need a listing (list_directory) discover this capability with a
+// tools that need directory entries discover this capability with a
 // type assertion and report a clear error when a backend does not support it.
 //
 // Paths follow the same confinement rules as ReadFile/Stat: relative paths are
@@ -19,7 +19,7 @@ type DirLister interface {
 var _ DirLister = (*HostSandbox)(nil)
 
 // ReadDir lists path inside the root. Entries whose metadata cannot be read are
-// skipped, matching the legacy list_directory tool's behavior.
+// skipped, matching the legacy directory-listing behavior.
 func (s *HostSandbox) ReadDir(ctx context.Context, path string) ([]FileInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

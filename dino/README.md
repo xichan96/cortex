@@ -39,7 +39,7 @@ Dino extends the core Cortex agent capabilities with advanced features designed 
 - Automatic loop prevention with user notifications
 
 ### Tool System
-- Built-in tools: `read_file`, `write_file`, `edit_file`, `bash`, `glob`, `grep`, `list_directory`
+- Built-in tools: `read_file`, `write_file`, `edit_file`, `Bash`, `Glob`, `Grep`, `WebFetch`, `WebSearch`
 - Extensible tool registry
 - Dangerous tool approval workflows
 - MCP (Model Context Protocol) support
@@ -139,12 +139,12 @@ tools:
     - read_file
     - write_file
     - edit_file
-    - glob
-    - grep
-    - bash
-    - list_directory
+    - Glob
+    - Grep
+    - Bash
+
   approval_required:
-    - bash
+    - Bash
     - write_file
     - edit_file
 

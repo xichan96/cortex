@@ -58,7 +58,7 @@ func TestBridgeBrokerMapsRequestFields(t *testing.T) {
 		SessionID:  "sess-7",
 		TurnID:     "turn-3",
 		ToolCallID: "call-42",
-		ToolName:   "bash",
+		ToolName:   "Bash",
 		Args:       map[string]any{"command": "ls -la"},
 		Timeout:    90 * time.Second,
 	})
@@ -79,7 +79,7 @@ func TestBridgeBrokerMapsRequestFields(t *testing.T) {
 	if req.ID != "call-42" {
 		t.Fatalf("id = %q, want the tool-call id call-42", req.ID)
 	}
-	if req.Title != "bash" {
+	if req.Title != "Bash" {
 		t.Fatalf("title = %q, want the tool name bash", req.Title)
 	}
 	if req.SessionID != "sess-7" || req.TurnID != "turn-3" {
@@ -113,7 +113,7 @@ func TestBridgeBrokerDecisions(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			broker := &bridgeBroker{bridge: &fakeApprovalBridge{approved: tc.approved, cancelled: tc.cancelled}}
-			resp, err := broker.Request(context.Background(), approval.ApprovalRequest{ToolName: "bash"})
+			resp, err := broker.Request(context.Background(), approval.ApprovalRequest{ToolName: "Bash"})
 			if err != nil {
 				t.Fatalf("a bridge decision must not become an error: %v", err)
 			}
@@ -131,7 +131,7 @@ func TestBridgeBrokerReturnsBridgeErrorUnchanged(t *testing.T) {
 	wantErr := errors.New("ui disconnected")
 	broker := &bridgeBroker{bridge: &fakeApprovalBridge{err: wantErr}}
 
-	_, err := broker.Request(context.Background(), approval.ApprovalRequest{ToolName: "bash"})
+	_, err := broker.Request(context.Background(), approval.ApprovalRequest{ToolName: "Bash"})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("err = %v, want the bridge error unchanged", err)
 	}
@@ -148,14 +148,14 @@ func TestBridgeBrokerResponseErrorIsAnError(t *testing.T) {
 	broker := &bridgeBroker{bridge: bridgeFunc(func(context.Context, approval.BridgeRequest) (approval.BridgeResponse, error) {
 		return approval.BridgeResponse{Error: "render failed"}, nil
 	})}
-	_, err := broker.Request(context.Background(), approval.ApprovalRequest{ToolName: "bash"})
+	_, err := broker.Request(context.Background(), approval.ApprovalRequest{ToolName: "Bash"})
 	if err == nil || !strings.Contains(err.Error(), "render failed") {
 		t.Fatalf("err = %v, want the UI error surfaced", err)
 	}
 }
 
 func TestBridgeBrokerMissingBridgeIsUnavailable(t *testing.T) {
-	_, err := (&bridgeBroker{}).Request(context.Background(), approval.ApprovalRequest{ToolName: "bash"})
+	_, err := (&bridgeBroker{}).Request(context.Background(), approval.ApprovalRequest{ToolName: "Bash"})
 	if !errors.Is(err, approval.ErrApprovalUnavailable) {
 		t.Fatalf("err = %v, want ErrApprovalUnavailable", err)
 	}
@@ -166,7 +166,7 @@ func TestBridgeBrokerUnmarshalableArgsFailsClosed(t *testing.T) {
 	broker := &bridgeBroker{bridge: bridge}
 
 	_, err := broker.Request(context.Background(), approval.ApprovalRequest{
-		ToolName: "bash",
+		ToolName: "Bash",
 		Args:     map[string]any{"bad": func() {}},
 	})
 	if err == nil {

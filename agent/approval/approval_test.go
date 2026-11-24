@@ -29,25 +29,25 @@ func TestAllowAndDenyBrokers(t *testing.T) {
 
 func TestMemoryStoreRoundTrip(t *testing.T) {
 	s := NewMemoryStore()
-	rec := PermissionRecord{Tool: "bash", Pattern: "git push:*", Scope: ScopeSession, Decision: ActionAllow}
+	rec := PermissionRecord{Tool: "Bash", Pattern: "git push:*", Scope: ScopeSession, Decision: ActionAllow}
 	if err := s.Put(rec); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	got, ok := s.Lookup("bash", "git push:*")
+	got, ok := s.Lookup("Bash", "git push:*")
 	if !ok || got.Decision != ActionAllow || got.CreatedAt.IsZero() {
 		t.Fatalf("lookup: %+v ok=%v", got, ok)
 	}
-	if _, ok := s.Lookup("bash", "rm:*"); ok {
+	if _, ok := s.Lookup("Bash", "rm:*"); ok {
 		t.Fatal("unexpected match")
 	}
 	list := s.List()
-	if len(list) != 1 || list[0].Key() != "bash:git push:*" {
+	if len(list) != 1 || list[0].Key() != "Bash:git push:*" {
 		t.Fatalf("list = %+v", list)
 	}
-	if err := s.Remove("bash", "git push:*"); err != nil {
+	if err := s.Remove("Bash", "git push:*"); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
-	if _, ok := s.Lookup("bash", "git push:*"); ok {
+	if _, ok := s.Lookup("Bash", "git push:*"); ok {
 		t.Fatal("record not removed")
 	}
 }
@@ -136,7 +136,7 @@ func TestFileStoreCorruptFile(t *testing.T) {
 func TestScopeStoreRememberRouting(t *testing.T) {
 	session, workspace, always := NewMemoryStore(), NewMemoryStore(), NewMemoryStore()
 	s := NewScopeStore(session, workspace, always)
-	req := ApprovalRequest{ToolName: "bash", Rule: "git push:*"}
+	req := ApprovalRequest{ToolName: "Bash", Rule: "git push:*"}
 
 	cases := []struct {
 		name  string
@@ -151,7 +151,7 @@ func TestScopeStoreRememberRouting(t *testing.T) {
 		if err := s.Remember(req, tc.resp); err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
-		if _, ok := tc.store.Lookup("bash", "git push:*"); !ok {
+		if _, ok := tc.store.Lookup("Bash", "git push:*"); !ok {
 			t.Fatalf("%s: record not routed", tc.name)
 		}
 	}
