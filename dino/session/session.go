@@ -243,6 +243,27 @@ func (s *Session) GetMemory() types.MemoryProvider {
 	return s.agent.GetMemory()
 }
 
+// CompactResult is the engine's manual compaction report, re-exported so hosts
+// that only import dino/session can describe the outcome without also importing
+// agent/engine.
+type CompactResult = engine.CompactResult
+
+// Compact manually compacts this session's memory (the manual /compact entry
+// point). It blocks until compression finishes and shares the engine's
+// memoryCompressMu with automatic compression, so the two never run
+// concurrently; a call made while an automatic compression is in flight waits
+// for it to finish.
+//
+// A session whose stored message count is at or below the provider's retention
+// window is a no-op: it returns a result with Compacted == 0 and no error.
+func (s *Session) Compact(ctx context.Context) (*CompactResult, error) {
+	agent := s.GetAgent()
+	if agent == nil {
+		return nil, errors.New("session: agent is not available")
+	}
+	return agent.CompactMemory(ctx)
+}
+
 func (s *Session) Subscribe(obs Observer) string {
 	id := generateUUID()
 	s.observersMu.Lock()

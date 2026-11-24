@@ -818,13 +818,7 @@ func (ae *AgentEngine) saveToMemoryAndMaybeCompress(ctx context.Context, inputMa
 		return
 	}
 
-	keepWindow := compressThreshold
-	if keepWindow <= 0 {
-		keepWindow = config.MaxHistoryMessages
-	}
-	if keepWindow <= 0 {
-		keepWindow = 50
-	}
+	keepWindow := compressKeepWindow(config)
 
 	ae.mu.RLock()
 	llm := ae.model

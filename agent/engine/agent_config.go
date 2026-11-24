@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/xichan96/cortex/agent/hooks"
@@ -32,6 +33,138 @@ func (ae *AgentEngine) GetMemory() types.MemoryProvider {
 	return ae.memory
 }
 
+// ErrMemoryNotConfigured is returned by CompactMemory when no memory provider
+// is attached to the engine.
+var ErrMemoryNotConfigured = errors.New("engine: memory provider is not configured")
+
+// compactReporter is the optional capability a memory provider may implement to
+// report details CompressMemory's error return cannot express. Providers that do
+// not implement it still compact; the result just carries zero values for the
+// fields it cannot report.
+type compactReporter interface {
+	// LastCompactUsedLLM reports whether the newest summary was produced by the
+	// LLM (false when the deterministic fallback was used, or nothing has been
+	// compressed yet).
+	LastCompactUsedLLM() bool
+	// CompactSummary returns the summary currently in effect. It exists apart
+	// from GetSummary because some adapters suppress GetSummary to control
+	// prompt injection.
+	CompactSummary(ctx context.Context) (string, error)
+}
+
+// CompactResult describes what one CompactMemory call did.
+//
+// Counts are best effort: they are read from the provider before and after
+// compression. When the provider exposes neither StoredMessageCount nor a
+// working GetChatHistory, Kept stays 0 and Compacted cannot be derived.
+type CompactResult struct {
+	// Compacted is how many messages were folded into the summary
+	// (before - after). 0 means either nothing was compacted (message count at
+	// or below the retention window) or the counts could not be read.
+	Compacted int `json:"compacted"`
+	// Kept is the number of messages still stored after compaction. 0 when the
+	// provider does not report a count.
+	Kept int `json:"kept"`
+	// SummaryLen is the length in bytes of the summary in effect after
+	// compaction. 0 when the provider exposes no summary.
+	SummaryLen int `json:"summary_len"`
+	// UsedLLM is true when the provider reports that the newest summary came
+	// from the LLM rather than the deterministic fallback. It stays false for
+	// providers that cannot report this.
+	UsedLLM bool `json:"used_llm"`
+}
+
+// CompactMemory compacts the conversation memory on demand (the manual /compact
+// entry point). It runs the same provider compression the engine schedules
+// automatically and serializes with it on memoryCompressMu, so an in-flight
+// automatic compression completes first and the two never run concurrently.
+//
+// Unlike the automatic path, CompactMemory does not gate on
+// EnableMemoryCompress/threshold: the caller asked for it. The provider still
+// decides whether there is anything to compact (typically a no-op when the
+// stored message count is at or below KeepRecentCount).
+func (ae *AgentEngine) CompactMemory(ctx context.Context) (*CompactResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	ae.mu.RLock()
+	mem := ae.memory
+	llm := ae.model
+	config := ae.config
+	ae.mu.RUnlock()
+
+	if mem == nil {
+		return nil, ErrMemoryNotConfigured
+	}
+
+	ae.memoryCompressMu.Lock()
+	defer ae.memoryCompressMu.Unlock()
+
+	before, hadBefore := ae.storedMessageCount(ctx, mem)
+
+	if err := mem.CompressMemory(ctx, llm, compressKeepWindow(config)); err != nil {
+		return nil, err
+	}
+
+	after, hadAfter := ae.storedMessageCount(ctx, mem)
+
+	result := &CompactResult{}
+	if hadAfter {
+		result.Kept = after
+	}
+	if hadBefore && hadAfter && before > after {
+		result.Compacted = before - after
+	}
+
+	if reporter, ok := mem.(compactReporter); ok {
+		result.UsedLLM = reporter.LastCompactUsedLLM()
+		if summary, err := reporter.CompactSummary(ctx); err == nil {
+			result.SummaryLen = len(summary)
+		}
+	} else if reader, ok := mem.(interface {
+		GetSummary(context.Context) (string, error)
+	}); ok {
+		if summary, err := reader.GetSummary(ctx); err == nil {
+			result.SummaryLen = len(summary)
+		}
+	}
+
+	return result, nil
+}
+
+// storedMessageCount reads the raw stored message count, preferring
+// StoredMessageCount over GetChatHistory: the latter may include an injected
+// summary message (Hybrid appends one) and would skew the before/after delta.
+func (ae *AgentEngine) storedMessageCount(ctx context.Context, mem types.MemoryProvider) (int, bool) {
+	if ctr, ok := mem.(interface {
+		StoredMessageCount(context.Context) (int, error)
+	}); ok {
+		if n, err := ctr.StoredMessageCount(ctx); err == nil {
+			return n, true
+		}
+	}
+	if history, err := mem.GetChatHistory(ctx); err == nil {
+		return len(history), true
+	}
+	return 0, false
+}
+
+// compressKeepWindow is the retention window passed to CompressMemory. It is
+// shared by the automatic and manual paths so they cannot drift.
+func compressKeepWindow(config *types.AgentConfig) int {
+	keepWindow := 50
+	if config == nil {
+		return keepWindow
+	}
+	if config.MemoryCompressThreshold > 0 {
+		keepWindow = config.MemoryCompressThreshold
+	} else if config.MaxHistoryMessages > 0 {
+		keepWindow = config.MaxHistoryMessages
+	}
+	return keepWindow
+}
+
 // SetOutputParser sets the output parser
 func (ae *AgentEngine) SetOutputParser(ctx context.Context, parser types.OutputParser) {
 	ae.mu.Lock()
@@ -59,8 +192,8 @@ func (ae *AgentEngine) SetTemperature(ctx context.Context, temperature float32) 
 // SetMaxTokens sets the maximum tokens
 func (ae *AgentEngine) SetMaxTokens(ctx context.Context, maxTokens int) {
 	ae.setConfigValue(func() {
-	ae.config.MaxCompletionTokens = maxTokens
-	ae.config.MaxTokens = maxTokens
+		ae.config.MaxCompletionTokens = maxTokens
+		ae.config.MaxTokens = maxTokens
 	})
 }
 

@@ -217,6 +217,30 @@ func (m *memoryAdapter) GetSummary(ctx context.Context) (string, error) {
 	return m.provider.GetSummary(ctx)
 }
 
+// CompactSummary forwards the real summary to the engine's manual /compact
+// statistics path. Unlike GetSummary it bypasses the B1 suppression below:
+// that rule exists to avoid double prompt injection, not to hide the summary
+// from statistics.
+func (m *memoryAdapter) CompactSummary(ctx context.Context) (string, error) {
+	if m.direct != nil {
+		return "", nil
+	}
+	return m.provider.GetSummary(ctx)
+}
+
+// LastCompactUsedLLM forwards Hybrid's "LLM vs deterministic fallback" report.
+// Non-Hybrid providers and the transcript backend cannot report it, so it stays
+// false there.
+func (m *memoryAdapter) LastCompactUsedLLM() bool {
+	if m.direct != nil {
+		return false
+	}
+	if r, ok := m.provider.(interface{ LastCompactUsedLLM() bool }); ok {
+		return r.LastCompactUsedLLM()
+	}
+	return false
+}
+
 func (m *memoryAdapter) GetChatHistory(ctx context.Context) ([]types.Message, error) {
 	if m.direct != nil {
 		return m.direct.GetChatHistory(ctx)

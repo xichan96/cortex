@@ -33,6 +33,50 @@ type Provider interface {
 	StoredMessageCount(ctx context.Context) (int, error)
 }
 
+// SummaryStore is an optional capability a Provider may implement to persist
+// the conversation summary outside the provider's own message store.
+//
+// Hybrid keeps its summary in memory (m.summary). Without a SummaryStore the
+// summary is lost on process restart. When the wrapped provider implements
+// SummaryStore, Hybrid loads the summary at construction and saves it after
+// every successful compression (and clears it on Clear), so a host-injected
+// provider (e.g. a database-backed router) can keep summaries across restarts.
+//
+// This is deliberately a separate, optional interface: adding methods to
+// Provider would break every existing implementation.
+type SummaryStore interface {
+	LoadSummary(ctx context.Context) (string, error)
+	SaveSummary(ctx context.Context, summary string) error
+}
+
+// summarySessionCtxKey is the context key for the owning session id.
+type summarySessionCtxKey struct{}
+
+// WithSummarySession attaches the owning session id to a SummaryStore call
+// context. Hybrid sets it on every LoadSummary/SaveSummary call so a provider
+// shared by several sessions (WithMemoryProvider) can route by session without
+// the interface carrying an extra parameter. Per-session providers can ignore
+// it.
+func WithSummarySession(ctx context.Context, sessionID string) context.Context {
+	if sessionID == "" {
+		return ctx
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, summarySessionCtxKey{}, sessionID)
+}
+
+// SummarySessionFromContext returns the session id attached by
+// WithSummarySession ("" when absent).
+func SummarySessionFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	id, _ := ctx.Value(summarySessionCtxKey{}).(string)
+	return id
+}
+
 type Stats struct {
 	MessageCount  int `json:"message_count"`
 	SummaryLength int `json:"summary_length"`
@@ -253,6 +297,9 @@ type Hybrid struct {
 	// memoryAdapter 禁用；false = Hybrid 不活跃：GetMessages 不追加尾部摘要，engine 头部
 	// 注入照常（非 Hybrid 底层 provider 场景）。
 	injectSummaryTail bool
+	// lastUsedLLM 最近一次 Compress 是否由 LLM 产出摘要（false = 确定性 fallback
+	// 或尚未压缩）。供上层手动 /compact 的统计使用。
+	lastUsedLLM atomic.Bool
 }
 
 func NewHybrid(sessionID string, provider Provider, llmProvider LLMProvider, config *Config) *Hybrid {
@@ -260,13 +307,28 @@ func NewHybrid(sessionID string, provider Provider, llmProvider LLMProvider, con
 		config = DefaultConfig()
 	}
 
-	return &Hybrid{
+	h := &Hybrid{
 		provider:          provider,
 		sessionID:         sessionID,
 		llmProvider:       llmProvider,
 		config:            config,
 		injectSummaryTail: true,
 	}
+
+	// 可选持久化：provider 实现 SummaryStore 时恢复上次摘要。失败只记日志，
+	// 不阻断构造（与「provider 未实现时行为完全一致」保持同样的可用性保证）。
+	if store, ok := provider.(SummaryStore); ok {
+		summary, err := store.LoadSummary(WithSummarySession(context.Background(), sessionID))
+		if err != nil {
+			logger.Warn("[Hybrid] load persisted summary failed",
+				slog.String("session_id", sessionID),
+				slog.String("error", err.Error()))
+		} else {
+			h.summary = summary
+		}
+	}
+
+	return h
 }
 
 func (m *Hybrid) AddMessage(ctx context.Context, msg Message) error {
@@ -383,6 +445,7 @@ func (m *Hybrid) Compress(ctx context.Context) error {
 	m.summaryMu.Lock()
 	m.summary = summary
 	m.summaryMu.Unlock()
+	m.lastUsedLLM.Store(usedLLM)
 
 	// R5：SummaryLength 观测。压缩后的摘要长度是 D6b（预算裁剪是否裁掉摘要）与
 	// 摘要质量的可观测数据点——GetStats 无生产读点，压缩日志是唯一的观察通道。
@@ -403,6 +466,17 @@ func (m *Hybrid) Compress(ctx context.Context) error {
 		_ = m.provider.AddMessage(ctx, msg)
 	}
 
+	// E) 可选摘要持久化：必须在 provider.Clear 之后写，避免被 Clear 一并删除
+	// （SQLite 的 metadata summary 就是 Clear 时清掉的）。
+	if store, ok := m.provider.(SummaryStore); ok {
+		if err := store.SaveSummary(WithSummarySession(ctx, m.sessionID), summary); err != nil {
+			logger.Warn("[Hybrid] persist summary failed",
+				slog.String("session_id", m.sessionID),
+				slog.String("error", err.Error()))
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -410,8 +484,32 @@ func (m *Hybrid) Clear(ctx context.Context) error {
 	m.summaryMu.Lock()
 	m.summary = ""
 	m.summaryMu.Unlock()
+	m.lastUsedLLM.Store(false)
 
-	return m.provider.Clear(ctx)
+	if err := m.provider.Clear(ctx); err != nil {
+		return err
+	}
+
+	// 可选持久化：清空摘要，避免重启后恢复已清空的会话摘要。
+	if store, ok := m.provider.(SummaryStore); ok {
+		return store.SaveSummary(WithSummarySession(ctx, m.sessionID), "")
+	}
+	return nil
+}
+
+// LastCompactUsedLLM 报告最近一次 Compress 是否由 LLM 产出摘要。
+// 未压缩过或走了确定性 fallback 时为 false。
+func (m *Hybrid) LastCompactUsedLLM() bool {
+	return m.lastUsedLLM.Load()
+}
+
+// CompactSummary 返回当前摘要，供上层手动 /compact 的统计读取。
+//
+// 与 GetSummary 值相同、名字不同：dino 的 memoryAdapter.GetSummary 在 Hybrid
+// 活跃时故意返回空（评审 B1 单一注入源，禁用 engine 头部注入），统计通道因此
+// 需要一个不会被该策略吞掉的方法。
+func (m *Hybrid) CompactSummary(ctx context.Context) (string, error) {
+	return m.GetSummary(ctx)
 }
 
 func (m *Hybrid) GetStats() Stats {
@@ -435,4 +533,3 @@ func (m *Hybrid) autoCompress(ctx context.Context) {
 	}
 	_ = m.Compress(ctx)
 }
-

@@ -284,6 +284,26 @@ func (s *SQLite) GetSummary(ctx context.Context) (string, error) {
 	return summary, err
 }
 
+// LoadSummary implements SummaryStore. The summary is the same metadata row
+// GetSummary reads, so Hybrid can restore it after a restart.
+func (s *SQLite) LoadSummary(ctx context.Context) (string, error) {
+	return s.GetSummary(ctx)
+}
+
+// SaveSummary implements SummaryStore. An empty summary deletes the row
+// (equivalent to "no summary"), matching Clear's metadata wipe.
+func (s *SQLite) SaveSummary(ctx context.Context, summary string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if strings.TrimSpace(summary) == "" {
+		_, err := s.db.ExecContext(ctx, "DELETE FROM metadata WHERE session_id = ? AND key = 'summary'", s.sessionID)
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, "INSERT OR REPLACE INTO metadata (session_id, key, value) VALUES (?, 'summary', ?)", s.sessionID, summary)
+	return err
+}
+
 func (s *SQLite) Compress(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
