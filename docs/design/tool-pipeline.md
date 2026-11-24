@@ -53,20 +53,20 @@ observation, _, _ := types.TruncateToolResult(formatted, truncationLength, write
 - 实现存在：`dino/tools/tool_wrappers.go`
   - `nonFatalTool`（`:17-68`）：错误 → `{ok:false, tool, error, hint}` 喂回模型；`LoopDetectedError` 例外透传（`:42-46`）。
   - `toolResultLimiter`（`:71-159`）：string/[]byte/Stringer/JSON 各路径，默认 120KB/60KB（`:81-85`）。
-- 零引用确认：全仓 grep `WrapNonFatalTool`/`WrapToolResultLimiter` 仅命中 `tool_wrappers.go` 自身与 `tool_wrappers_test.go`。
+- 零引用确认：全仓 Grep `WrapNonFatalTool`/`WrapToolResultLimiter` 仅命中 `tool_wrappers.go` 自身与 `tool_wrappers_test.go`。
 - factory 只接 3 个包装器（`dino/factory.go:548-604`）：
   `wrapWorkspacePathTools`（`:561,584`）→ `NewApprovalTool`（`:563,586`）→ `WrapLoopDetection`（`:565,588,601`）。
-- 后果：**结果上限未生效**；MCP/bash 错误作为硬错误经 `runToolCallsByLayer` 的 `results[idx].err`（`agent_execution.go:415`）→ `toolObservationError`（`agent_execution.go:73-89`）→ 喂回模型但**终止本轮 tool 迭代循环**（`Execute` 返回 `hasMore=false`，`agent_execution.go:1090`）。
+- 后果：**结果上限未生效**；MCP/Bash 错误作为硬错误经 `runToolCallsByLayer` 的 `results[idx].err`（`agent_execution.go:415`）→ `toolObservationError`（`agent_execution.go:73-89`）→ 喂回模型但**终止本轮 tool 迭代循环**（`Execute` 返回 `hasMore=false`，`agent_execution.go:1090`）。
 
 ### 1.3 并行无并发上限
 
-`runToolCallsByLayer`（`agent_execution.go:293-426`）：拓扑分层后对每个 `layer` 建 `errgroup.WithContext`（`:321`），`g.Go`（`:334`）无 `SetLimit`。N 个 bash/MCP 全量并发。仅有的闸门是 `MaxToolCallsPerIteration` 总数上限（`prepareToolCalls`，`:233-237`），不控制并发度。
+`runToolCallsByLayer`（`agent_execution.go:293-426`）：拓扑分层后对每个 `layer` 建 `errgroup.WithContext`（`:321`），`g.Go`（`:334`）无 `SetLimit`。N 个 Bash/MCP 全量并发。仅有的闸门是 `MaxToolCallsPerIteration` 总数上限（`prepareToolCalls`，`:233-237`），不控制并发度。
 
 ### 1.4 ApprovalStore.Respond 非阻塞丢弃
 
 `dino/defined_tool.go:306-321`：`select { case ch <- approved: default: Warn }`。通道 `make(chan bool, 1)`（`:271`），一旦 `RequestApproval` 已消费上一个值（`:293`），再 `Respond` 必然走 `default` 静默丢。`Clear`（`:323-333`）同样非阻塞。
 
-调用链：外部（HTTP/MCP 网关）→ `dinoFactory.RespondToolApproval`（`factory.go:705-709`）→ `ApprovalStore.Respond`。仓库内无其他调用方（grep 确认）。
+调用链：外部（HTTP/MCP 网关）→ `dinoFactory.RespondToolApproval`（`factory.go:705-709`）→ `ApprovalStore.Respond`。仓库内无其他调用方（Grep 确认）。
 
 ### 1.5 流式事件背压静默丢
 
@@ -81,7 +81,7 @@ observation, _, _ := types.TruncateToolResult(formatted, truncationLength, write
 
 - `question` 权限默认 `ActionDeny`（`dino/permission/permission.go:34`）；`ModeBuild`/`ModePlan` 放开（`:65,74`）但**没有任何 runner 处理**。
 - `Execute` 永远返回 `EC_TOOL_EXECUTION_FAILED`（`agent/tools/builtin/runtime/question.go:45-51`）。
-- 全仓无 `SourceNodeName=="question"` / `"plan_enter"` / `"plan_exit"` 的 runner 侧处理（grep 确认）。
+- 全仓无 `SourceNodeName=="question"` / `"plan_enter"` / `"plan_exit"` 的 runner 侧处理（Grep 确认）。
 - 即：build/plan 模式下 `question` 可用但会**硬错误**终止迭代——比「默认拒绝」更糟（默认拒绝时模型根本看不到它）。
 
 ---
@@ -102,7 +102,7 @@ observation, _, _ := types.TruncateToolResult(formatted, truncationLength, write
 type OutputHeader struct {
     ChunkID         string        `json:"chunk_id,omitempty"`
     WallTime        time.Duration `json:"wall_time,omitempty"`       // 执行耗时
-    ExitCode        *int          `json:"exit_code,omitempty"`       // bash 等可取到
+    ExitCode        *int          `json:"exit_code,omitempty"`       // Bash 等可取到
     OriginalBytes   int           `json:"original_bytes,omitempty"`  // 截断前原始输出字节数
     OriginalTokens  int           `json:"original_tokens,omitempty"` // approx，= OriginalBytes/4
     TotalLines      int           `json:"total_lines,omitempty"`     // 原始行数
@@ -169,7 +169,7 @@ func TruncateToolResult(content string, maxLen int, writeDir string, header Outp
 | `agent/engine/agent_execution.go:270-274` | 构造 `sanitized`→`formatted`→`TruncateToolResult(formatted, truncationLength, writeDir)` | 组装 `OutputHeader{ChunkID: toolCall.ID, WallTime: r.duration, ExitCode: <从 result 探测>, OriginalBytes: <r.result 字符串化长度>}`，传 `TruncateToolResult(formatted, truncationLength, writeDir, header)` |
 | `agent/engine/agent_execution.go:91-96` | `stepResult{result, err, cached, duration}` | 不需要加字段；duration 已在 `:392` 记录。ExitCode 从 result 探测（见下） |
 
-**ExitCode 探测**：bash/command 工具返回 `map{"exit_code": int}`（`agent/tools/builtin/runtime/command.go:110-124`）。在 `buildToolCallResults` 里对 `r.result` 做一次 `map[string]interface{}` 探测取 `exit_code`；探测不到就留空。MCP 结果无此字段，header 省略该行。
+**ExitCode 探测**：Bash/command 工具返回 `map{"exit_code": int}`（`agent/tools/builtin/runtime/command.go:110-124`）。在 `buildToolCallResults` 里对 `r.result` 做一次 `map[string]interface{}` 探测取 `exit_code`；探测不到就留空。MCP 结果无此字段，header 省略该行。
 
 ### 2.6 落盘路径行为变化
 
@@ -178,7 +178,7 @@ func TruncateToolResult(content string, maxLen int, writeDir string, header Outp
 重构后：超大输出（`OriginalBytes > maxLen*8`，建议阈值可配）直接：
 ```
 <header: chunk id / 耗时 / exit code / OriginalBytes / OriginalTokens / TotalLines>
-<"Full output saved to: PATH — use read_file/grep to view.">
+<"Full output saved to: PATH — use Read/Grep to view.">
 ```
 正文不出现；header+提示行总长受 `HeaderBudget` 约束（提示行如果超预算，PATH 必须保留、其余 header 行让位——实现按「PATH 行优先级最高」排 header 字段顺序）。
 
@@ -215,7 +215,7 @@ func (f *dinoFactory) wrapSessionTool(t types.Tool, sessionID string, senderAdap
 推演（从内到外）：
 1. `approval`（含路径审批 `wrapWorkspacePathTools` + `ApprovalTool`）——**最内**：审批必须看原始输入/路径，且审批被拒要能终止（硬错误），不能被 nonFatal 吞成「喂回模型继续」。
 2. `limiter`（`toolResultLimiter`）——在 approval 外层：限的是**执行结果**，不管审批层；且限流产物是 `{ok:false,error}` 普通 map（`tool_wrappers.go:104-107`），可被 nonFatal 正常返回。
-3. `nonFatal`——在 limiter 外层：把 limiter 的「超大结果错误」和底层 MCP/bash 错误**统一转成喂回模型的可恢复结果**；`LoopDetectedError` 仍透传（`tool_wrappers.go:42-46`）。
+3. `nonFatal`——在 limiter 外层：把 limiter 的「超大结果错误」和底层 MCP/Bash 错误**统一转成喂回模型的可恢复结果**；`LoopDetectedError` 仍透传（`tool_wrappers.go:42-46`）。
 4. `loopDetection`——**最外**：循环检测要看到真实调用（含失败调用），且 `LoopDetectedError` 必须穿透 nonFatal 让引擎终止（`tool_wrappers.go:220-228` 返回 `nil, loopErr`）。
 
 > ⚠️ 现有代码里 approval 的 `needApproval` 判定在循环内散落（`:557-559,579-581`），`ApprovalTool` 构造需 `dangerous map[string]bool`。重构 helper 时把 `needApproval` 作为参数传入，保持判定逻辑不变。
@@ -224,7 +224,7 @@ func (f *dinoFactory) wrapSessionTool(t types.Tool, sessionID string, senderAdap
 
 | 场景 | 现状 | 接线后 |
 |---|---|---|
-| MCP/bash 返回 `err != nil` | 硬错误 → `results[idx].err`（`agent_execution.go:415`）→ 本轮 tool 迭代终止 | `{ok:false, tool, error, hint}` 喂回模型，模型可改输入重试，**迭代继续** |
+| MCP/Bash 返回 `err != nil` | 硬错误 → `results[idx].err`（`agent_execution.go:415`）→ 本轮 tool 迭代终止 | `{ok:false, tool, error, hint}` 喂回模型，模型可改输入重试，**迭代继续** |
 | 输出 > 120KB（byte/JSON） | 原样进 `SanitizeToolResult` → 截断后可能仍 > maxLen 且丢失原文 | limiter 返回 `{ok:false, error:"Tool result is too large…"}`（`tool_wrappers.go:151-156`），不吞 token |
 | 输出 string > 60KB | 同上 | 同上（`:102-108`） |
 | `LoopDetectedError` | 硬错误终止 | 仍硬错误终止（nonFatal 透传，`:42-46`）——**语义不变** |
@@ -286,7 +286,7 @@ for _, idx := range layer {
 ```
 
 - **排队而非报错**：`sem.Acquire` 阻塞等许可；只有 `gctx` 被取消（context 取消/超时/错误）才返回，此时该工具调用被跳过（`results[idx]` 保持零值，`buildToolCallResults` 的 `exists[idx]` 已为 true 但 result 为零值——需在 `buildToolCallResults` 对「零值结果」打一个 `cancelled` 标记，见 §4.4）。
-- **per-layer vs 全局**：选**全局一个 semaphore**（在 `runToolCallsByLayer` 开头建，所有 layer 共用）。理由：并行工具分属不同 layer（有依赖的先跑），若 per-layer 限制，每个 layer 都能全速跑 N 个，总并发 = 层数×N，起不到「全局压并发」的目的；而并行 bash/MCP 的数量由「同一层内无依赖的工具数」决定，全局 semaphore 能跨层限总量。缺点：后一层会等前一层释放——这是期望行为（依赖必须等）。
+- **per-layer vs 全局**：选**全局一个 semaphore**（在 `runToolCallsByLayer` 开头建，所有 layer 共用）。理由：并行工具分属不同 layer（有依赖的先跑），若 per-layer 限制，每个 layer 都能全速跑 N 个，总并发 = 层数×N，起不到「全局压并发」的目的；而并行 Bash/MCP 的数量由「同一层内无依赖的工具数」决定，全局 semaphore 能跨层限总量。缺点：后一层会等前一层释放——这是期望行为（依赖必须等）。
 
 ### 4.2 默认值与配置
 
@@ -445,7 +445,7 @@ ae.resultSender = func(result types.StreamResult) {
 | 2 | **F4 并发上限** | `go test ./agent/engine/`；写一个 mock 并行工具 + `ToolParallelismLimit=1` 断言串行执行；`=4` 断言最多 4 并发 | 无 |
 | 3 | **F5 Respond 阻塞** | 单测：满通道时 `Respond` 阻塞/超时、返回 false；未知 id 返回 false；`RequestApproval` 正常消费后返回 true | 无 |
 | 4 | **F6 流式背压** | 单测：慢消费者下 `resultSender` 不丢 tool_event；ctx 取消后发送方退出不死锁 | 无 |
-| 5 | **F1 截断重构** | 单测（§10）+ 手动：超大 bash 输出观察 header/省略标记/落盘提示；确认 history 层不再二次截断中间 | 无 |
+| 5 | **F1 截断重构** | 单测（§10）+ 手动：超大 Bash 输出观察 header/省略标记/落盘提示；确认 history 层不再二次截断中间 | 无 |
 | 6 | **F3 错误二分**（单列） | 单测：`FatalToolError` 透传、`RespondToModel` 喂回、fatal 短路并行 | 需 F2 |
 | 7 | **F7 question**（单列） | 单测：哨兵结果被 engine 识别、`hasMore=false`；dino 发 `EventTypeQuestion` | 需 F4（不依赖） |
 
@@ -507,7 +507,7 @@ ae.resultSender = func(result types.StreamResult) {
 | **F1 预留字节算不准**：`maxLen` 极小（如 64）时 header 吃掉全部预算 | 低/低 | `HeaderBudget=512` 封顶 + `maxLen/4` 兜底下限：正文预算 = `max(0, maxLen - min(headerLen, HeaderBudget, maxLen/4))` |
 | **F2 语义变化**：原本「MCP 硬错误终止」变成「喂回模型」，模型可能反复失败（loop 放大） | 中/中 | `LoopDetectedError` 已透传（`tool_wrappers.go:42-46`）；若循环严重，`DoomLoopThreshold`/budget 兜底（`agent_execution.go:1173-1178`）；F3 的 fatal 分类是长期解 |
 | **F2 nonFatal 吞掉审批拒绝**：approval 被拒是「可恢复」错误，会喂回模型导致重试审批 | 中/中 | 包装顺序 approval 最内：被拒时 `ApprovalTool` 返回的应是 fatal 类错误（F3 落地后透传）；F2 阶段先接受「喂回模型让模型换工具」，行为优于「硬终止」 |
-| **F4 排队导致 wall-time 变长**：并行 bash 从全并发变 N 并发 | 低/低 | 默认 `GOMAXPROCS*2`（足够宽松）；可配置 |
+| **F4 排队导致 wall-time 变长**：并行 Bash 从全并发变 N 并发 | 低/低 | 默认 `GOMAXPROCS*2`（足够宽松）；可配置 |
 | **F4 排队 + errgroup 语义**：Acquire 失败时 `results[idx]` 零值被当成功 | 中/高 | §4.4：Acquire 失败写 `stepResult{err: gctx.Err()}` |
 | **F5 阻塞 5s**：HTTP/MCP 网关响应变慢 | 低/低 | 超时兜底；`RequestApproval` 消费方在工具 goroutine，5s 内必然消费（除非工具被 cancel） |
 | **F6 背压传导**：慢消费者卡住工具执行（errgroup goroutine 阻塞在 `sendEvent`） | 中/中 | ctx 取消兜底 + dino 层 `emit` 5s 超时已是第二道闸；文档注明「慢下游 = 慢工具」是有意设计 |
@@ -519,7 +519,7 @@ ae.resultSender = func(result types.StreamResult) {
 
 ## 12. 留给用户的待定点
 
-1. **F1 header 字段**：`ExitCode` 探测只覆盖 bash/command（`command.go:110-124` 的 `exit_code` 键）。MCP 结果无 exit code，是否要为 MCP 统一补一个「provider error code」字段进 header？（需要 MCP client 改造，建议单列。）
+1. **F1 header 字段**：`ExitCode` 探测只覆盖 Bash/command（`command.go:110-124` 的 `exit_code` 键）。MCP 结果无 exit code，是否要为 MCP 统一补一个「provider error code」字段进 header？（需要 MCP client 改造，建议单列。）
 2. **F1 落盘阈值**：建议 `OriginalBytes > maxLen*8`，是否可接受？`ToolResultWriteDir` 默认空（`config.go:193-203`）——**当前默认不落盘**，超大输出会走 `TruncateMiddle`（保留中间），不会写文件。需确认产品是否希望默认落盘。
 3. **F2 limiter 阈值**：120KB/60KB（`tool_wrappers.go:81-85`）与 `MaxTruncationLength=2048`（`agent.go:18`）差 30 倍——limiter 的 120KB 是「JSON 原样」上限，截断的 2048 是「喂模型观测串」上限。是否要把 limiter 默认调低（如 32KB）以少跑一次截断？
 4. **F4 默认并发**：`max(4, GOMAXPROCS*2)` 封顶 32。对 MCP 工具多的环境是否偏大？默认值可通过 yaml `max_tool_parallelism` 覆盖。

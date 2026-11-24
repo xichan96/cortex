@@ -115,12 +115,11 @@ func TestBuildAgentRulesetExplore(t *testing.T) {
 	rs := BuildAgentRuleset(ModeExplore)
 
 	allowedTools := map[string]bool{
-		"grep":       true,
-		"glob":       true,
-		"list":       true,
-		"bash":       true,
-		"webfetch":   true,
-		"websearch":  true,
+		"Grep":       true,
+		"Glob":       true,
+		"Bash":       true,
+		"WebFetch":   true,
+		"WebSearch":  true,
 		"codesearch": true,
 		"read":       true,
 	}
@@ -169,7 +168,7 @@ func TestEvaluatorEvaluate(t *testing.T) {
 	rs := Ruleset{
 		{Permission: "read", Action: ActionAllow},
 		{Permission: "edit", Action: ActionDeny},
-		{Permission: "bash", Action: ActionAsk},
+		{Permission: "Bash", Action: ActionAsk},
 	}
 
 	evaluator := NewEvaluator(rs)
@@ -180,7 +179,7 @@ func TestEvaluatorEvaluate(t *testing.T) {
 	}{
 		{"read", ActionAllow},
 		{"edit", ActionDeny},
-		{"bash", ActionAsk},
+		{"Bash", ActionAsk},
 		{"unknown", ActionDeny},
 	}
 
@@ -304,7 +303,7 @@ func TestFromConfig(t *testing.T) {
 	config := map[string]interface{}{
 		"read": "allow",
 		"edit": "deny",
-		"bash": "ask",
+		"Bash": "ask",
 		"exec": map[string]interface{}{
 			"*":        "deny",
 			"safe_cmd": "allow",
@@ -327,9 +326,9 @@ func TestFromConfig(t *testing.T) {
 			if rule.Action != ActionDeny {
 				t.Errorf("edit should be deny, got %s", rule.Action)
 			}
-		case "bash":
+		case "Bash":
 			if rule.Action != ActionAsk {
-				t.Errorf("bash should be ask, got %s", rule.Action)
+				t.Errorf("Bash should be ask, got %s", rule.Action)
 			}
 		case "exec":
 			if rule.Action != ActionDeny {
@@ -345,18 +344,18 @@ func TestFromConfig(t *testing.T) {
 func TestFromConfigWildcardLast(t *testing.T) {
 	config := map[string]interface{}{
 		"*":    "ask",
-		"bash": "allow",
+		"Bash": "allow",
 	}
 	rs := FromConfig(config)
 	if len(rs) != 2 {
 		t.Fatalf("expected 2 rules, got %d", len(rs))
 	}
-	if rs[0].Permission != "bash" || rs[1].Permission != "*" {
-		t.Errorf("expected [bash, *] order, got [%s, %s]", rs[0].Permission, rs[1].Permission)
+	if rs[0].Permission != "Bash" || rs[1].Permission != "*" {
+		t.Errorf("expected [Bash, *] order, got [%s, %s]", rs[0].Permission, rs[1].Permission)
 	}
 	eval := NewEvaluator(rs)
-	if eval.Evaluate("bash", nil) != ActionAllow {
-		t.Error("bash should be allow")
+	if eval.Evaluate("Bash", nil) != ActionAllow {
+		t.Error("Bash should be allow")
 	}
 	if eval.Evaluate("edit", nil) != ActionAsk {
 		t.Error("edit should match * ask")
@@ -371,7 +370,7 @@ func TestMerge(t *testing.T) {
 		{Permission: "edit", Action: ActionDeny},
 	}
 	rs3 := Ruleset{
-		{Permission: "bash", Action: ActionAsk},
+		{Permission: "Bash", Action: ActionAsk},
 	}
 
 	result := Merge(rs1, rs2, rs3)

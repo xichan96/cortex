@@ -385,8 +385,13 @@ func FormatToolResult(result interface{}) string {
 	if result == nil {
 		return ToolEmptyResultMessage
 	}
-	if s, ok := result.(string); ok && strings.TrimSpace(s) == "" {
-		return ToolEmptyResultMessage
+	if s, ok := result.(string); ok {
+		if strings.TrimSpace(s) == "" {
+			return ToolEmptyResultMessage
+		}
+		// Plain-text tool output (Read/Write/Edit) must reach the model
+		// verbatim; JSON-quoting would escape every newline and tab.
+		return s
 	}
 	if jsonBytes, err := json.MarshalIndent(result, "", "  "); err == nil {
 		s := strings.TrimSpace(string(jsonBytes))

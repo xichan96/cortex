@@ -22,14 +22,14 @@ The basic example showcases the core functionality of the Cortex framework, incl
 
 1. Clone the repository:
 
-```bash
+```Bash
 git clone https://github.com/xichan96/cortex.git
 cd cortex
 ```
 
 2. Install dependencies:
 
-```bash
+```Bash
 go mod download
 ```
 
@@ -63,7 +63,7 @@ mcpURL := "https://ai.example.com/api/train/mcp/sse"
 
 2. Run the example:
 
-```bash
+```Bash
 go run examples/basic/main.go
 ```
 

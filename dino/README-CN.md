@@ -39,7 +39,7 @@ Dino 在核心 Cortex 代理能力的基础上，添加了专为生产环境设�
 - 自动阻止循环并通知用户
 
 ### 工具系统
-- 内置工具：`read_file`、`write_file`、`edit_file`、`bash`、`glob`、`grep`、`list_directory`
+- 内置工具：`Read`、`Write`、`Edit`、`Bash`、`Glob`、`Grep`、`WebFetch`、`WebSearch`
 - 可扩展的工具注册表
 - 危险工具审批工作流
 - MCP (Model Context Protocol) 支持
@@ -66,7 +66,7 @@ Dino 在核心 Cortex 代理能力的基础上，添加了专为生产环境设�
 
 ## 安装
 
-```bash
+```Bash
 go get github.com/xichan96/cortex/dino
 ```
 
@@ -136,17 +136,17 @@ workspace_root: "."
 # 工具配置
 tools:
   allowed:
-    - read_file
-    - write_file
-    - edit_file
-    - glob
-    - grep
-    - bash
-    - list_directory
+    - Read
+    - Write
+    - Edit
+    - Glob
+    - Grep
+    - Bash
+
   approval_required:
-    - bash
-    - write_file
-    - edit_file
+    - Bash
+    - Write
+    - Edit
 
 # 循环检测
 loop_detection:

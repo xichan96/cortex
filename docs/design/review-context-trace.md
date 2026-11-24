@@ -24,7 +24,7 @@
 ## 一、事实核查（逐条 pass / fail）
 
 ### §1.1「无任何 trace / rollout / 事件日志」—— PASS
-仓库内 grep `jsonl|RolloutWriter|TraceEvent` 无实现符号（`docs/` 与评估报告除外）。「缺失最大的一块」属实。
+仓库内 Grep `jsonl|RolloutWriter|TraceEvent` 无实现符号（`docs/` 与评估报告除外）。「缺失最大的一块」属实。
 
 ### §1.2 现有可复用载体盘点—— PASS（含 1 条证据行瑕疵）
 

@@ -2,8 +2,8 @@ package dino
 
 // Sandboxed tool wrappers.
 //
-// These wrappers route the builtin tool surface (bash, read_file, write_file,
-// list_directory) through a sandbox.Sandbox so that path confinement, timeouts,
+// These wrappers route the builtin tool surface (Bash, Read, Write)
+// through a sandbox.Sandbox so that path confinement, timeouts,
 // output limits and (for future backends) process isolation are enforced in one
 // place instead of in each tool. They are additive: nothing here is wired into
 // the factory yet, and WrapToolWithSandbox leaves unknown tools untouched.
@@ -28,15 +28,14 @@ import (
 // sandboxableToolNames lists the builtin tools that WrapToolWithSandbox knows
 // how to route through a Sandbox. Anything else is returned unchanged.
 var sandboxableToolNames = map[string]struct{}{
-	"bash":           {},
-	"read_file":      {},
-	"write_file":     {},
-	"list_directory": {},
+	"Bash":       {},
+	"Read":  {},
+	"Write": {},
 }
 
 // WrapToolWithSandbox returns a sandboxed equivalent of tool. It recognizes the
-// builtin bash/read_file/write_file/list_directory tools and returns false for
-// anything else, in which case the original tool is returned unchanged.
+// builtin Bash/Read/Write tools and returns false for anything else,
+// in which case the original tool is returned unchanged.
 func WrapToolWithSandbox(tool types.Tool, sb sandbox.Sandbox) (types.Tool, bool) {
 	if tool == nil || sb == nil {
 		return tool, false
@@ -45,14 +44,12 @@ func WrapToolWithSandbox(tool types.Tool, sb sandbox.Sandbox) (types.Tool, bool)
 		return tool, false
 	}
 	switch tool.Name() {
-	case "bash":
+	case "Bash":
 		return NewSandboxedBashTool(tool, sb), true
-	case "read_file":
+	case "Read":
 		return NewSandboxedReadFileTool(tool, sb), true
-	case "write_file":
+	case "Write":
 		return NewSandboxedWriteFileTool(tool, sb), true
-	case "list_directory":
-		return NewSandboxedListDirectoryTool(tool, sb), true
 	default:
 		return tool, false
 	}
@@ -93,7 +90,7 @@ func wrapperSchema(inner types.Tool, fallback map[string]interface{}) map[string
 }
 
 // -----------------------------------------------------------------------------
-// bash
+// Bash
 
 // SandboxedBashTool executes shell commands through a sandbox.Sandbox.
 //
@@ -109,7 +106,7 @@ func wrapperSchema(inner types.Tool, fallback map[string]interface{}) map[string
 //	max_output_bytes integer per-stream cap, optional
 //
 // Without args the command string is interpreted by the platform shell
-// (/bin/sh -c on Unix, cmd /C on Windows), matching the legacy bash tool. The
+// (/bin/sh -c on Unix, cmd /C on Windows), matching the legacy Bash tool. The
 // sandbox still confines the working directory and applies its own env policy.
 type SandboxedBashTool struct {
 	inner types.Tool
@@ -121,7 +118,7 @@ func NewSandboxedBashTool(inner types.Tool, sb sandbox.Sandbox) *SandboxedBashTo
 	return &SandboxedBashTool{inner: inner, sb: sb}
 }
 
-func (t *SandboxedBashTool) Name() string { return wrapperName(t.inner, "bash") }
+func (t *SandboxedBashTool) Name() string { return wrapperName(t.inner, "Bash") }
 
 func (t *SandboxedBashTool) Description() string {
 	return wrapperDescription(t.inner, "Execute a command inside the sandbox and return stdout, stderr and the exit code.")
@@ -147,7 +144,7 @@ func (t *SandboxedBashTool) Metadata() types.ToolMetadata { return wrapperMeta(t
 
 func (t *SandboxedBashTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	if t.sb == nil {
-		return nil, fmt.Errorf("sandboxed bash: no sandbox backend")
+		return nil, fmt.Errorf("sandboxed Bash: no sandbox backend")
 	}
 	command, ok := input["command"].(string)
 	if !ok || strings.TrimSpace(command) == "" {
@@ -220,7 +217,7 @@ func (t *SandboxedBashTool) Execute(ctx context.Context, input map[string]interf
 }
 
 // sandboxShellCommand builds the argv used to interpret a free-form command
-// string. It mirrors the legacy bash tool's shell semantics; the sandbox
+// string. It mirrors the legacy Bash tool's shell semantics; the sandbox
 // backend still owns directory, environment and process confinement.
 func sandboxShellCommand(command string) (string, []string) {
 	if runtime.GOOS == "windows" {
@@ -230,7 +227,7 @@ func sandboxShellCommand(command string) (string, []string) {
 }
 
 // -----------------------------------------------------------------------------
-// read_file
+// Read
 
 // SandboxedReadFileTool reads files through a sandbox.Sandbox.
 type SandboxedReadFileTool struct {
@@ -243,7 +240,7 @@ func NewSandboxedReadFileTool(inner types.Tool, sb sandbox.Sandbox) *SandboxedRe
 	return &SandboxedReadFileTool{inner: inner, sb: sb}
 }
 
-func (t *SandboxedReadFileTool) Name() string { return wrapperName(t.inner, "read_file") }
+func (t *SandboxedReadFileTool) Name() string { return wrapperName(t.inner, "Read") }
 
 func (t *SandboxedReadFileTool) Description() string {
 	return wrapperDescription(t.inner, "Read a file inside the sandbox. Supports optional line windows via offset/limit.")
@@ -253,11 +250,11 @@ func (t *SandboxedReadFileTool) Schema() map[string]interface{} {
 	return wrapperSchema(t.inner, map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
-			"path":   map[string]interface{}{"type": "string"},
-			"offset": map[string]interface{}{"type": "integer", "description": "1-based starting line number"},
-			"limit":  map[string]interface{}{"type": "integer", "description": "Max number of lines to return"},
+			"file_path": map[string]interface{}{"type": "string"},
+			"offset":    map[string]interface{}{"type": "integer", "description": "1-based starting line number"},
+			"limit":     map[string]interface{}{"type": "integer", "description": "Max number of lines to return"},
 		},
-		"required": []string{"path"},
+		"required": []string{"file_path"},
 	})
 }
 
@@ -265,75 +262,78 @@ func (t *SandboxedReadFileTool) Metadata() types.ToolMetadata { return wrapperMe
 
 func (t *SandboxedReadFileTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	if t.sb == nil {
-		return nil, fmt.Errorf("sandboxed read_file: no sandbox backend")
+		return nil, fmt.Errorf("sandboxed Read: no sandbox backend")
 	}
-	path, ok := input["path"].(string)
+	path, ok := input["file_path"].(string)
 	if !ok || path == "" {
-		return nil, fmt.Errorf("path is required")
+		path, ok = input["path"].(string)
+	}
+	if !ok || path == "" {
+		return nil, fmt.Errorf("file_path is required")
 	}
 
 	data, err := t.sb.ReadFile(ctx, path)
 	if err != nil {
-		// Preserve the legacy behavior of listing a directory passed to
-		// read_file, when the backend can enumerate directories.
+		// Preserve the legacy behavior of listing a directory passed to Read,
+		// when the backend can enumerate directories.
 		if info, statErr := t.sb.Stat(ctx, path); statErr == nil && info.IsDir {
 			names, listErr := sandboxListNames(ctx, t.sb, path)
 			if listErr != nil {
 				return nil, listErr
 			}
-			return map[string]interface{}{"path": path, "listing": names}, nil
+			return fmt.Sprintf("Directory listing for %s:\n%s", path, strings.Join(names, "\n")), nil
 		}
-		return nil, fmt.Errorf("sandboxed read_file: %w", err)
+		return nil, fmt.Errorf("sandboxed Read: %w", err)
 	}
 
 	return readFileResult(path, string(data), input), nil
 }
 
-// readFileResult returns the whole file, or a line window when offset/limit are
-// supplied (matching the builtin read_file tool).
-func readFileResult(path, content string, input map[string]interface{}) map[string]interface{} {
+// readFileResult renders a 1-based line window as "<line>\t<content>", matching
+// the builtin Read tool.
+func readFileResult(path, content string, input map[string]interface{}) string {
 	offset, hasOffset := intArg(input["offset"])
 	limit, hasLimit := intArg(input["limit"])
-	if !hasOffset && !hasLimit {
-		return map[string]interface{}{"path": path, "content": content}
+	if !hasOffset || offset < 1 {
+		offset = 1
+	}
+	if !hasLimit || limit <= 0 {
+		limit = 2000
 	}
 
 	lines := strings.Split(content, "\n")
-	totalLines := len(lines)
-	if totalLines > 0 && lines[totalLines-1] == "" {
-		totalLines--
+	total := len(lines)
+	if total > 0 && lines[total-1] == "" {
+		total--
 	}
 
-	start := 0
-	if hasOffset && offset > 0 {
-		start = offset - 1
+	start := offset - 1
+	if start > total {
+		start = total
 	}
-	if start > totalLines {
-		start = totalLines
+	end := start + limit
+	if end > total {
+		end = total
 	}
-	end := totalLines
-	if hasLimit && limit > 0 {
-		end = start + limit
-		if end > totalLines {
-			end = totalLines
+
+	var b strings.Builder
+	for i := start; i < end; i++ {
+		if b.Len() > 0 {
+			b.WriteByte('\n')
 		}
+		fmt.Fprintf(&b, "%d\t%s", i+1, lines[i])
 	}
-	if start > end {
-		start = end
+	if end < total {
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		fmt.Fprintf(&b, "\n(Showing lines %d-%d of %d. Use offset=%d to continue reading.)", start+1, end, total, end+1)
 	}
-
-	return map[string]interface{}{
-		"path":        path,
-		"content":     strings.Join(lines[start:end], "\n"),
-		"offset":      start + 1,
-		"limit":       end - start,
-		"total_lines": totalLines,
-		"truncated":   end < totalLines,
-	}
+	return b.String()
 }
 
 // -----------------------------------------------------------------------------
-// write_file
+// Write
 
 // SandboxedWriteFileTool writes files through a sandbox.Sandbox.
 type SandboxedWriteFileTool struct {
@@ -346,7 +346,7 @@ func NewSandboxedWriteFileTool(inner types.Tool, sb sandbox.Sandbox) *SandboxedW
 	return &SandboxedWriteFileTool{inner: inner, sb: sb}
 }
 
-func (t *SandboxedWriteFileTool) Name() string { return wrapperName(t.inner, "write_file") }
+func (t *SandboxedWriteFileTool) Name() string { return wrapperName(t.inner, "Write") }
 
 func (t *SandboxedWriteFileTool) Description() string {
 	return wrapperDescription(t.inner, "Write a file inside the sandbox, creating parent directories as needed.")
@@ -356,10 +356,10 @@ func (t *SandboxedWriteFileTool) Schema() map[string]interface{} {
 	return wrapperSchema(t.inner, map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
-			"path":    map[string]interface{}{"type": "string"},
-			"content": map[string]interface{}{"type": "string"},
+			"file_path": map[string]interface{}{"type": "string"},
+			"content":   map[string]interface{}{"type": "string"},
 		},
-		"required": []string{"path", "content"},
+		"required": []string{"file_path", "content"},
 	})
 }
 
@@ -367,73 +367,38 @@ func (t *SandboxedWriteFileTool) Metadata() types.ToolMetadata { return wrapperM
 
 func (t *SandboxedWriteFileTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	if t.sb == nil {
-		return nil, fmt.Errorf("sandboxed write_file: no sandbox backend")
+		return nil, fmt.Errorf("sandboxed Write: no sandbox backend")
 	}
-	path, ok := input["path"].(string)
+	path, ok := input["file_path"].(string)
 	if !ok || path == "" {
-		return nil, fmt.Errorf("path is required")
+		path, ok = input["path"].(string)
+	}
+	if !ok || path == "" {
+		return nil, fmt.Errorf("file_path is required")
 	}
 	content, ok := input["content"].(string)
 	if !ok {
 		return nil, fmt.Errorf("content is required")
 	}
+	existed := false
+	if _, statErr := t.sb.Stat(ctx, path); statErr == nil {
+		existed = true
+	}
 	// A zero mode lets the backend apply its default file mode.
 	if err := t.sb.WriteFile(ctx, path, []byte(content), 0); err != nil {
-		return nil, fmt.Errorf("sandboxed write_file: %w", err)
+		return nil, fmt.Errorf("sandboxed Write: %w", err)
 	}
-	return map[string]interface{}{
-		"path":    path,
-		"message": "Successfully wrote to " + path,
-	}, nil
+	if existed {
+		return fmt.Sprintf("The file %s has been updated successfully.", path), nil
+	}
+	return fmt.Sprintf("File created successfully at: %s", path), nil
 }
 
 // -----------------------------------------------------------------------------
-// list_directory
-
-// SandboxedListDirectoryTool lists directories through a sandbox backend that
-// implements sandbox.DirLister.
-type SandboxedListDirectoryTool struct {
-	inner types.Tool
-	sb    sandbox.Sandbox
-}
-
-// NewSandboxedListDirectoryTool wraps inner (which may be nil) with the given
-// sandbox.
-func NewSandboxedListDirectoryTool(inner types.Tool, sb sandbox.Sandbox) *SandboxedListDirectoryTool {
-	return &SandboxedListDirectoryTool{inner: inner, sb: sb}
-}
-
-func (t *SandboxedListDirectoryTool) Name() string { return wrapperName(t.inner, "list_directory") }
-
-func (t *SandboxedListDirectoryTool) Description() string {
-	return wrapperDescription(t.inner, "List files in a directory inside the sandbox.")
-}
-
-func (t *SandboxedListDirectoryTool) Schema() map[string]interface{} {
-	return wrapperSchema(t.inner, map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"path": map[string]interface{}{"type": "string"},
-		},
-		"required": []string{"path"},
-	})
-}
-
-func (t *SandboxedListDirectoryTool) Metadata() types.ToolMetadata { return wrapperMeta(t.inner) }
-
-func (t *SandboxedListDirectoryTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
-	if t.sb == nil {
-		return nil, fmt.Errorf("sandboxed list_directory: no sandbox backend")
-	}
-	path, ok := input["path"].(string)
-	if !ok || path == "" {
-		return nil, fmt.Errorf("invalid path parameter")
-	}
-	return sandboxListEntries(ctx, t.sb, path)
-}
+// directory helpers
 
 // sandboxListNames returns entry names, appending "/" to directories, matching
-// the legacy read_file directory listing.
+// the legacy Read directory listing.
 func sandboxListNames(ctx context.Context, sb sandbox.Sandbox, path string) ([]string, error) {
 	entries, err := sandboxReadDir(ctx, sb, path)
 	if err != nil {
@@ -450,25 +415,6 @@ func sandboxListNames(ctx context.Context, sb sandbox.Sandbox, path string) ([]s
 	return names, nil
 }
 
-// sandboxListEntries returns the legacy list_directory result shape.
-func sandboxListEntries(ctx context.Context, sb sandbox.Sandbox, path string) (interface{}, error) {
-	entries, err := sandboxReadDir(ctx, sb, path)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]map[string]interface{}, 0, len(entries))
-	for _, info := range entries {
-		result = append(result, map[string]interface{}{
-			"name":     info.Name,
-			"is_dir":   info.IsDir,
-			"size":     info.Size,
-			"mode":     info.Mode.String(),
-			"mod_time": info.ModTime.Unix(),
-		})
-	}
-	return result, nil
-}
-
 func sandboxReadDir(ctx context.Context, sb sandbox.Sandbox, path string) ([]sandbox.FileInfo, error) {
 	lister, ok := sb.(sandbox.DirLister)
 	if !ok {
@@ -476,7 +422,7 @@ func sandboxReadDir(ctx context.Context, sb sandbox.Sandbox, path string) ([]san
 	}
 	entries, err := lister.ReadDir(ctx, path)
 	if err != nil {
-		return nil, fmt.Errorf("sandboxed list_directory: %w", err)
+		return nil, fmt.Errorf("sandboxed read_dir: %w", err)
 	}
 	return entries, nil
 }

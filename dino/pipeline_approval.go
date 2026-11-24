@@ -118,11 +118,11 @@ func approvalRule(c *pipeline.Call) string {
 		return "*"
 	}
 	switch c.Name {
-	case "bash", "execute_command", "command":
+	case "Bash", "execute_command", "command":
 		if cmd := stringArg(c.Args, "command"); cmd != "" {
 			return commandPattern(cmd)
 		}
-	case "write_file", "edit_file", "read_file", "file", "list_directory":
+	case "Write", "Edit", "Read", "file":
 		if p := stringArg(c.Args, "path", "file_path", "filepath"); p != "" {
 			return filepath.Clean(p)
 		}

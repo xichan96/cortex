@@ -62,9 +62,9 @@ func sandboxOutput(t *testing.T, res interface{}) map[string]interface{} {
 func TestSandboxToolBashEcho(t *testing.T) {
 	requireSandboxShell(t)
 	sb := newSandboxToolHost(t, sandbox.HostOptions{Root: t.TempDir()})
-	wrapped, ok := WrapToolWithSandbox(&stubSandboxTool{name: "bash"}, sb)
+	wrapped, ok := WrapToolWithSandbox(&stubSandboxTool{name: "Bash"}, sb)
 	if !ok {
-		t.Fatal("WrapToolWithSandbox(bash) = false")
+		t.Fatal("WrapToolWithSandbox(Bash) = false")
 	}
 	res, err := wrapped.Execute(context.Background(), map[string]interface{}{"command": "echo hello"})
 	if err != nil {
@@ -135,66 +135,51 @@ func TestSandboxToolReadWriteList(t *testing.T) {
 	root := t.TempDir()
 	sb := newSandboxToolHost(t, sandbox.HostOptions{Root: root})
 
-	writeTool, ok := WrapToolWithSandbox(&stubSandboxTool{name: "write_file"}, sb)
+	writeTool, ok := WrapToolWithSandbox(&stubSandboxTool{name: "Write"}, sb)
 	if !ok {
-		t.Fatal("WrapToolWithSandbox(write_file) = false")
+		t.Fatal("WrapToolWithSandbox(Write) = false")
 	}
 	if _, err := writeTool.Execute(context.Background(), map[string]interface{}{
-		"path":    "nested/hello.txt",
-		"content": "line1\nline2\nline3\n",
+		"file_path": "nested/hello.txt",
+		"content":   "line1\nline2\nline3\n",
 	}); err != nil {
-		t.Fatalf("write_file: %v", err)
+		t.Fatalf("Write: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "nested", "hello.txt")); err != nil {
 		t.Fatalf("written file missing: %v", err)
 	}
 
-	readTool, ok := WrapToolWithSandbox(&stubSandboxTool{name: "read_file"}, sb)
+	readTool, ok := WrapToolWithSandbox(&stubSandboxTool{name: "Read"}, sb)
 	if !ok {
-		t.Fatal("WrapToolWithSandbox(read_file) = false")
+		t.Fatal("WrapToolWithSandbox(Read) = false")
 	}
-	res, err := readTool.Execute(context.Background(), map[string]interface{}{"path": "nested/hello.txt"})
+	res, err := readTool.Execute(context.Background(), map[string]interface{}{"file_path": "nested/hello.txt"})
 	if err != nil {
-		t.Fatalf("read_file: %v", err)
+		t.Fatalf("Read: %v", err)
 	}
-	out := sandboxOutput(t, res)
-	if got := out["content"]; got != "line1\nline2\nline3\n" {
-		t.Fatalf("content = %q", got)
+	wantRead := "1\tline1\n2\tline2\n3\tline3"
+	if res != wantRead {
+		t.Fatalf("Read = %q, want %q", res, wantRead)
 	}
 
 	// Line window is honored because the wrapped schema advertises it.
 	res, err = readTool.Execute(context.Background(), map[string]interface{}{
-		"path":   "nested/hello.txt",
-		"offset": float64(2),
-		"limit":  float64(1),
+		"file_path": "nested/hello.txt",
+		"offset":    float64(2),
+		"limit":     float64(1),
 	})
 	if err != nil {
-		t.Fatalf("read_file window: %v", err)
+		t.Fatalf("Read window: %v", err)
 	}
-	out = sandboxOutput(t, res)
-	if got := out["content"]; got != "line2" {
-		t.Fatalf("window content = %q, want %q", got, "line2")
-	}
-	if got := out["offset"]; got != 2 {
-		t.Fatalf("window offset = %v, want 2", got)
-	}
-	if got := out["total_lines"]; got != 3 {
-		t.Fatalf("total_lines = %v, want 3", got)
+	if !strings.HasPrefix(res.(string), "2\tline2") || !strings.Contains(res.(string), "Use offset=3") {
+		t.Fatalf("window = %q, want line 2 plus continuation hint", res)
 	}
 
-	listTool, ok := WrapToolWithSandbox(&stubSandboxTool{name: "list_directory"}, sb)
-	if !ok {
-		t.Fatal("WrapToolWithSandbox(list_directory) = false")
-	}
-	res, err = listTool.Execute(context.Background(), map[string]interface{}{"path": "nested"})
+	entries, err := sandboxListNames(context.Background(), sb, "nested")
 	if err != nil {
-		t.Fatalf("list_directory: %v", err)
+		t.Fatalf("sandboxListNames: %v", err)
 	}
-	entries, ok := res.([]map[string]interface{})
-	if !ok {
-		t.Fatalf("list result type = %T", res)
-	}
-	if len(entries) != 1 || entries[0]["name"] != "hello.txt" || entries[0]["is_dir"] != false {
+	if len(entries) != 1 || entries[0] != "hello.txt" {
 		t.Fatalf("entries = %+v", entries)
 	}
 }
@@ -216,8 +201,7 @@ func TestSandboxToolRejectsEscapes(t *testing.T) {
 		t.Fatalf("write escape error = %v, want ErrPathEscape", err)
 	}
 
-	listTool := NewSandboxedListDirectoryTool(nil, sb)
-	if _, err := listTool.Execute(context.Background(), map[string]interface{}{"path": ".."}); !errors.Is(err, sandbox.ErrPathEscape) {
+	if _, err := sandboxListNames(context.Background(), sb, ".."); !errors.Is(err, sandbox.ErrPathEscape) {
 		t.Fatalf("list escape error = %v, want ErrPathEscape", err)
 	}
 }
@@ -265,10 +249,10 @@ func TestSandboxToolTruncationPassThrough(t *testing.T) {
 
 func TestWrapToolWithSandboxUnknownTool(t *testing.T) {
 	sb := newSandboxToolHost(t, sandbox.HostOptions{Root: t.TempDir()})
-	original := &stubSandboxTool{name: "web_search", desc: "search"}
+	original := &stubSandboxTool{name: "WebSearch", desc: "search"}
 	got, ok := WrapToolWithSandbox(original, sb)
 	if ok {
-		t.Fatal("WrapToolWithSandbox(web_search) = true, want false")
+		t.Fatal("WrapToolWithSandbox(WebSearch) = true, want false")
 	}
 	if got != original {
 		t.Fatal("unknown tool was replaced")
@@ -286,13 +270,13 @@ func TestSandboxToolPreservesInnerMetadata(t *testing.T) {
 	sb := newSandboxToolHost(t, sandbox.HostOptions{Root: t.TempDir()})
 	schema := map[string]interface{}{"type": "object", "title": "custom"}
 	meta := types.ToolMetadata{SourceNodeName: "custom", ToolType: "builtin", Priority: 42}
-	inner := &stubSandboxTool{name: "read_file", desc: "custom read", schema: schema, meta: meta}
+	inner := &stubSandboxTool{name: "Read", desc: "custom read", schema: schema, meta: meta}
 
 	wrapped, ok := WrapToolWithSandbox(inner, sb)
 	if !ok {
-		t.Fatal("WrapToolWithSandbox(read_file) = false")
+		t.Fatal("WrapToolWithSandbox(Read) = false")
 	}
-	if got := wrapped.Name(); got != "read_file" {
+	if got := wrapped.Name(); got != "Read" {
 		t.Fatalf("Name() = %q", got)
 	}
 	if got := wrapped.Description(); got != "custom read" {
@@ -312,10 +296,9 @@ func TestSandboxToolFallbackNameAndSchema(t *testing.T) {
 		tool types.Tool
 		name string
 	}{
-		{NewSandboxedBashTool(nil, sb), "bash"},
-		{NewSandboxedReadFileTool(nil, sb), "read_file"},
-		{NewSandboxedWriteFileTool(nil, sb), "write_file"},
-		{NewSandboxedListDirectoryTool(nil, sb), "list_directory"},
+		{NewSandboxedBashTool(nil, sb), "Bash"},
+		{NewSandboxedReadFileTool(nil, sb), "Read"},
+		{NewSandboxedWriteFileTool(nil, sb), "Write"},
 	}
 	for _, tc := range cases {
 		if got := tc.tool.Name(); got != tc.name {
@@ -335,7 +318,6 @@ func TestSandboxToolRequiresBackend(t *testing.T) {
 		NewSandboxedBashTool(nil, nil),
 		NewSandboxedReadFileTool(nil, nil),
 		NewSandboxedWriteFileTool(nil, nil),
-		NewSandboxedListDirectoryTool(nil, nil),
 	}
 	for _, tool := range tools {
 		if _, err := tool.Execute(context.Background(), map[string]interface{}{"path": "x", "command": "x", "content": "x"}); err == nil {

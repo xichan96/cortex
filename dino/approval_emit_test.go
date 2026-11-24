@@ -18,11 +18,11 @@ func TestApprovalStoreEmitsRequest(t *testing.T) {
 	})
 	store.SetSender(&autoApproveSender{store: store})
 
-	approved, err := store.RequestApproval(context.Background(), "s1", "bash", `{"command":"ls"}`)
+	approved, err := store.RequestApproval(context.Background(), "s1", "Bash", `{"command":"ls"}`)
 	if err != nil || !approved {
 		t.Fatalf("approved=%v err=%v", approved, err)
 	}
-	if gotID == "" || gotTool != "bash" {
+	if gotID == "" || gotTool != "Bash" {
 		t.Fatalf("emitter not called: id=%q tool=%q", gotID, gotTool)
 	}
 }
@@ -35,7 +35,7 @@ func TestApprovalStoreManualBlocks(t *testing.T) {
 	store.SetSender(&noopSender{})
 
 	start := time.Now()
-	approved, err := store.RequestApproval(context.Background(), "s2", "bash", "{}")
+	approved, err := store.RequestApproval(context.Background(), "s2", "Bash", "{}")
 	elapsed := time.Since(start)
 	if approved {
 		t.Fatal("should not be approved without a responder")
@@ -72,7 +72,7 @@ func TestApprovalStoreNoTimeoutWaitsForever(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		approved, err := store.RequestApproval(ctx, "s3", "bash", "{}")
+		approved, err := store.RequestApproval(ctx, "s3", "Bash", "{}")
 		if approved {
 			done <- nil
 			return
@@ -132,7 +132,7 @@ func TestExtraReadRootsSkipApproval(t *testing.T) {
 
 type fakePathTool struct{}
 
-func (f *fakePathTool) Name() string                   { return "read_file" }
+func (f *fakePathTool) Name() string                   { return "Read" }
 func (f *fakePathTool) Description() string            { return "fake" }
 func (f *fakePathTool) Schema() map[string]interface{} { return nil }
 func (f *fakePathTool) Metadata() types.ToolMetadata   { return types.ToolMetadata{} }

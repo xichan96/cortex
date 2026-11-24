@@ -99,7 +99,7 @@ func TestStreamTextToolUseAndUsage(t *testing.T) {
 		sseEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}`) +
 		sseEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}}`) +
 		sseEvent("content_block_stop", `{"type":"content_block_stop","index":0}`) +
-		sseEvent("content_block_start", `{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"read_file","input":{}}}`) +
+		sseEvent("content_block_start", `{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"Read","input":{}}}`) +
 		sseEvent("content_block_delta", `{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}`) +
 		sseEvent("content_block_delta", `{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\"a.txt\"}"}}`) +
 		sseEvent("content_block_stop", `{"type":"content_block_stop","index":1}`) +
@@ -125,7 +125,7 @@ func TestStreamTextToolUseAndUsage(t *testing.T) {
 			{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.ContentText, Text: "read a.txt"}}},
 		},
 		Tools: []model.ToolDeclaration{{
-			Name:        "read_file",
+			Name:        "Read",
 			Description: "Read a file",
 			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`),
 		}},
@@ -168,7 +168,7 @@ func TestStreamTextToolUseAndUsage(t *testing.T) {
 	if got, want := events[7].ToolCall.ArgumentsDelta, `"a.txt"}`; got != want {
 		t.Fatalf("argument delta = %q, want %q", got, want)
 	}
-	if got := events[8].ToolCall; got == nil || got.ID != "toolu_1" || got.Name != "read_file" {
+	if got := events[8].ToolCall; got == nil || got.ID != "toolu_1" || got.Name != "Read" {
 		t.Fatalf("tool end = %+v", got)
 	}
 	if got := events[8].ToolCall.Arguments["path"]; got != "a.txt" {
@@ -186,7 +186,7 @@ func TestStreamTextToolUseAndUsage(t *testing.T) {
 		t.Fatalf("message text = %q", message.Text())
 	}
 	calls := message.ToolCalls()
-	if len(calls) != 1 || calls[0].ID != "toolu_1" || calls[0].Name != "read_file" {
+	if len(calls) != 1 || calls[0].ID != "toolu_1" || calls[0].Name != "Read" {
 		t.Fatalf("tool calls = %+v", calls)
 	}
 	if calls[0].Arguments["path"] != "a.txt" || calls[0].ArgumentsError != nil {
@@ -253,7 +253,7 @@ func TestStreamTextToolUseAndUsage(t *testing.T) {
 		t.Fatalf("tools = %+v", gotBody["tools"])
 	}
 	tool := tools[0].(map[string]any)
-	if tool["name"] != "read_file" || tool["description"] != "Read a file" {
+	if tool["name"] != "Read" || tool["description"] != "Read a file" {
 		t.Fatalf("tool = %+v", tool)
 	}
 	schema := tool["input_schema"].(map[string]any)
@@ -289,7 +289,7 @@ func TestRequestConversionImagesToolResultsThinkingAndCache(t *testing.T) {
 			{Role: model.RoleAssistant, Content: []model.ContentBlock{
 				{Type: model.ContentText, Text: "calling"},
 				{Type: model.ContentToolCall, ToolCall: &model.ToolCall{
-					ID: "toolu_9", Name: "read_file", Arguments: map[string]any{"path": "a.txt"},
+					ID: "toolu_9", Name: "Read", Arguments: map[string]any{"path": "a.txt"},
 				}},
 			}},
 			{Role: model.RoleTool, Content: []model.ContentBlock{
@@ -302,7 +302,7 @@ func TestRequestConversionImagesToolResultsThinkingAndCache(t *testing.T) {
 			}},
 		},
 		Tools: []model.ToolDeclaration{{
-			Name:       "read_file",
+			Name:       "Read",
 			Parameters: json.RawMessage(`{"properties":{"path":{"type":"string"}}}`),
 		}},
 		Thinking:       model.ThinkingHigh,
@@ -349,7 +349,7 @@ func TestRequestConversionImagesToolResultsThinkingAndCache(t *testing.T) {
 
 	assistantBlocks := messages[1].(map[string]any)["content"].([]any)
 	toolUse := assistantBlocks[1].(map[string]any)
-	if toolUse["type"] != "tool_use" || toolUse["id"] != "toolu_9" || toolUse["name"] != "read_file" {
+	if toolUse["type"] != "tool_use" || toolUse["id"] != "toolu_9" || toolUse["name"] != "Read" {
 		t.Fatalf("tool_use block = %+v", toolUse)
 	}
 	if toolUse["input"].(map[string]any)["path"] != "a.txt" {

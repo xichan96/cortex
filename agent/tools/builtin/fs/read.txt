@@ -1,0 +1,7 @@
+- Reads a file from the local filesystem.
+- The result is returned with 1-based line numbers prefixed as "<line>\t<content>".
+
+Usage notes:
+  - Requires the `file_path` of the file to read.
+  - For large files, pass `offset` (1-based start line) and/or `limit` (line count) to read a window; the result states how to continue.
+  - If the given path is a directory, its entries are listed instead.

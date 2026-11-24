@@ -10,8 +10,11 @@ import (
 
 	"github.com/xichan96/cortex/agent/tools/prompts"
 	"github.com/xichan96/cortex/agent/types"
-	"github.com/xichan96/cortex/pkg/errors"
 )
+
+// defaultReadLimit caps an unbounded read window so a huge file cannot flood
+// the context. It matches Claude Code's Read default.
+const defaultReadLimit = 2000
 
 type ReadTool struct {
 	workspace string
@@ -22,53 +25,53 @@ func NewReadTool(workspace string) types.Tool {
 }
 
 func (t *ReadTool) Name() string {
-	return "read_file"
+	return "Read"
 }
 
-//go:embed read_file.txt
-var readFileDescription string
+//go:embed read.txt
+var readDescription string
 
 func (t *ReadTool) Description() string {
-	return strings.TrimSpace(readFileDescription + "\n\n" + prompts.ReadToolGuidance)
+	return strings.TrimSpace(readDescription + "\n\n" + prompts.ReadToolGuidance)
 }
 
 func (t *ReadTool) Schema() map[string]interface{} {
 	return schemaObject(map[string]interface{}{
-		"path": map[string]interface{}{"type": "string", "description": "The path to the file to read"},
+		"file_path": map[string]interface{}{"type": "string", "description": "The absolute path to the file to read"},
 		"offset": map[string]interface{}{
 			"type":        "integer",
-			"description": "1-based starting line number. When set, only a line window [offset, offset+limit) is returned instead of the whole file (efficient for large files).",
+			"description": "1-based line number to start reading from. Only provide when the file is too large to read at once.",
 		},
 		"limit": map[string]interface{}{
 			"type":        "integer",
-			"description": "Max number of lines to return (with offset). 0 = all lines from offset.",
+			"description": "Maximum number of lines to read. Defaults to 2000 lines from offset.",
 		},
-	}, []string{"path"})
+	}, []string{"file_path"})
 }
 
 func (t *ReadTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	path, ok := input["path"].(string)
-	if !ok || path == "" {
-		return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("path is required"))
+	path := pathArg(input)
+	if path == "" {
+		return nil, fmt.Errorf("file_path is required")
 	}
 	safePath, err := SafePath(ctx, t.workspace, path)
 	if err != nil {
-		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(err)
+		return nil, err
 	}
 	info, err := os.Stat(safePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(fmt.Errorf("file not found: %s", path))
+			return nil, fmt.Errorf("File does not exist: %s", path)
 		}
-		return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(err)
+		return nil, err
 	}
 	if info.IsDir() {
 		files, err := os.ReadDir(safePath)
 		if err != nil {
-			return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(err)
+			return nil, err
 		}
 		var names []string
 		for _, f := range files {
@@ -78,59 +81,69 @@ func (t *ReadTool) Execute(ctx context.Context, input map[string]interface{}) (i
 				names = append(names, f.Name())
 			}
 		}
-		return map[string]interface{}{"path": path, "listing": names}, nil
+		return fmt.Sprintf("Directory listing for %s:\n%s", path, strings.Join(names, "\n")), nil
 	}
 	content, err := os.ReadFile(safePath)
 	if err != nil {
-		return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(err)
+		return nil, err
 	}
-	s := string(content)
 
-	// Line-window read: offset/limit slice the file by line number. Without
-	// them the whole content is returned (today's behavior). (tools-codex-eval
-	// §8.2 P2 — efficient large-file reads; avoids F1 whole-read truncation.)
 	offset, hasOffset := intArg(input, "offset")
 	limit, hasLimit := intArg(input, "limit")
-	if !hasOffset && !hasLimit {
-		return map[string]interface{}{"path": path, "content": s}, nil
+	if !hasOffset || offset < 1 {
+		offset = 1
+	}
+	if !hasLimit || limit <= 0 {
+		limit = defaultReadLimit
+	}
+	return formatNumberedWindow(path, string(content), offset, limit), nil
+}
+
+// formatNumberedWindow renders a 1-based line window as "<line>\t<content>"
+// lines (cat -n style), the format the model expects from Read.
+func formatNumberedWindow(path, content string, offset, limit int) string {
+	lines := splitLines(content)
+	total := len(lines)
+
+	start := offset - 1
+	if start > total {
+		start = total
+	}
+	if start < 0 {
+		start = 0
+	}
+	end := start + limit
+	if end > total {
+		end = total
 	}
 
-	lines := strings.Split(s, "\n")
-	totalLines := len(lines)
-	// If the file ends with a newline, the trailing "" is an artifact — but
-	// keeping it makes line numbering natural. totalLines reports the logical
-	// count: lines minus a trailing empty element.
-	if totalLines > 0 && lines[totalLines-1] == "" {
-		totalLines--
-	}
-
-	start := 0
-	if hasOffset && offset > 0 {
-		start = offset - 1 // 1-based offset -> 0-based index
-	}
-	if start > totalLines {
-		start = totalLines
-	}
-	end := totalLines
-	if hasLimit && limit > 0 {
-		end = start + limit
-		if end > totalLines {
-			end = totalLines
+	var b strings.Builder
+	for i := start; i < end; i++ {
+		if b.Len() > 0 {
+			b.WriteByte('\n')
 		}
+		fmt.Fprintf(&b, "%d\t%s", i+1, lines[i])
 	}
-	if start > end {
-		start = end
+	if end < total {
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		fmt.Fprintf(&b, "\n(Showing lines %d-%d of %d. Use offset=%d to continue reading.)", start+1, end, total, end+1)
 	}
+	return b.String()
+}
 
-	window := strings.Join(lines[start:end], "\n")
-	return map[string]interface{}{
-		"path":        path,
-		"content":     window,
-		"offset":      start + 1, // effective 1-based start line
-		"limit":       end - start,
-		"total_lines": totalLines,
-		"truncated":   end < totalLines,
-	}, nil
+// splitLines splits file content into logical lines. A trailing newline is a
+// terminator, not an extra empty line, so "a\nb\n" is two lines.
+func splitLines(content string) []string {
+	if content == "" {
+		return nil
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
 }
 
 func intArg(input map[string]interface{}, key string) (int, bool) {
@@ -157,5 +170,5 @@ func intArg(input map[string]interface{}, key string) (int, bool) {
 }
 
 func (t *ReadTool) Metadata() types.ToolMetadata {
-	return metadataFS("read_file")
+	return metadataFSNoCache("Read")
 }

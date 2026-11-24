@@ -30,7 +30,7 @@
 | # | 设计引用 | 真实代码 | 结论 |
 |---|---|---|---|
 | F1 | `getGlobalUserID` ingest.go:270-278 读 metadata、回退 sessionID | `dino/mem/ingest.go:270-278`，`SELECT value FROM metadata WHERE session_id=? AND key='user_id'`，无则返 sessionID | ✅ PASS |
-| F2 | 全仓无任何代码写 `metadata.user_id` 键；metadata 唯一写入是 summary（chatstore:182,311） | grep 确认 metadata 写仅 `chatstore/sqlite.go:182`（legacy 迁移）、`:311`（compact）写 summary；`:354` 与 `admin.go:319` 是 DELETE；无 `user_id` 写入方 | ✅ PASS |
+| F2 | 全仓无任何代码写 `metadata.user_id` 键；metadata 唯一写入是 summary（chatstore:182,311） | Grep 确认 metadata 写仅 `chatstore/sqlite.go:182`（legacy 迁移）、`:311`（compact）写 summary；`:354` 与 `admin.go:319` 是 DELETE；无 `user_id` 写入方 | ✅ PASS |
 | F3 | metadata 表结构 `(session_id,key,value)` 主键 `(session_id,key)` | `dino/chatstore/sqlite.go:118-123` | ✅ PASS |
 | F4 | ingest 以 session 为 uid：`:101` getGlobalUserID、`:218` SetUserPreference、`:222` AddKnowledgeWithCategory | 逐行吻合 | ✅ PASS |
 | F5 | 工具以 session 为 uid：tool.go:215、:241 Search、:244 recordSearchResults、:232/:236/:249/:253 | 逐行吻合 | ✅ PASS |

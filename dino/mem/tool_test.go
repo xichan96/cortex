@@ -125,13 +125,13 @@ func TestMemoryToolForgetPreference(t *testing.T) {
 // TestExternalContextTool verifies the E6 external-context classifier
 // (tools-codex-eval §6.3): web_* and MCP tools are external-context sources.
 func TestExternalContextTool(t *testing.T) {
-	external := []string{"web_search", "web_fetch", "mcp://github/tool"}
+	external := []string{"WebSearch", "WebFetch", "mcp://github/tool"}
 	for _, name := range external {
 		if !ExternalContextTool(name) {
 			t.Errorf("ExternalContextTool(%q) = false, want true", name)
 		}
 	}
-	internal := []string{"read_file", "bash", "grep", "memory", ""}
+	internal := []string{"Read", "Bash", "Grep", "memory", ""}
 	for _, name := range internal {
 		if ExternalContextTool(name) {
 			t.Errorf("ExternalContextTool(%q) = true, want false", name)

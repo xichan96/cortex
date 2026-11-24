@@ -28,7 +28,7 @@ func TestScopeStorePersistsEachScopeToItsStore(t *testing.T) {
 		{ScopeAlways, "always-rule"},
 	}
 	for _, tc := range cases {
-		req := ApprovalRequest{ToolName: "bash", Rule: tc.rule}
+		req := ApprovalRequest{ToolName: "Bash", Rule: tc.rule}
 		resp := ApprovalResponse{Decision: ActionAllow, Scope: tc.scope, Remember: true}
 		if err := store.Remember(req, resp); err != nil {
 			t.Fatalf("Remember(%s): %v", tc.scope, err)
@@ -43,7 +43,7 @@ func TestScopeStorePersistsEachScopeToItsStore(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		rec, ok := store.Lookup("bash", tc.rule)
+		rec, ok := store.Lookup("Bash", tc.rule)
 		if !ok {
 			t.Fatalf("Lookup(%s) missed", tc.scope)
 		}
@@ -70,7 +70,7 @@ func TestScopeStoreRememberOnceWritesNothing(t *testing.T) {
 	path := UserPermissionsPath(filepath.Join(dir, "home"))
 	store := NewScopeStore(NewMemoryStore(), nil, NewFileStore(path))
 
-	req := ApprovalRequest{ToolName: "bash", Rule: "git push"}
+	req := ApprovalRequest{ToolName: "Bash", Rule: "git push"}
 	if err := store.Remember(req, ApprovalResponse{Decision: ActionAllow, Scope: ScopeOnce, Remember: true}); err != nil {
 		t.Fatalf("Remember(once): %v", err)
 	}
@@ -88,31 +88,31 @@ func TestFileStoreRoundTrip(t *testing.T) {
 	path := UserPermissionsPath(filepath.Join(t.TempDir(), "home"))
 
 	first := NewFileStore(path)
-	if err := first.Put(PermissionRecord{Tool: "bash", Pattern: "git push", Scope: ScopeAlways, Decision: ActionAllow}); err != nil {
+	if err := first.Put(PermissionRecord{Tool: "Bash", Pattern: "git push", Scope: ScopeAlways, Decision: ActionAllow}); err != nil {
 		t.Fatalf("Put allow: %v", err)
 	}
-	if err := first.Put(PermissionRecord{Tool: "write_file", Pattern: "secret.txt", Scope: ScopeWorkspace, Decision: ActionDeny}); err != nil {
+	if err := first.Put(PermissionRecord{Tool: "Write", Pattern: "secret.txt", Scope: ScopeWorkspace, Decision: ActionDeny}); err != nil {
 		t.Fatalf("Put deny: %v", err)
 	}
 
 	second := NewFileStore(path)
-	rec, ok := second.Lookup("bash", "git push")
+	rec, ok := second.Lookup("Bash", "git push")
 	if !ok || rec.Decision != ActionAllow || rec.Scope != ScopeAlways {
-		t.Fatalf("reloaded bash record = %+v ok=%v", rec, ok)
+		t.Fatalf("reloaded Bash record = %+v ok=%v", rec, ok)
 	}
-	rec, ok = second.Lookup("write_file", "secret.txt")
+	rec, ok = second.Lookup("Write", "secret.txt")
 	if !ok || rec.Decision != ActionDeny {
-		t.Fatalf("reloaded write_file record = %+v ok=%v", rec, ok)
+		t.Fatalf("reloaded Write record = %+v ok=%v", rec, ok)
 	}
 	if got := len(second.List()); got != 2 {
 		t.Fatalf("reloaded %d records, want 2", got)
 	}
 
-	if err := second.Remove("bash", "git push"); err != nil {
+	if err := second.Remove("Bash", "git push"); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 	third := NewFileStore(path)
-	if _, ok := third.Lookup("bash", "git push"); ok {
+	if _, ok := third.Lookup("Bash", "git push"); ok {
 		t.Fatal("removed record was reloaded")
 	}
 	if got := len(third.List()); got != 1 {
@@ -128,29 +128,29 @@ func TestScopeStoreLookupRemembersAllowAndDeny(t *testing.T) {
 	always := NewMemoryStore()
 	store := NewScopeStore(session, workspace, always)
 
-	if err := workspace.Put(PermissionRecord{Tool: "bash", Pattern: "ls", Scope: ScopeWorkspace, Decision: ActionAllow}); err != nil {
+	if err := workspace.Put(PermissionRecord{Tool: "Bash", Pattern: "ls", Scope: ScopeWorkspace, Decision: ActionAllow}); err != nil {
 		t.Fatalf("Put allow: %v", err)
 	}
-	if err := always.Put(PermissionRecord{Tool: "bash", Pattern: "rm -rf", Scope: ScopeAlways, Decision: ActionDeny}); err != nil {
+	if err := always.Put(PermissionRecord{Tool: "Bash", Pattern: "rm -rf", Scope: ScopeAlways, Decision: ActionDeny}); err != nil {
 		t.Fatalf("Put deny: %v", err)
 	}
 
-	if rec, ok := store.Lookup("bash", "ls"); !ok || rec.Decision != ActionAllow {
+	if rec, ok := store.Lookup("Bash", "ls"); !ok || rec.Decision != ActionAllow {
 		t.Fatalf("remembered allow = %+v ok=%v", rec, ok)
 	}
-	if rec, ok := store.Lookup("bash", "rm -rf"); !ok || rec.Decision != ActionDeny {
+	if rec, ok := store.Lookup("Bash", "rm -rf"); !ok || rec.Decision != ActionDeny {
 		t.Fatalf("remembered deny = %+v ok=%v", rec, ok)
 	}
 
 	// A session deny shadows a matching workspace record.
-	if err := session.Put(PermissionRecord{Tool: "bash", Pattern: "ls", Scope: ScopeSession, Decision: ActionDeny}); err != nil {
+	if err := session.Put(PermissionRecord{Tool: "Bash", Pattern: "ls", Scope: ScopeSession, Decision: ActionDeny}); err != nil {
 		t.Fatalf("Put session deny: %v", err)
 	}
-	if rec, ok := store.Lookup("bash", "ls"); !ok || rec.Decision != ActionDeny {
+	if rec, ok := store.Lookup("Bash", "ls"); !ok || rec.Decision != ActionDeny {
 		t.Fatalf("session precedence = %+v ok=%v", rec, ok)
 	}
 
-	if _, ok := store.Lookup("bash", "unknown"); ok {
+	if _, ok := store.Lookup("Bash", "unknown"); ok {
 		t.Fatal("unknown rule must not resolve")
 	}
 }

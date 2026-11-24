@@ -368,7 +368,7 @@ engine 的 byCount 触发（`agent_execution.go:698`）与 chatstore 的 `AddMes
 | **步 2** | `Hybrid.Compress` 改：LLM 摘要 + `DeterministicCompact` fallback（替换 `generateBasicSummary`）；摘要 marker | LLM 摘要真正写入 `Hybrid.summary`；失败回退确定性 | 单测：mock LLM 成功/失败/空 → 摘要分别为 LLM 文本 / `DeterministicCompact` 输出；集成：压缩后 `GetSummary` 非空、有 `[Summary]` 注入 |
 | **步 3** | 尾部原文保留：`splitTailUserMessages` + `MaxRecentTailTokens`；`EstimateTokens` 统一 | 尾部 user 原文按 token 预算保留，`older` 送摘要 | 单测：预算边界、CJK 文本、切割点完整消息、`KeepRecentCount` 下限 |
 | **步 4** | 摘要注入位置：`Hybrid.GetMessages` 尾部；评估 D6b / A4 / A5 | 对齐 Codex「摘要最后一项 + 绝不在 input 之后」 | 集成：`GetMessages` 顺序断言（history…, summary, input）；实测预算裁剪是否裁掉摘要（可观测 `Stats.SummaryLength`） |
-| **步 5**（可选收尾） | `generateBasicSummary` 删除（无调用方）；`SQLite` 摘要持久化对称（A4） | 死代码清理 | `go build ./...` + `grep` 无引用 |
+| **步 5**（可选收尾） | `generateBasicSummary` 删除（无调用方）；`SQLite` 摘要持久化对称（A4） | 死代码清理 | `go build ./...` + `Grep` 无引用 |
 
 每步 commit（Conventional Commits），各自可回滚；步 1/2 不改变注入顺序（头部摘要）故可先合入 dev 冒烟，步 3/4 是行为变更需评估报告。
 

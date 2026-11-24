@@ -21,8 +21,8 @@ func toolNames(tools []types.Tool) []string {
 func TestApplySkillPolicy(t *testing.T) {
 	read := &mockTool{name: "read"}
 	write := &mockTool{name: "write"}
-	bash := &mockTool{name: "bash"}
-	tools := []types.Tool{read, write, bash}
+	Bash := &mockTool{name: "Bash"}
+	tools := []types.Tool{read, write, Bash}
 
 	// Empty allowed-tools means "no restriction" and returns the input as-is.
 	unrestricted := ApplySkillPolicy(tools, agentskills.SkillPolicy{})
@@ -31,9 +31,9 @@ func TestApplySkillPolicy(t *testing.T) {
 	}
 
 	// A subset keeps input order, regardless of declaration order.
-	got := ApplySkillPolicy(tools, agentskills.SkillPolicy{AllowedTools: []string{"bash", "read"}})
-	if !reflect.DeepEqual(toolNames(got), []string{"read", "bash"}) {
-		t.Errorf("subset = %v, want [read bash]", toolNames(got))
+	got := ApplySkillPolicy(tools, agentskills.SkillPolicy{AllowedTools: []string{"Bash", "read"}})
+	if !reflect.DeepEqual(toolNames(got), []string{"read", "Bash"}) {
+		t.Errorf("subset = %v, want [read Bash]", toolNames(got))
 	}
 
 	// Unknown declared names are ignored; nil tools are skipped.

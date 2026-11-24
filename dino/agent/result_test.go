@@ -230,7 +230,7 @@ func (m *structuredMockLLM) GetModelMetadata() types.ModelMetadata {
 	return types.ModelMetadata{Name: "mock-structured"}
 }
 
-// TestSubagentExecute_CollectsToolEvents：write_file 触发 tool_event，FilesChanged 含该 path
+// TestSubagentExecute_CollectsToolEvents：Write 触发 tool_event，FilesChanged 含该 path
 // （设计 §9.1 #5）。
 func TestSubagentExecute_CollectsToolEvents(t *testing.T) {
 	llm := newStructuredMockLLM()
@@ -238,7 +238,7 @@ func TestSubagentExecute_CollectsToolEvents(t *testing.T) {
 		ch <- types.StreamMessage{Type: "chunk", Content: "starting"}
 		ch <- types.StreamMessage{Type: "tool_calls", ToolCalls: []types.ToolCall{{
 			ID: "call_1", Type: "function",
-			Function: types.ToolFunction{Name: "write_file", Arguments: map[string]interface{}{"path": "/tmp/a.go", "content": "x"}},
+			Function: types.ToolFunction{Name: "Write", Arguments: map[string]interface{}{"file_path": "/tmp/a.go", "content": "x"}},
 		}}}
 		return nil
 	})
@@ -274,10 +274,10 @@ func TestSubagentExecute_CollectsToolEvents(t *testing.T) {
 	}
 }
 
-// structuredWriteTool：模拟 write_file，输入含 path 键，供 tool_event 采集。
+// structuredWriteTool：模拟 Write，输入含 file_path 键，供 tool_event 采集。
 type structuredWriteTool struct{}
 
-func (t *structuredWriteTool) Name() string        { return "write_file" }
+func (t *structuredWriteTool) Name() string        { return "Write" }
 func (t *structuredWriteTool) Description() string { return "test write" }
 func (t *structuredWriteTool) Schema() map[string]interface{} {
 	return map[string]interface{}{"type": "object"}
@@ -286,7 +286,7 @@ func (t *structuredWriteTool) Metadata() types.ToolMetadata {
 	return types.ToolMetadata{ToolType: "builtin"}
 }
 func (t *structuredWriteTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
-	return map[string]interface{}{"path": input["path"], "message": "ok"}, nil
+	return map[string]interface{}{"path": input["file_path"], "message": "ok"}, nil
 }
 
 // TestSubagentExecute_StatusError：Execute 中途 Result.Error -> Status=="error"（设计 §9.1 #6）。

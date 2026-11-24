@@ -80,8 +80,8 @@ func BuildAgentRuleset(mode AgentMode) Ruleset {
 			if rs[i].Permission == "edit" {
 				rs[i].Action = ActionDeny
 				rs[i].Extra = map[string]interface{}{
-					"*":                                    ActionDeny,
-					".opencode/plans/*.md":                 ActionAllow,
+					"*":                                     ActionDeny,
+					".opencode/plans/*.md":                  ActionAllow,
 					filepath.Join("$DATA", "plans", "*.md"): ActionAllow,
 				}
 			}
@@ -91,12 +91,11 @@ func BuildAgentRuleset(mode AgentMode) Ruleset {
 			rs[i].Action = ActionDeny
 		}
 		rs = append(rs,
-			Rule{Permission: "grep", Action: ActionAllow},
-			Rule{Permission: "glob", Action: ActionAllow},
-			Rule{Permission: "list", Action: ActionAllow},
-			Rule{Permission: "bash", Action: ActionAllow},
-			Rule{Permission: "webfetch", Action: ActionAllow},
-			Rule{Permission: "websearch", Action: ActionAllow},
+			Rule{Permission: "Grep", Action: ActionAllow},
+			Rule{Permission: "Glob", Action: ActionAllow},
+			Rule{Permission: "Bash", Action: ActionAllow},
+			Rule{Permission: "WebFetch", Action: ActionAllow},
+			Rule{Permission: "WebSearch", Action: ActionAllow},
 			Rule{Permission: "codesearch", Action: ActionAllow},
 			Rule{Permission: "read", Action: ActionAllow},
 		)

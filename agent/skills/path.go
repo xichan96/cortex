@@ -8,7 +8,7 @@ import (
 )
 
 // MatchPathPatterns reports whether filePath matches at least one doublestar
-// glob pattern. Patterns are trimmed and normalized to slash form; empty
+// Glob pattern. Patterns are trimmed and normalized to slash form; empty
 // patterns are ignored. Invalid patterns simply do not match.
 func MatchPathPatterns(patterns []string, filePath string) bool {
 	if len(patterns) == 0 {

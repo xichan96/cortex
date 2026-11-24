@@ -12,7 +12,7 @@ fallback: other-skill
 dependencies: [dep-skill]
 paths: ["*.go"]
 when_to_use: When testing legacy compatibility.
-allowed_tools: [read, grep]
+allowed_tools: [read, Grep]
 ---
 
 # Legacy Skill

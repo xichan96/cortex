@@ -48,12 +48,12 @@ func TestMemoryBridgeRoundTrip(t *testing.T) {
 	b := NewMemoryBridge()
 	defer b.Close()
 
-	payload := json.RawMessage(`{"tool":"bash","args":{"command":"ls"}}`)
+	payload := json.RawMessage(`{"tool":"Bash","args":{"command":"ls"}}`)
 	done := startBridgeRequest(b, BridgeRequest{
 		Kind:      KindApproval,
 		SessionID: "session-1",
 		TurnID:    "turn-1",
-		Title:     "Run bash?",
+		Title:     "Run Bash?",
 		Payload:   payload,
 		Timeout:   2 * time.Second,
 	})
@@ -62,7 +62,7 @@ func TestMemoryBridgeRoundTrip(t *testing.T) {
 	if req.ID == "" {
 		t.Fatal("request has no generated id")
 	}
-	if req.Kind != KindApproval || req.SessionID != "session-1" || req.TurnID != "turn-1" || req.Title != "Run bash?" {
+	if req.Kind != KindApproval || req.SessionID != "session-1" || req.TurnID != "turn-1" || req.Title != "Run Bash?" {
 		t.Fatalf("request = %+v", req)
 	}
 	if string(req.Payload) != string(payload) {

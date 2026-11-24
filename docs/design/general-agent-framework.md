@@ -54,7 +54,7 @@
 | Skill 正文启动全量读 | `LoadSkillsFromDirs` 读入 `Content` | 大技能集浪费内存；`paths`/`allowed_tools` 未接线 |
 | LLM 无模型目录 | 模型名常量 + `ModelMetadata{Name,Version,MaxTokens}` | 无 context window/pricing/capability/cache 元数据 |
 | 无 transport 中性 runtime | `dino.Client` 进程内；HTTP/MCP trigger 绕过 dino | 同一 agent 无法一致地暴露给 SDK/HTTP/WS/CLI |
-| 无 sandbox | bash 以宿主权限执行，仅路径审批 | 远端/多租户场景没有安全边界 |
+| 无 sandbox | Bash 以宿主权限执行，仅路径审批 | 远端/多租户场景没有安全边界 |
 | 无插件/资源包分发 | 无 | 无法共享 skill/prompt/agent/MCP 组合 |
 
 ---
@@ -744,7 +744,7 @@ notify:   {kind:"status"|"notify", payload} // 不等待
 - `session`：当前会话内存。
 - `workspace`：`<cwd>/.cortex/permissions.json`（project trust 后才可写）。
 - `always`：`~/.cortex/permissions.json`。
-- 记录键：`(tool, pattern, scope)`，例如 `bash:git push:*`、`write:<abs path>`；写入时带时间戳与来源，支持 `/permissions` 查看/撤销。
+- 记录键：`(tool, pattern, scope)`，例如 `Bash:git push:*`、`write:<abs path>`；写入时带时间戳与来源，支持 `/permissions` 查看/撤销。
 - 密钥类操作（auth、ssh key）默认不允许 remember。
 
 ### 5.6 外部路径与风险
@@ -769,7 +769,7 @@ type Sandbox interface {
 - `DockerSandbox`：复用 `pkg/docker`；工作区挂载、只读根、网络策略、资源限制。
 - `SSHSandbox`/`ExecutionEnv`：复用 `pkg/ssh`；工具在远端执行，模型与凭据留本地。
 - `LandlockSandbox`（Linux，P2）：文件/网络限制，无需容器。
-- 配置：`sandbox: {backend: "host"|"docker"|"ssh", ...}`；bash/file 工具统一从 `Sandbox` 取能力，禁止工具自行 `os/exec`。
+- 配置：`sandbox: {backend: "host"|"docker"|"ssh", ...}`；Bash/file 工具统一从 `Sandbox` 取能力，禁止工具自行 `os/exec`。
 
 ### 5.8 与现有实现的映射
 
@@ -856,7 +856,7 @@ References are relative to /abs.
 
 ### 6.5 约束执行
 
-- `paths`：按当前活跃文件/工作区 glob 过滤**可广告**的 skill；不匹配的不出现在 `<available_skills>`，但 `/skill:name` 仍可用。
+- `paths`：按当前活跃文件/工作区 Glob 过滤**可广告**的 skill；不匹配的不出现在 `<available_skills>`，但 `/skill:name` 仍可用。
 - `allowed_tools`：在 `/skill:name` 或 `skill` 工具激活的回合内，把工具集限制为声明集合（与全局 permission 取交集）；回合结束恢复。若声明了未知工具，启动时 warning，不静默忽略。
 - 不允许“声明了但不生效”：要么实现，要么删字段。
 
@@ -1019,7 +1019,7 @@ type: request | response | error | event | cancel | ping
 
 - 来源：local path、git（tag/commit 固定）、OCI/压缩包（P2）。不直接复用 npm。
 - 身份去重：local 用 realpath，git 用 repo URL（不含 ref），包用 name。
-- 过滤器：省略 = 全部；`[]` = 无；`!glob` 排除；`+path`/`-path` 精确包含/排除。
+- 过滤器：省略 = 全部；`[]` = 无；`!Glob` 排除；`+path`/`-path` 精确包含/排除。
 - 安装失败非致命：warning + 跳过 + 下次启动/`/reload` 重试；`cortex install` 返回非零。
 - 项目包声明受 trust 门控；安装前打印将要加载的可执行资源。
 - 版本/完整性：记录 commit/tag/hash；更新不移动已固定的 ref；可选签名校验（P2）。
@@ -1323,7 +1323,7 @@ JSONL（严格 LF 分隔；stdout 只放协议，诊断走 stderr）：
 - `compact` / `get_session_stats` / `get_entries?since=&leaf=`
 - `fork` / `clone` / `switch_session` / `new_session`
 - `export` / `import` / `set_session_name`
-- `bash` / `abort_bash`
+- `Bash` / `abort_bash`
 - `get_commands`
 
 响应统一 `{id,type:"response",command,success,data|error}`；解析失败返回 `command:"parse"`。`prompt` 的 `disposition ∈ {started,queued,handled}`。

@@ -248,7 +248,7 @@ func TestApprovalStoreBrokerRoutesSessionToolAndArgs(t *testing.T) {
 
 	resp, err := broker.Request(context.Background(), approval.ApprovalRequest{
 		SessionID: "sess-42",
-		ToolName:  "bash",
+		ToolName:  "Bash",
 		Args:      map[string]any{"command": "ls"},
 	})
 	if err != nil {
@@ -259,7 +259,7 @@ func TestApprovalStoreBrokerRoutesSessionToolAndArgs(t *testing.T) {
 	}
 
 	n, sessionID, requestID, toolName, arguments := sender.Snapshot()
-	if n != 1 || sessionID != "sess-42" || toolName != "bash" || requestID == "" {
+	if n != 1 || sessionID != "sess-42" || toolName != "Bash" || requestID == "" {
 		t.Fatalf("sender got requests=%d session=%q request=%q tool=%q", n, sessionID, requestID, toolName)
 	}
 	var decoded map[string]any
@@ -279,7 +279,7 @@ func TestApprovalStoreBrokerDenyIsNotAnError(t *testing.T) {
 
 	resp, err := broker.Request(context.Background(), approval.ApprovalRequest{
 		SessionID: "sess-42",
-		ToolName:  "bash",
+		ToolName:  "Bash",
 	})
 	if err != nil {
 		t.Fatalf("a user denial must be a response, not an error: %v", err)
@@ -290,7 +290,7 @@ func TestApprovalStoreBrokerDenyIsNotAnError(t *testing.T) {
 }
 
 func TestApprovalStoreBrokerMissingStoreIsUnavailable(t *testing.T) {
-	_, err := (&approvalStoreBroker{}).Request(context.Background(), approval.ApprovalRequest{ToolName: "bash"})
+	_, err := (&approvalStoreBroker{}).Request(context.Background(), approval.ApprovalRequest{ToolName: "Bash"})
 	if err == nil {
 		t.Fatal("missing ApprovalStore must return an error")
 	}

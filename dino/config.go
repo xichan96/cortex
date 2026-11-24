@@ -348,14 +348,14 @@ func DefaultConfig() *Config {
 		MaxSessions:          100,
 		ToolExecutionTimeout: 60 * time.Second,
 		ToolTimeouts: map[string]time.Duration{
-			"bash":       120 * time.Second,
-			"web_fetch":  30 * time.Second,
-			"web_search": 45 * time.Second,
-			"glob":       10 * time.Second,
-			"grep":       30 * time.Second,
-			"read_file":  15 * time.Second,
-			"write_file": 30 * time.Second,
-			"edit_file":  15 * time.Second,
+			"Bash":      120 * time.Second,
+			"WebFetch":  30 * time.Second,
+			"WebSearch": 45 * time.Second,
+			"Glob":      10 * time.Second,
+			"Grep":      30 * time.Second,
+			"Read":      15 * time.Second,
+			"Write":     30 * time.Second,
+			"Edit":      15 * time.Second,
 		},
 		LoopDetection: LoopDetectionConfig{
 			Enabled:             true,
@@ -371,21 +371,20 @@ func DefaultConfig() *Config {
 		Tools: ToolConfig{
 			Profile: "coding",
 			Allowed: []string{
-				"read_file",
-				"write_file",
-				"edit_file",
-				"glob",
-				"grep",
-				"bash",
-				"list_directory",
+				"Read",
+				"Write",
+				"Edit",
+				"Glob",
+				"Grep",
+				"Bash",
 				// E2：tool_search 默认可见（否则默认白名单 `*→deny` 会把它挡掉，
 				// 延迟发现功能默认不可用）。
 				"tool_search",
 			},
 			ApprovalRequired: []string{
-				"bash",
-				"write_file",
-				"edit_file",
+				"Bash",
+				"Write",
+				"Edit",
 			},
 			// E1/E2 默认：tool_search 开，MCP Deferred 灰度关，discover 上限 32。
 			ToolSearchEnabled:  true,

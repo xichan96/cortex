@@ -163,11 +163,13 @@ func getTool(tools []types.Tool, name string) types.Tool {
 
 type dummyTool struct{ name string }
 
-func (d dummyTool) Name() string                                        { return d.name }
-func (d dummyTool) Description() string                                 { return "d" }
-func (d dummyTool) Schema() map[string]interface{}                       { return nil }
-func (d dummyTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) { return nil, nil }
-func (d dummyTool) Metadata() types.ToolMetadata                        { return types.ToolMetadata{} }
+func (d dummyTool) Name() string                   { return d.name }
+func (d dummyTool) Description() string            { return "d" }
+func (d dummyTool) Schema() map[string]interface{} { return nil }
+func (d dummyTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	return nil, nil
+}
+func (d dummyTool) Metadata() types.ToolMetadata { return types.ToolMetadata{} }
 
 func TestService_Handler_SkillNotFoundAndDisallowedTools(t *testing.T) {
 	store := NewMockJobStore()
@@ -609,14 +611,14 @@ func TestScheduleJobTool_Execute_MaxIterations(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestScheduleJobTool_Execute_SkillsWithReadFile(t *testing.T) {
+func TestScheduleJobTool_Execute_SkillsWithReadTool(t *testing.T) {
 	store := NewMockJobStore()
 	svc := NewService(xcron.NewScheduler(store))
 	tool := getTool(NewTools(svc), "schedule_job")
 	_, err := tool.Execute(context.Background(), map[string]interface{}{
 		"name": "sk", "type": "oneshot", "schedule": "1h",
 		"payload": map[string]interface{}{
-			"message": "do it", "skills": []string{"a"}, "tools": []string{"read_file"},
+			"message": "do it", "skills": []string{"a"}, "tools": []string{"Read"},
 		},
 	})
 	assert.NoError(t, err)
@@ -636,7 +638,7 @@ func TestScheduleJobTool_Execute_SkillsWithReadFile(t *testing.T) {
 		names = append(names, t.(string))
 	}
 	assert.Contains(t, names, "file")
-	assert.NotContains(t, names, "read_file")
+	assert.NotContains(t, names, "Read")
 }
 
 func TestScheduleJobTool_Execute_NonAgentTaskRejected(t *testing.T) {
@@ -654,7 +656,7 @@ func TestScheduleJobTool_Execute_ToolsInvalidType(t *testing.T) {
 	tool := getTool(NewTools(svc), "schedule_job")
 	_, err := tool.Execute(context.Background(), map[string]interface{}{
 		"name": "x", "type": "oneshot", "schedule": "1h",
-		"payload": map[string]interface{}{"message": "x", "tools": map[string]int{}},
+		"payload":   map[string]interface{}{"message": "x", "tools": map[string]int{}},
 		"task_type": "agent_task",
 	})
 	assert.Error(t, err)

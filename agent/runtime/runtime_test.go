@@ -465,7 +465,7 @@ func TestMemoryRuntimeConcurrentSubscribers(t *testing.T) {
 
 func TestMemoryRuntimeToolStateTracking(t *testing.T) {
 	driver := driverFunc(func(ctx context.Context, req RunRequest) (RunResult, error) {
-		req.Emit.Emit(EventToolExecutionStart, ToolExecutionStartPayload{ToolCallID: "call-1", ToolName: "bash"})
+		req.Emit.Emit(EventToolExecutionStart, ToolExecutionStartPayload{ToolCallID: "call-1", ToolName: "Bash"})
 		return RunResult{}, nil
 	})
 	rt := NewMemoryRuntime(Options{Driver: driver})
@@ -599,7 +599,7 @@ func TestMessageQueue(t *testing.T) {
 func TestEventJSONRoundTrip(t *testing.T) {
 	payload, err := json.Marshal(ToolExecutionStartPayload{
 		ToolCallID: "call-1",
-		ToolName:   "bash",
+		ToolName:   "Bash",
 		Args:       json.RawMessage(`{"command":"ls"}`),
 	})
 	if err != nil {

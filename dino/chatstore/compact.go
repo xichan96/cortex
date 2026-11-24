@@ -192,7 +192,7 @@ func DeterministicCompact(existingSummary string, messages []Message, cfg Compac
 var knownFileExtensions = []string{
 	".go", ".js", ".ts", ".tsx", ".jsx", ".py", ".rs", ".java", ".c", ".cpp", ".h",
 	".md", ".yaml", ".yml", ".json", ".toml", ".xml", ".html", ".css", ".sql",
-	".sh", ".bash", ".zsh", ".fish", ".lua", ".rb", ".php", ".swift", ".kt",
+	".sh", ".Bash", ".zsh", ".fish", ".lua", ".rb", ".php", ".swift", ".kt",
 	".vue", ".svelte", ".astro", ".dart", ".ex", ".exs", ".erl", ".hs",
 }
 

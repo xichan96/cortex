@@ -40,7 +40,7 @@ Designed for production environments, CORTEX prioritizes reliability, configurab
 - **Intelligent Agent Engine**: A robust core for building agents with advanced reasoning and tool-calling capabilities.
 - **Broad LLM Support**: Seamless integration with OpenAI, DeepSeek, Volce, and custom providers.
 - **Multi-Modal Native**: Effortlessly process and generate text, images, and other media formats.
-- **Dynamic Skills**: File-system-based skills with lazy loading; YAML frontmatter supports `paths`, `when_to_use`, and `allowed_tools`, with path-glob filtering (`doublestar`) and optional symlink resolve / real-path dedupe in the loader.
+- **Dynamic Skills**: File-system-based skills with lazy loading; YAML frontmatter supports `paths`, `when_to_use`, and `allowed_tools`, with path-Glob filtering (`doublestar`) and optional symlink resolve / real-path dedupe in the loader.
 - **Extensible Tooling**: `agent/tools/builtin` spans fs, search, shell/background jobs, net/web, Docker, email, math, and `mcp_client`; register custom `types.Tool` as needed.
 - **Real-Time Streaming**: Full support for response streaming, enabling interactive, low-latency user experiences.
 - **Hybrid Memory Architecture**: Full history plus rolling summaries, with asynchronous compression (mutex-serialized, turn-aware via `CompactAfterTurns`) so compress work does not overlap. Prompt assembly can trim recent chat to a rough token budget (`MaxBudgetTokens`, `RemainPromptTokens`). Providers may expose cheap `StoredMessageCount` for smarter gating. Compatible with LangChain, MongoDB, Redis, MySQL, and SQLite.
@@ -83,7 +83,7 @@ cortex/
 
 ### Installation
 
-```bash
+```Bash
 go get github.com/xichan96/cortex
 ```
 
@@ -134,7 +134,7 @@ func main() {
 
 Cortex ships with a ready-to-deploy HTTP server:
 
-```bash
+```Bash
 # Run with default config
 go run cortex.go
 
@@ -189,7 +189,7 @@ llmProvider, _ := llm.VolceClient("ak-...", "doubao-pro-32k")
 
 - `Config.Tools`: `Allowed`, `Denied`, `ApprovalRequired`; `ToolTimeouts` plus `ToolTimeoutCalculator` for dynamic limits.
 - `defined_tool`: `DefinedTool`, `ToolContext`, and approval storage for human-in-the-loop risky operations.
-- Builtins cover read/write/edit files, `glob`/`grep`, `bash`, `list_directory`, and more; wire MCP and filesystem skills via `cfg.Skills`.
+- Builtins cover read/write/edit files, `Grep`/`Glob`, `Bash`, `WebFetch`/`WebSearch`, and more; wire MCP and filesystem skills via `cfg.Skills`.
 
 ### Resources and stability
 
@@ -201,7 +201,7 @@ llmProvider, _ := llm.VolceClient("ak-...", "doubao-pro-32k")
 
 ### Minimal usage
 
-```bash
+```Bash
 go get github.com/xichan96/cortex/dino
 ```
 
@@ -246,12 +246,12 @@ Builtins live under `agent/tools/builtin/` by package; register `types.Tool` ins
 
 | Package | Tool names |
 |---------|------------|
-| `fs/` | `read_file`, `write_file`, `edit_file`, `file` |
-| `search/` | `glob`, `grep`, `codesearch` (placeholder) |
+| `fs/` | `Read`, `Write`, `Edit`, `file` |
+| `search/` | `Glob`, `Grep`, `codesearch` (placeholder) |
 | `runtime/` | `command`, `question`, `job_kill`, `job_output` |
 | `task/` | `todo` (in-process tasks: IDs, pending / in_progress / completed / cancelled, list & update) |
 | `net/` | `ssh`, `net_check` |
-| `web/` | `web_search`, `web_fetch` |
+| `web/` | `WebSearch`, `WebFetch` |
 | `system/` | `get_time`, `http_request` |
 | `email/` | `send_email` |
 | `math/` | `math_calculate` |
@@ -296,7 +296,7 @@ description: Get current weather using command line tools.
 
 To check the weather, use `curl` with wttr.in:
 
-```bash
+```Bash
 curl -s "wttr.in/New+York?format=3"
 ```
 ````

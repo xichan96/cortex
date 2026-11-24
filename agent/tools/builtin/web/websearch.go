@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	WebSearchToolName = "web_search"
+	WebSearchToolName = "WebSearch"
 	apiBaseURL        = "https://mcp.exa.ai"
 	apiEndpoint       = "/mcp"
 	defaultNumResults = 8
@@ -61,7 +61,7 @@ func NewWebSearchTool() types.Tool {
 	}
 }
 
-// NewWebSearchToolWithBaseURL returns a web_search tool that talks to the given
+// NewWebSearchToolWithBaseURL returns a WebSearch tool that talks to the given
 // base URL (used by tests to mock the SSE stream).
 func NewWebSearchToolWithBaseURL(baseURL string) types.Tool {
 	return &WebSearchTool{
@@ -87,7 +87,17 @@ func (t *WebSearchTool) Schema() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"query": map[string]interface{}{
 				"type":        "string",
-				"description": "Websearch query",
+				"description": "The search query.",
+			},
+			"allowed_domains": map[string]interface{}{
+				"type":        "array",
+				"description": "Only include results from these domains.",
+				"items":       map[string]interface{}{"type": "string"},
+			},
+			"blocked_domains": map[string]interface{}{
+				"type":        "array",
+				"description": "Never include results from these domains.",
+				"items":       map[string]interface{}{"type": "string"},
 			},
 			"num_results": map[string]interface{}{
 				"type":        "integer",
@@ -236,7 +246,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, input map[string]interface{
 
 func (t *WebSearchTool) Metadata() types.ToolMetadata {
 	return types.ToolMetadata{
-		SourceNodeName: "web_search",
+		SourceNodeName: "WebSearch",
 		IsFromToolkit:  false,
 		ToolType:       "web",
 	}

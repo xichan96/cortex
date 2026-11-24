@@ -14,7 +14,7 @@ func (e *Entry) AllowedTools() []string {
 	return append([]string(nil), e.Spec.AllowedTools...)
 }
 
-// Paths returns the glob patterns declared by the skill's paths field. The
+// Paths returns the Glob patterns declared by the skill's paths field. The
 // returned slice is a copy. nil means the skill is not path-scoped.
 func (e *Entry) Paths() []string {
 	if e == nil || e.Spec == nil {
@@ -24,7 +24,7 @@ func (e *Entry) Paths() []string {
 }
 
 // SkillPolicy is the enforceable constraint set a skill declares (design 6.5):
-// the tools a skill may use while it is active and the glob patterns that decide
+// the tools a skill may use while it is active and the Glob patterns that decide
 // when it is advertisable. An empty field means that dimension is unrestricted.
 type SkillPolicy struct {
 	AllowedTools []string `json:"allowed_tools,omitempty"`
@@ -94,7 +94,7 @@ func FilterToolNames(available, allowed []string) (filtered, unknown []string) {
 // through /skill:name). Skills that declare no paths are always advertisable.
 // An empty activePaths means "no path context", so every advertisable entry is
 // returned. Otherwise a path-scoped skill is included when at least one active
-// path matches one of its doublestar glob patterns (see MatchPathPatterns).
+// path matches one of its doublestar Glob patterns (see MatchPathPatterns).
 func AdvertisableForPaths(index *Index, activePaths []string) []*Entry {
 	if index == nil {
 		return nil

@@ -9,7 +9,7 @@
 
 | 现状 | 证据 |
 |---|---|
-| `dino/mem/` 无任何包 import（死代码） | 全仓 grep 仅 `dino/README.md:62`、`dino/README-CN.md:62` 提及；无 `.go` 引用 `MemoryTools`/`RunIngestLoop`/`IngestRuntime` |
+| `dino/mem/` 无任何包 import（死代码） | 全仓 Grep 仅 `dino/README.md:62`、`dino/README-CN.md:62` 提及；无 `.go` 引用 `MemoryTools`/`RunIngestLoop`/`IngestRuntime` |
 | ingest 管线已实现（Phase-1 风格） | `dino/mem/ingest.go:27` `runIngestOnce`，`ingest.go:74` 4 worker，`dino/mem/loop.go:30` 裸 ticker |
 | 记忆工具已实现 | `dino/mem/tool.go:189` `sqliteMemoryTool.Execute`，9 个 action：`get_preference/list_preferences/search_knowledge/search_indexes/memory_stats/build_system_prompt/set_preference/add_knowledge` |
 | memkit 全套 store | `pkg/memkit/interfaces.go`；SQLite 实现 `pkg/memkit/sqlite/sqlite.go:65-181`（preferences/knowledge/context/indexes/page_index/memory_ingest_* 表） |
@@ -352,7 +352,7 @@ func (l *LongTermMem) BuildLayeredPrompt(ctx context.Context, uid string) string
 ### 5.1 注入内容剔除（不背自己的脚手架）
 
 **问题**：chatstore 里存的是「完整的会话消息」，其中会包含：
-- **工具输出**（bash 输出、文件内容）——`messages` 表 `tool_calls` 列有工具名，`content` 是工具返回（`sqlite.go:211-218` 只存序列化后的 tool_persist）。
+- **工具输出**（Bash 输出、文件内容）——`messages` 表 `tool_calls` 列有工具名，`content` 是工具返回（`sqlite.go:211-218` 只存序列化后的 tool_persist）。
 - **系统脚手架**：`SaveContext`（`factory.go:95-160`）会把 `Input: {...}` 包装 JSON 也存进 `messages`，`Content: "Input: %s"` 前缀（`factory.go:126`）就是特征。
 
 **落地**（对照 codex `phase1.rs:469-488` 标记剥离）：

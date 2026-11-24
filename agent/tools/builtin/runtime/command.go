@@ -133,5 +133,8 @@ func (t *CommandTool) Metadata() types.ToolMetadata {
 		SourceNodeName: "command",
 		IsFromToolkit:  false,
 		ToolType:       "runtime",
+		// A shell command can write files, so a successful run must clear any
+		// cached tool observations (Bash is exposed under this metadata).
+		Extra: map[string]interface{}{"invalidates_cache": true},
 	}
 }

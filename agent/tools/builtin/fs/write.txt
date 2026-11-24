@@ -1,0 +1,7 @@
+- Writes or overwrites a file with the specified content.
+- If the file does not exist, it will be created. Parent directories are created recursively.
+
+Usage notes:
+  - Requires the `file_path` of the file and the `content` to be written.
+  - This tool completely replaces the file's content if it already exists.
+  - Prefer Edit for targeted changes to an existing file.

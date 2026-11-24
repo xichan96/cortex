@@ -1165,15 +1165,15 @@ func TestEvent_ToolInfo(t *testing.T) {
 	event := &Event{
 		Type:       EventTypeToolCall,
 		ToolCallID: "call-123",
-		ToolName:   "read_file",
+		ToolName:   "Read",
 		ToolInput: map[string]interface{}{
 			"path": "/test/file.txt",
 		},
 		ToolOutput: "file content",
 	}
 
-	if event.ToolName != "read_file" {
-		t.Errorf("Expected tool name 'read_file', got '%s'", event.ToolName)
+	if event.ToolName != "Read" {
+		t.Errorf("Expected tool name 'Read', got '%s'", event.ToolName)
 	}
 
 	if event.ToolInput["path"] != "/test/file.txt" {
@@ -1291,7 +1291,7 @@ func TestApprovalStore(t *testing.T) {
 func TestApprovalStore_Timeout(t *testing.T) {
 	store := NewApprovalStore(100 * time.Millisecond)
 
-	_, err := store.RequestApproval(context.Background(), "sess-2", "bash", `{"command": "rm -rf /"}`)
+	_, err := store.RequestApproval(context.Background(), "sess-2", "Bash", `{"command": "rm -rf /"}`)
 	if err == nil {
 		t.Error("Should return timeout error")
 	}
@@ -1357,7 +1357,7 @@ func TestExecuteResponse(t *testing.T) {
 		SessionID: "sess-1",
 		Content:   "Hello world",
 		ToolCalls: []ToolCallInfo{
-			{ID: "call-1", Name: "read_file", Input: map[string]interface{}{"path": "/test.txt"}},
+			{ID: "call-1", Name: "Read", Input: map[string]interface{}{"path": "/test.txt"}},
 		},
 		Usage: Usage{
 			PromptTokens:     10,
@@ -1374,8 +1374,8 @@ func TestExecuteResponse(t *testing.T) {
 		t.Errorf("Expected 1 tool call, got %d", len(resp.ToolCalls))
 	}
 
-	if resp.ToolCalls[0].Name != "read_file" {
-		t.Errorf("Expected 'read_file', got '%s'", resp.ToolCalls[0].Name)
+	if resp.ToolCalls[0].Name != "Read" {
+		t.Errorf("Expected 'Read', got '%s'", resp.ToolCalls[0].Name)
 	}
 }
 
@@ -1385,7 +1385,7 @@ func TestStreamEvent(t *testing.T) {
 		Content:    "test content",
 		SessionID:  "sess-1",
 		ToolCallID: "call-1",
-		ToolName:   "bash",
+		ToolName:   "Bash",
 		ToolInput:  map[string]interface{}{"command": "ls"},
 		ToolOutput: "output",
 		Error:      "",
@@ -1542,8 +1542,8 @@ func TestProviderConfig(t *testing.T) {
 func TestToolConfig(t *testing.T) {
 	cfg := &ToolConfig{
 		Profile:          "coding",
-		Allowed:          []string{"read_file", "write_file", "edit_file"},
-		ApprovalRequired: []string{"bash", "write_file"},
+		Allowed:          []string{"Read", "Write", "Edit"},
+		ApprovalRequired: []string{"Bash", "Write"},
 		Denied:           []string{"delete_file"},
 	}
 
@@ -1803,7 +1803,7 @@ func TestMessage_AddReasoning(t *testing.T) {
 
 func TestMessage_AddToolCall(t *testing.T) {
 	msg := NewMessage("msg-1", RoleAssistant, "session-1")
-	msg.AddToolCall("call-1", "read_file", map[string]interface{}{"path": "/test.txt"})
+	msg.AddToolCall("call-1", "Read", map[string]interface{}{"path": "/test.txt"})
 
 	toolCalls := msg.GetToolCalls()
 	if len(toolCalls) != 1 {
@@ -1814,8 +1814,8 @@ func TestMessage_AddToolCall(t *testing.T) {
 		t.Errorf("Expected tool call ID 'call-1', got '%s'", toolCalls[0].ToolCallID)
 	}
 
-	if toolCalls[0].ToolName != "read_file" {
-		t.Errorf("Expected tool name 'read_file', got '%s'", toolCalls[0].ToolName)
+	if toolCalls[0].ToolName != "Read" {
+		t.Errorf("Expected tool name 'Read', got '%s'", toolCalls[0].ToolName)
 	}
 
 	if toolCalls[0].Args["path"] != "/test.txt" {
@@ -1825,7 +1825,7 @@ func TestMessage_AddToolCall(t *testing.T) {
 
 func TestMessage_AddToolResult(t *testing.T) {
 	msg := NewMessage("msg-1", RoleAssistant, "session-1")
-	msg.AddToolResult("call-1", "read_file", "file content")
+	msg.AddToolResult("call-1", "Read", "file content")
 
 	results := msg.GetToolResults()
 	if len(results) != 1 {
@@ -1916,15 +1916,15 @@ func TestToolInvocationPart(t *testing.T) {
 		ToolInvocation: ToolInvocation{
 			State:      ToolStateCall,
 			ToolCallID: "call-1",
-			ToolName:   "bash",
+			ToolName:   "Bash",
 			Args:       map[string]interface{}{"command": "ls"},
 		},
 	}
 
 	part.isPart()
 
-	if part.ToolInvocation.ToolName != "bash" {
-		t.Errorf("Expected 'bash', got '%s'", part.ToolInvocation.ToolName)
+	if part.ToolInvocation.ToolName != "Bash" {
+		t.Errorf("Expected 'Bash', got '%s'", part.ToolInvocation.ToolName)
 	}
 }
 
@@ -2063,7 +2063,7 @@ func TestMessageMetadata(t *testing.T) {
 		},
 		SessionID: "session-1",
 		Tool: map[string]ToolMeta{
-			"read_file": {
+			"Read": {
 				Title: "Read File",
 				Time:  ToolMetaTime{Start: 1000},
 			},
@@ -2075,7 +2075,7 @@ func TestMessageMetadata(t *testing.T) {
 		t.Errorf("Expected 'ErrorName', got '%s'", metadata.Error.Name)
 	}
 
-	if metadata.Tool["read_file"].Title != "Read File" {
+	if metadata.Tool["Read"].Title != "Read File" {
 		t.Error("Tool metadata mismatch")
 	}
 }
@@ -3312,7 +3312,7 @@ func TestCost(t *testing.T) {
 func TestBudgetRequest(t *testing.T) {
 	req := BudgetRequest{
 		SessionID: "session-1",
-		ToolCalls: []string{"read_file", "bash"},
+		ToolCalls: []string{"Read", "Bash"},
 		Estimated: Cost{
 			Tokens: 100,
 			Calls:  2,
@@ -3494,7 +3494,8 @@ func (s *recordingApprovalSender) SendToolApprovalRequest(sessionID, requestID, 
 	}{sessionID, requestID, toolName, arguments})
 }
 
-func (s *recordingApprovalSender) SendToolApprovalResponse(sessionID, requestID, toolName string, approved bool) {}
+func (s *recordingApprovalSender) SendToolApprovalResponse(sessionID, requestID, toolName string, approved bool) {
+}
 
 func (s *recordingApprovalSender) firstRequestID() string {
 	s.mu.Lock()
@@ -3520,7 +3521,7 @@ func TestRequestApproval_ThenRespond(t *testing.T) {
 	done := make(chan bool, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		approved, err := store.RequestApproval(context.Background(), "sess", "bash", `{"command":"ls"}`)
+		approved, err := store.RequestApproval(context.Background(), "sess", "Bash", `{"command":"ls"}`)
 		if err != nil {
 			errCh <- err
 			return

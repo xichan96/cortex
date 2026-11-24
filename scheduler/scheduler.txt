@@ -1,6 +1,6 @@
 - Schedule a new job with the scheduler service
 - Supports 'oneshot' (run once after delay), 'periodic' (run every interval), and 'cron' (run at specific times)
-- **Prefer this tool** for user reminders and delayed work (e.g. "remind me in 1 minute", "一分钟后提醒我"). Do NOT use bash `sleep` or background shells for delays; use **oneshot** + duration instead.
+- **Prefer this tool** for user reminders and delayed work (e.g. "remind me in 1 minute", "一分钟后提醒我"). Do NOT use Bash `sleep` or background shells for delays; use **oneshot** + duration instead.
 - Jobs can carry agent tasks, instructions, or custom payloads
 
 Usage notes:

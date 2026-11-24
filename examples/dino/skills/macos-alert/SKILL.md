@@ -42,5 +42,5 @@ Requirements: Notification permissions enabled for the terminal/app executing th
 
 ### 1. Send non-blocking Notification Center alert (with sound)
 Basic notification with title, message and custom sound:
-```bash
+```Bash
 osascript -e 'display notification "{MESSAGE_TEXT}" with title "{ALERT_TITLE}" sound name "{SOUND_NAME}"'

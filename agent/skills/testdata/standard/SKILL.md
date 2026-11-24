@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility: Requires pdftotext on PATH
 allowed-tools:
   - read
-  - bash
+  - Bash
 disable-model-invocation: false
 metadata:
   author: cortex

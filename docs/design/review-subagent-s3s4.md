@@ -39,7 +39,7 @@
 | 7 | 注册：`factory.go:630-645` `NewSubagentTool` + `ReplayToParentMemory` 包装 + Wrap 链 | **PASS** | `dino/factory.go:630-645` 一致。 |
 | 8 | `session.go:89-110` `Session` 持 input/output/queue/agent/ctx；`run()`(255-292) 三路 select（ctx.Done / input / queueChan）；一次只跑一个 turn | **PASS** | `session.go:89-110`、`255-292` 一致。 |
 | 9 | `executeWithInput`(334) turnCtx 派生 + `s.agent.ExecuteStream`(409)；工具调用 turn 内阻塞（`agent_tools.go:44-80`） | **PASS** | `session.go:334-351`、`agent_tools.go:44-80` 一致。 |
-| 10 | 包依赖方向：`dino/session` 不 import `dino/agent`，`dino/agent` 不 import `dino/session`，经 factory 组装 | **PASS** | 全仓 grep 确认（`dino/session/*.go` 无 `dino/agent`；`dino/agent/*.go` 无 `dino/session`）。**但注意 §6.2 的 `CompletionNotifier` 打破了这条**（见 FAIL 12）。 |
+| 10 | 包依赖方向：`dino/session` 不 import `dino/agent`，`dino/agent` 不 import `dino/session`，经 factory 组装 | **PASS** | 全仓 Grep 确认（`dino/session/*.go` 无 `dino/agent`；`dino/agent/*.go` 无 `dino/session`）。**但注意 §6.2 的 `CompletionNotifier` 打破了这条**（见 FAIL 12）。 |
 | 11 | 现有测试基建：`manager_subagent_test.go:11-112` mock + `result_test.go` 扩展 mode | **PASS** | `manager_subagent_test.go:11-112` 有 `subagentMockLLMProvider`/`subagentMockFactory`；`result_test.go:358-441` 有 `newTestSubagentManager(WithMode)`。 |
 | 12 | `CompletionNotifier` 构造注入 `*dino.Bus`（`bus.go:15-23`），实例级，不碰 `GetGlobalBus` | **FAIL** | `*dino.Bus` 定义在根 `dino` 包（`bus.go:15-23`）。`dino/agent` 目前不 import 根 `dino`；根 `dino` 包 import `dino/agent`（`factory.go:23`、`config.go:9`）。若 `dino/agent/completion.go` 引 `*dino.Bus`，形成 **`dino → dino/agent → dino` 环**，Go 编译报 import cycle。§12 风险 7 只防范了"session 依赖 agent"方向，漏了 notifier 这处。 |
 | 13 | §5.2 wait_agent 的 `case <-ctx.Done()` 返回 `{timed_out:true}` 而非 engine tool error；engine `ctx.Err()` 分支(`:74-78`)只在 tool 没返回时触发 | **FAIL** | 设计对 `executeToolWithTimeout` 的 **select 竞争**理解有误。`agent_tools.go:71-79`：engine 层 `select` 同时监听 `resultChan` 与 `ctx.Done()`。默认 `ToolExecutionTimeout=60s`（`dino/config.go:160`）**短于** wait_agent 默认 `timeout_ms=180s`。60s 时 engine 的 `ctx.WithTimeout`（`agent_tools.go:48`）先 cancel → engine select 走 `ctx.Done()` 返回 `EC_TOOL_EXECUTION_TIMEOUT` 错误。wait_agent 工具 goroutine 内部的 `case <-ctx.Done()` 此刻**尚未触发**（它继承的是同一个已 cancel 的 ctx，理论上会触发，但 engine 的 select 已经先返回了）——父代理拿到 tool error 而非 `{timed_out:true}`。设计想依赖的"wait_agent 先返回 nil error 所以 engine select 走 result 通道"只在 wait_agent 内部 timeout < engine timeout 时成立。 |
@@ -73,7 +73,7 @@
 ### 2.2 可行性
 
 - **改动面**：S3 集中在 `dino/agent`（新文件 mailbox/completion/path/tools_spawn）+ `dino/factory.go` 接线；S4 动 `dino/session`（wake.go + session.go select + event.go）+ `dino/factory.go` 适配器 + **两个现有消费方**（client.go / turn_observe.go，设计未列）。S4a 独立 commit 可回滚的判断正确。
-- **接口签名**：`NewSession` 加 `wake WakeSource` 参数，唯一调用点 `factory.go:696`，改动可控。但 `Session` 新增 `wake` 字段后，所有现有 `NewSession` 测试/调用方都要更新——grep 确认只有 factory 一处调用，OK。
+- **接口签名**：`NewSession` 加 `wake WakeSource` 参数，唯一调用点 `factory.go:696`，改动可控。但 `Session` 新增 `wake` 字段后，所有现有 `NewSession` 测试/调用方都要更新——Grep 确认只有 factory 一处调用，OK。
 - **迁移顺序**：S3a→S3d→S4a→S4b 分步验证清晰，每步独立可测。**但 S4a 与 S4b 的边界设计（Event.Source + 消费方改动）必须一起提交**，否则 S4a 落地的唤醒 turn 会把 FINAL_ANSWER 文本喷到现有 UI（client.go 当用户消息显示）。
 - **能否回滚**：S4a 独立 commit 可 revert；但 S3 的 mailbox 实例化在 `CreateSession` 里（设计风险 8），S3d 一旦上线，`CloseSession` 的 `Drop` 与 factory 的 `sessionMailboxes` 表必须同步回滚，否则泄漏。设计未给"回滚配对"说明。
 
@@ -112,7 +112,7 @@
 ### BLOCKER 1 — `dino/agent` 引 `*dino.Bus` 造成 import cycle
 
 - **位置**：`subagent-s3s4.md` §6.2（`CompletionNotifier` 类型签名 `bus *dino.Bus`）、§9（改动文件表 `dino/agent/completion.go`）。
-- **证据**：`dino/agent` 全仓无 import 根 `dino`（grep 确认）；根 `dino` 包 import `dino/agent`（`dino/factory.go:23`、`dino/config.go:9`）。`completion.go` 引 `*dino.Bus` → `dino → dino/agent → dino` 环，Go 编译失败。
+- **证据**：`dino/agent` 全仓无 import 根 `dino`（Grep 确认）；根 `dino` 包 import `dino/agent`（`dino/factory.go:23`、`dino/config.go:9`）。`completion.go` 引 `*dino.Bus` → `dino → dino/agent → dino` 环，Go 编译失败。
 - **修法**：两种，任选其一：
   1. `CompletionNotifier` 不持 `*dino.Bus`，改持 `func(eventType string, sessionID string, data interface{})` 回调（函数类型可定义在 `dino/agent`，不引根包），factory 注入 `dino.Bus.Publish`。或
   2. 把 notifier 拆成"纯数据投递（mailbox.Put）+ 由 factory 侧订阅 mailbox 发事件"，`dino/agent` 完全不含 Bus 类型。

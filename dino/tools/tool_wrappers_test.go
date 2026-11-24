@@ -28,8 +28,8 @@ func (e *errTool) Execute(ctx context.Context, input map[string]interface{}) (in
 func TestNonFatal_FatalPassthrough(t *testing.T) {
 	fatals := []error{
 		&types.FatalToolError{Err: errors.New("bad input"), Reason: "validation"},
-		&ApprovalRejectedError{ToolName: "bash"},
-		&LoopDetectedError{ToolName: "bash", Suggestion: "change strategy"},
+		&ApprovalRejectedError{ToolName: "Bash"},
+		&LoopDetectedError{ToolName: "Bash", Suggestion: "change strategy"},
 		// A fatal error buried under a %w wrap must still be caught.
 		fmt.Errorf("outer: %w", &types.FatalToolError{Reason: "wrapped"}),
 	}

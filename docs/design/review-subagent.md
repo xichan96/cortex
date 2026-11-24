@@ -27,7 +27,7 @@
 | F4 | `buildConfig` 设 `EnableMemoryCompress = false`（151-174） | **PASS** | `subagent.go:170` |
 | F5 | `delegate_to_agent` schema 只含 agent+task，enum 硬编码 `["general"]`（178 行） | **PASS** | `manager_subagent.go:178` |
 | F6 | `Execute` 同步调 `manager.Execute`，返回裸字符串 `result.Output`（212 行） | **PASS** | `manager_subagent.go:205,211-213` |
-| F7 | `ShouldDelegate` + `SubagentHandler` 是死代码，无构造点 | **PASS** | `grep NewSubagentHandler/newSubagentExecutor` 无调用方；`factory.go` 只构造 `NewSubagentManager`(437) + `NewSubagentTool`(594) |
+| F7 | `ShouldDelegate` + `SubagentHandler` 是死代码，无构造点 | **PASS** | `Grep NewSubagentHandler/newSubagentExecutor` 无调用方；`factory.go` 只构造 `NewSubagentManager`(437) + `NewSubagentTool`(594) |
 | F8 | `delegate_to_agent` 注册在 `factory.go:593-604`，`ReplayToParentMemory` 再包一层 | **PASS** | `factory.go:593-604`；`newDelegateParentMemoryTool`(219) + `ReplayToParentMemory` 分支(596-600) |
 | F9 | 父代理共享 engine（`factory.go:530`） | **PASS** | `factory.go:530` `engine.NewAgentEngine(f.llmProvider, agentConfig)` |
 | F10 | `Session.run` select 输入/队列，同刻一 turn（session.go:255-292） | **PASS** | `session.go:255-292`，`processQueueItem`(294-311) 同步执行 |
@@ -52,9 +52,9 @@
 
 > 这些不是"设计写错"，而是"设计没写到但会实质影响实现"的事实：
 
-1. **工具结果缓存**：`AgentEngine` 有 `toolCache`（`agent_cache.go:83-120`，LRU + 5min TTL，key = toolName+args MD5）。`delegate_to_agent` 改变返回值形状后，**同 args 的旧缓存（裸字符串）会在 5 分钟内命中并注入父 LLM**——A 阶段灰度期会出现"部分调用返回信封、部分返回旧字符串"的混装。设计 §5.2 只 grep 了消费方，没考虑缓存。→ **B1**
+1. **工具结果缓存**：`AgentEngine` 有 `toolCache`（`agent_cache.go:83-120`，LRU + 5min TTL，key = toolName+args MD5）。`delegate_to_agent` 改变返回值形状后，**同 args 的旧缓存（裸字符串）会在 5 分钟内命中并注入父 LLM**——A 阶段灰度期会出现"部分调用返回信封、部分返回旧字符串"的混装。设计 §5.2 只 Grep 了消费方，没考虑缓存。→ **B1**
 2. **`SubagentManager.Close()` 目前只在 factory `CloseAll` 时被调**（`factory.go:787`），**逐 session 关闭（`CloseSession`）不会回收子代理**。设计 §7.2 第 5 点把 `Close` 改成 cancel map 全 cancel，但没说明**谁在 session 粒度触发**——若 `spawn_agent` 的子代理 goroutine 挂在 factory 级 manager 上，父 session 关了它还在跑（靠 watchdog 收尸）。→ **B2**
-3. **eventbus 的 `dino/bus.go` `Bus` 实例目前零使用方**（grep `NewBus()`/`GetGlobalBus()` 无业务调用），设计把它当"旁路可观测"载体其实是**从零开始建管线**，不是"复用现有"——工作量和验证成本比设计预期高一点。→ **R4**
+3. **eventbus 的 `dino/bus.go` `Bus` 实例目前零使用方**（Grep `NewBus()`/`GetGlobalBus()` 无业务调用），设计把它当"旁路可观测"载体其实是**从零开始建管线**，不是"复用现有"——工作量和验证成本比设计预期高一点。→ **R4**
 
 ---
 
@@ -84,11 +84,11 @@
 **R2. `DurationMS`/`Timestamp` 用 `time.Time`/`int64` 混排 + `Truncated` 用 `maxRunes`，字段语义要统一**
 设计 §3.1 自己已经指出了 `time.Duration` JSON 不友好并改成 `int64`（§3.1 注），但 `Timestamp time.Time`（RFC3339）与 `duration_ms int64` 混排会增加模型解析负担；`types.Usage` 有 json tag（`agent/types/llm.go:41-52`，可确认）。建议：`Timestamp` 也转 `unix_ms` 或 `omitempty`，`Truncated` 的 `maxRunes` 上限明确对齐 codex `COMPLETION_MESSAGE_MAX_TOKENS=1000`（`codex-rs/core/src/session_prefix.rs:10`，已核实）。
 
-**R3. `files_changed` 双路采集的成本被低估：结构化解析 (a) 依赖 prompt 引导的 LLM 自觉，程序化 (b) 依赖 tool_event 但**当前 `subagentImpl.Execute` 的 stream 循环只处理 `chunk` 和 `result` 两类**（`subagent.go:127-140`），补 `tool_event` 分支是实打实的新逻辑 + 键名兼容（`write_file`/`edit_file` 用 `path` 键，`fs/write.go:37` `fs/edit.go:36` 已核实）**
+**R3. `files_changed` 双路采集的成本被低估：结构化解析 (a) 依赖 prompt 引导的 LLM 自觉，程序化 (b) 依赖 tool_event 但**当前 `subagentImpl.Execute` 的 stream 循环只处理 `chunk` 和 `result` 两类**（`subagent.go:127-140`），补 `tool_event` 分支是实打实的新逻辑 + 键名兼容（`Write`/`Edit` 用 `path` 键，`fs/write.go:37` `fs/edit.go:36` 已核实）**
 证据：`subagent.go:131-139` 只 `switch result.Type` 到 `chunk` 且只检查 `result.Result != nil`；`streamToolCallback` 发 `tool_event`（`agent_execution.go:123-131`）；write/edit 的 path 键在 `agent/tools/builtin/fs/write.go:37`、`edit.go:36`。
-另注意：**bash 的 git 操作没有 path 键**，设计建议的启发式（git status 快照）自认本轮不做，那么 bash 改文件的场景 `files_changed` 会漏——需在 §9.1#4/#5 之外补一个"bash git 操作"测试或明确降级说明。
+另注意：**Bash 的 git 操作没有 path 键**，设计建议的启发式（git status 快照）自认本轮不做，那么 Bash 改文件的场景 `files_changed` 会漏——需在 §9.1#4/#5 之外补一个"Bash git 操作"测试或明确降级说明。
 
-**R4. "eventbus 作旁路可观测"在当前代码里是**从零建设**不是复用：`dino/bus.go` 的 `Bus`/`GetGlobalBus` 无任何业务使用方（grep 全仓），且 `dino/bus.go:122-127` 的 `GetGlobalBus` 单例 + `SetGlobalBus` 存在（`SetGlobalBus` 用 `globalBusOnce.Do(func(){})` 先占位再覆盖，有"先 New 后覆盖仍生效"的坑，`bus.go:129-132`）**
+**R4. "eventbus 作旁路可观测"在当前代码里是**从零建设**不是复用：`dino/bus.go` 的 `Bus`/`GetGlobalBus` 无任何业务使用方（Grep 全仓），且 `dino/bus.go:122-127` 的 `GetGlobalBus` 单例 + `SetGlobalBus` 存在（`SetGlobalBus` 用 `globalBusOnce.Do(func(){})` 先占位再覆盖，有"先 New 后覆盖仍生效"的坑，`bus.go:129-132`）**
 设计 §8.2 建议 `Bus.Publish("subagent.completed", ...)`，但没有指定**实例级 Bus 从哪来**（factory 没建）。建议：S3 里在 factory 显式构造一个实例级 `*Bus` 注入 notifier，并**不要碰 `GetGlobalBus` 单例**（多会话隔离，设计 §11 风险 5 自己写了这点）。`isSameHandler` 反注册失效（`eventbus.go:642-648`）对**本设计**影响有限（notifier 订阅者是长期存活、无需 Unslot），设计 §11 未提但结论方向一致——旁路订阅用 `Subscribe` 且不反注册即可。
 
 **R5. mailbox 挂 `SubagentManager`（factory 级、跨 session 共享）与 mailbox 按 sessionID 分桶自相矛盾——需要明确 mailbox 的生命周期/所有权**
@@ -134,11 +134,11 @@
 ### 正确性
 - 方案 A 确实解决"返回裸字符串无结构化信息"（现状问题 1）——通过信封 + `FormatToolResult` JSON 注入，机制经代码验证成立。
 - 方案 B 的"完成通知"在 B1 下是**降级语义**（落 mailbox，惰性消费，R6），要到 B2 才真正解决"父代理干等"（现状问题 2）。设计对 B1 的描述有轻微"营销化"（把"回发"写成已推送），评审按 R6 澄清。
-- 超时治理（现状问题 3）：**方向正确**。`executeToolWithTimeout` 已把 timeout ctx 传给 `tool.Execute`（`agent_tools.go:67`），LLM HTTP 层会中断（F16 验证）；"子代理内部 bash 等进程型工具不听 ctx"设计已自认残留（§7.3，`pkg/shell/shell.go:324` `runner.Run(ctx, line)`——mvdan interp 的 ctx cancel **会**停执行器循环，但外部子进程未必被 kill，属已知残留）。**根治程度判定：对 LLM token 烧录有效，对进程型工具有限**——设计措辞应把"根治"降级为"显著缓解"。上下文链路：`Session.executeWithInput` 的 `turnCtx`（`session.go:342`）→ `delegate_to_agent` 工具 ctx → 子代理 `Execute(ctx)` → engine `enrichContextWithConfig`（`agent_execution.go:428-442`）→ LLM。**链路完整**，B1 spawn 派生自父 session ctx 即可。
+- 超时治理（现状问题 3）：**方向正确**。`executeToolWithTimeout` 已把 timeout ctx 传给 `tool.Execute`（`agent_tools.go:67`），LLM HTTP 层会中断（F16 验证）；"子代理内部 Bash 等进程型工具不听 ctx"设计已自认残留（§7.3，`pkg/shell/shell.go:324` `runner.Run(ctx, line)`——mvdan interp 的 ctx cancel **会**停执行器循环，但外部子进程未必被 kill，属已知残留）。**根治程度判定：对 LLM token 烧录有效，对进程型工具有限**——设计措辞应把"根治"降级为"显著缓解"。上下文链路：`Session.executeWithInput` 的 `turnCtx`（`session.go:342`）→ `delegate_to_agent` 工具 ctx → 子代理 `Execute(ctx)` → engine `enrichContextWithConfig`（`agent_execution.go:428-442`）→ LLM。**链路完整**，B1 spawn 派生自父 session ctx 即可。
 
 ### 可行性 / 改动面
 - A 阶段改动面（§5.1 表）：`result.go` 增 + `subagent.go` 改 + `manager_subagent.go` 改 + `config.go` 加字段 + 测试——**与设计一致，可 S1 独立 commit**。唯一遗漏：**缓存（B1）**。
-- 接口签名：`SubagentTool.Execute` 返回 `*DelegateResult` 是唯一破坏性变更，设计已 grep 确认仓库内消费方仅 `manager_subagent.go:212` 自身 + `factory.go` 包装层（`delegateParentMemoryTool` 透传 `Execute`，`factory.go:227-240`）。**补充**：`dino/client.go:410` `onToolResult` 把 `ToolOutput`（`interface{}`）透传给 harness（`examples/dino/main.go:164` 用 `%v`/truncate 打印），信封 JSON 会让 UI 打印变长但**不崩溃**——属可接受的展示层变化，实现时看一眼。
+- 接口签名：`SubagentTool.Execute` 返回 `*DelegateResult` 是唯一破坏性变更，设计已 Grep 确认仓库内消费方仅 `manager_subagent.go:212` 自身 + `factory.go` 包装层（`delegateParentMemoryTool` 透传 `Execute`，`factory.go:227-240`）。**补充**：`dino/client.go:410` `onToolResult` 把 `ToolOutput`（`interface{}`）透传给 harness（`examples/dino/main.go:164` 用 `%v`/truncate 打印），信封 JSON 会让 UI 打印变长但**不崩溃**——属可接受的展示层变化，实现时看一眼。
 - 迁移顺序 S1→S5 每步独立可验证：**成立**（S2 单独验证需要手动设短超时观察 cancel，S1 全绿后可插队）。回滚：A 阶段破坏性变更回滚 = 恢复裸字符串返回 + 清缓存，成本低。
 
 ### 覆盖度

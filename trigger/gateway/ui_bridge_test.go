@@ -82,8 +82,8 @@ func TestRuntimeServerUIRequestsStream(t *testing.T) {
 		ID:        "req-1",
 		Kind:      approval.KindApproval,
 		SessionID: "session-1",
-		Title:     "Run bash?",
-		Payload:   json.RawMessage(`{"tool":"bash"}`),
+		Title:     "Run Bash?",
+		Payload:   json.RawMessage(`{"tool":"Bash"}`),
 	}
 	fakeBridge.requests <- sent
 

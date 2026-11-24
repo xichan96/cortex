@@ -32,7 +32,7 @@
 | FC-02 | `memory.go:62-84` `InMemory` 为 `SimpleMemoryProvider` 包装；`generateSummary`（`memory.go:179-184`）→ `DeterministicCompact` | struct `memory.go:62-70`、`NewInMemory` `72-84` ✓；`generateSummary` `179-184` 调 `DeterministicCompact(existing, messages, DefaultCompactConfig())` ✓ | **PASS** |
 | FC-03 | 压缩触发：`AddMessage` 计数超 `MemoryCompressThreshold` 后 `compressAsync`（`memory.go:98-102`） | `AddMessage` 在 `memory.go:86-105`，触发条件在 `98-102` ✓ | **PASS** |
 | FC-04 | `SQLite`（`sqlite.go:20-27`）；`Compress`（`287-313`）`DeterministicCompact("", old, ...)` → 删旧行 → `metadata.summary`；`GetSummary`（`275-285`）从 metadata 读 | struct `sqlite.go:20-27` ✓；`Compress` `287-313`、第 302 行 `DeterministicCompact("", old, DefaultCompactConfig())`、`304-306` 删旧行、`311` 写 metadata ✓；`GetSummary` `275-285` 读 metadata ✓ | **PASS** |
-| FC-05 | `Hybrid`（`memory.go:241-262`）已实现、**零调用方**；`NewHybrid(sessionID, provider, llmProvider, config)`；`Compress`（`309-359`）已有骨架：`KeepRecentCount` 尾部保留 + LLM 分支（`335-342`）+ `provider.Clear` + 尾部回写 | struct `241-249`、`NewHybrid` `251-262` ✓；`Compress` `309-359` ✓；LLM 分支 `334-342` ✓；`315-320` KeepRecentCount 保留、`326-332` 前次摘要前置、`348-357` Clear+回写 ✓。**零调用方确认**（全仓 grep 仅 `memory.go:251` 定义处）✓ | **PASS** |
+| FC-05 | `Hybrid`（`memory.go:241-262`）已实现、**零调用方**；`NewHybrid(sessionID, provider, llmProvider, config)`；`Compress`（`309-359`）已有骨架：`KeepRecentCount` 尾部保留 + LLM 分支（`335-342`）+ `provider.Clear` + 尾部回写 | struct `241-249`、`NewHybrid` `251-262` ✓；`Compress` `309-359` ✓；LLM 分支 `334-342` ✓；`315-320` KeepRecentCount 保留、`326-332` 前次摘要前置、`348-357` Clear+回写 ✓。**零调用方确认**（全仓 Grep 仅 `memory.go:251` 定义处）✓ | **PASS** |
 | FC-06 | `chatstore.LLMProvider`（`memory.go:237-239`）`GenerateSummary(ctx, messages) (string, error)`；`types.LLMProvider` **无此方法** | `memory.go:237-239` ✓；`types.LLMProvider`（`agent/types/llm.go:6-18`）仅 Chat/ChatWithTools/GetModelName 等，**无** `GenerateSummary` ✓ | **PASS** |
 | FC-07 | `NewHybrid` 签名 `(sessionID string, provider Provider, llmProvider LLMProvider, config *Config)`（`memory.go:251`）；缺省 config 兜底（`251-262`） | `memory.go:251` ✓；`252-254` nil config → `DefaultConfig()` ✓ | **PASS** |
 | FC-08 | §3.3：「`compressCtx` 已有预算（`agent_execution.go:732-738`：默认 `Timeout`，下限 2min）」 | `732-738` 实测：`dt := config.Timeout; if dt <= 0 { dt = 10*time.Minute } else if dt < 2*time.Minute { dt = 2*time.Minute }`。**默认是 10 分钟（`Timeout<=0` 时），不是「默认 Timeout」**；仅下限是 2min | **FAIL**（误读代码；对 R2 有实际影响，见下） |
@@ -111,7 +111,7 @@ FC-08：`compressCtx` 默认是 **10 分钟**（`agent_execution.go:733-734`：`
 **建议**：设计明示「`EnableLLMCompress` 时压缩统一由 engine 触发（A5 选项二）」，并把 `Hybrid.autoCompress`（`memory.go:381-389`）标注为预留/可删；若想保留 Hybrid 自触发，需要独立字段控制两层。
 
 ### R5 — `Stats.SummaryLength` 观测通道不存在
-设计在 §6.2/D6b 与 §9.3 反复以「可观测 `Stats.SummaryLength`」作为决策数据点，但 `GetStats` 全仓**无生产读点**（grep：`GetStats` 仅 queue/session 有消费，chatstore 的 `Stats` 无人调用），D6b 和「预算裁剪是否裁掉摘要」无从观测。
+设计在 §6.2/D6b 与 §9.3 反复以「可观测 `Stats.SummaryLength`」作为决策数据点，但 `GetStats` 全仓**无生产读点**（Grep：`GetStats` 仅 queue/session 有消费，chatstore 的 `Stats` 无人调用），D6b 和「预算裁剪是否裁掉摘要」无从观测。
 **建议**：在 `saveToMemoryAndMaybeCompress` 压缩成功后（`agent_execution.go:743`）或 `prepareMessages` 加一条 `SummaryLength`/注入次数日志（顺带可断言单注入，见 R6）。
 
 ### R6 — 步 1 验收缺「单一摘要注入」断言

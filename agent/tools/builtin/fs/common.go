@@ -177,3 +177,35 @@ func metadataFS(sourceNodeName string) types.ToolMetadata {
 		ToolType:       "fs",
 	}
 }
+
+// metadataFSNoCache marks a filesystem tool as uncacheable. Read resolves live
+// filesystem state, so a cached observation can only go stale after a write.
+func metadataFSNoCache(sourceNodeName string) types.ToolMetadata {
+	m := metadataFS(sourceNodeName)
+	m.Extra = map[string]interface{}{"no_cache": true}
+	return m
+}
+
+// metadataFSInvalidating marks a mutating filesystem tool: it is never cached
+// itself and its successful execution invalidates every cached tool result.
+func metadataFSInvalidating(sourceNodeName string) types.ToolMetadata {
+	m := metadataFS(sourceNodeName)
+	m.Extra = map[string]interface{}{
+		"no_cache":          true,
+		"invalidates_cache": true,
+	}
+	return m
+}
+
+// pathArg returns the file path argument, preferring the Claude-aligned
+// "file_path" key and falling back to the legacy "path" key for in-process
+// callers.
+func pathArg(input map[string]interface{}) string {
+	if p, ok := input["file_path"].(string); ok && p != "" {
+		return p
+	}
+	if p, ok := input["path"].(string); ok {
+		return p
+	}
+	return ""
+}

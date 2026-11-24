@@ -27,7 +27,7 @@
 | # | 设计引用 | 真实代码 | 判定 |
 |---|---|---|---|
 | F1 | `trimHistoryToTokenBudget`（`agent_execution.go:1187-1217`）「从尾部倒推、丢头部」 | `agent_execution.go:1187-1217` 确实从尾往头数 `for i := len(history)-1; i>=0; i--`，`start` 反推，返回 `history[start:]` | ✅ |
-| F2 | 唯一调用点 `agent_execution.go:1088`（`prepareMessages` 内） | grep 确认：仅 `agent_execution.go:1088` 一处 | ✅ |
+| F2 | 唯一调用点 `agent_execution.go:1088`（`prepareMessages` 内） | Grep 确认：仅 `agent_execution.go:1088` 一处 | ✅ |
 | F3 | 摘要 system 注入在 `prepareMessages` `1056-1067`，插 system 之后、history 之前 | `agent_execution.go:1053-1067`：类型断言探测 `GetSummary`，`append` system 摘要，位于 system（1046-1051）之后 | ✅ |
 | F4 | 预算契约 `MaxBudgetTokens`（`agent/types/agent.go:72`）+ `RemainPromptTokens`（`:73`）在 `prepareMessages` 计算 budgetCap | `agent_execution.go:1069-1086`；`agent.go:72-73` 字段确认 | ✅ |
 | F5 | `RoughTokensForMessage`（`agent/types/tokens.go:20-48`）不含 `Usage` 字段 | `tokens.go:20-48` 只估 `Content/Name/ToolCallID/Parts/ToolCalls` | ✅ |
@@ -35,7 +35,7 @@
 | F7 | 摘要注入（1056）早于 trim（1088），两条独立路径 | 顺序确认：`1056` 在 `1088` 之前，摘要不在 `history` 里 | ✅ |
 | F8 | `InMemory.compress`（`memory.go:142-167`）删旧消息（156-158），`DeterministicCompact`（179-184） | `memory.go:154-158`（recent/older 切分）、`179-184`（`generateSummary` 调 `DeterministicCompact`） | ✅ |
 | F9 | `SQLite.Compress`（`sqlite.go:287-313`）DELETE 旧行（304-306），summary 存 metadata `key='summary'`（311），`DeterministicCompact("", old)`（302） | `sqlite.go:287-313`：300（`old`）、302（`DeterministicCompact("", old, ...)`）、304-306（DELETE）、311（INSERT OR REPLACE metadata） | ✅ |
-| F10 | `Hybrid` 零调用方 | `grep NewHybrid`：仅 `memory.go:251` 定义，无任何非测试调用 | ✅ |
+| F10 | `Hybrid` 零调用方 | `Grep NewHybrid`：仅 `memory.go:251` 定义，无任何非测试调用 | ✅ |
 | F11 | `Hybrid.GetMessages`（`memory.go:282-301`）头部注入 `append([]Message{summaryMsg}, messages...)` | `memory.go:292-298` | ✅ |
 | F12 | `memoryAdapter.GetSummary` 转发（`dino/factory.go:170-172`）；InMemory/SQLite 都实现 `GetSummary`（`memory.go:111-115`、`sqlite.go:275-285`） | 全部确认 | ✅ |
 | F13 | `langchain_memory.go:167-254`（`CompressMemory`）第三条压缩路径，summary 包 system 放头部（74-81） | `CompressMemory` 167-254；`GetMessages` 74-81 包 `Previous conversation summary:` system 消息 | ✅ |
@@ -46,7 +46,7 @@
 | F18 | `Enabled=false` 时请求体字节级不变（`anthropic_native.go:531-536`） | 531-536 注释 + `534` 条件注入 | ✅ |
 | F19 | `TestPrepareMessages_SummaryInjection`（`agent_test.go:441-471`）断言摘要 system 在 msgs[1] | `441-471`：`msgs[1].Role == "system"` + `Previous conversation summary:` | ✅ |
 | F20 | dino `EnableCompress` 默认 true；`MaxBudgetTokens` 默认 0 | `dino/config.go:217`（`EnableCompress: true`）；`NewAgentConfig`（`agent.go:112-146`）未设 `MaxBudgetTokens`→零值 0 | ✅ |
-| F21 | `agent/engine → dino` 依赖方向现状 | `grep` 确认 agent/engine、agent/llm、agent/types 均不 import `xichan96/cortex/dino` | ✅（**支撑 BLOCKER-1**） |
+| F21 | `agent/engine → dino` 依赖方向现状 | `Grep` 确认 agent/engine、agent/llm、agent/types 均不 import `xichan96/cortex/dino` | ✅（**支撑 BLOCKER-1**） |
 | F22 | §1.3 称摘要注入在 `1024-1103` 顺序列表 | `prepareMessages` 实为 `1024-1103`（行号吻合）；但设计 §1.3 编号括号内行号「1046-1051」「1056-1067」「1088」「1090」均准确 | ✅ |
 
 ### 1.2 文档引用（prompt-caching.md / next-round.md / codex 评估）

@@ -559,7 +559,15 @@ type dinoFactory struct {
 	sessionDiscoveredTools map[string][]string
 
 	// sessionTracers 每 session 一个 trace recorder（context-trace），
-	// Trace.Enabled 时构造。CloseSession 时 Close（drain + fsync）。
+	// Trace.Enabled 时构造。CloseSession/Shutdown 时 Close（drain + fsync）。
+	//
+	// traceMu 是叶子锁：只保护 sessionTracers，持有时绝不获取 f.mu。
+	// 加锁顺序固定为 f.mu → traceMu（CreateSession/CloseSession/CloseAll/
+	// Shutdown 都先持 f.mu）；绝不能反向加锁。CreateSession 全程持有 f.mu，
+	// 因此写 map 只能用 traceMu —— 此前在这里再次 Lock(f.mu) 造成同 goroutine
+	// 对 sync.RWMutex 二次加锁的自死锁（Trace.Enabled=true 时 CreateSession 永久阻塞）。
+	// Close（drain + fsync）在 traceMu 之外执行，避免拖住其它 trace 读写路径。
+	traceMu        sync.Mutex
 	sessionTracers map[string]hooks.Tracer
 
 	// —— Transcript 实时双写（P5-A）——
@@ -1109,6 +1117,11 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	// context-trace（S3 接线）：Trace.Enabled 时构造 session recorder + 注入引擎
 	// + 订阅 session 编排事件。recorder 生命周期绑定 CloseSession/Shutdown。
 	// NewRecorder 失败（磁盘不可写）→ 记日志 + 降级为 Disabled（不阻断会话）。
+	//
+	// 锁边界：CreateSession 全程持有 f.mu，所以这里绝不能再取 f.mu 写 map；
+	// sessionTracers 由叶子锁 traceMu 保护。traceRec 同时留在本地变量里，
+	// 供后面订阅编排事件时使用（不再回读 map）。
+	var traceRec hooks.Tracer
 	if f.config.Trace.Enabled {
 		traceCfg := dinoTrace.DefaultConfig()
 		traceCfg.Dir = f.config.Trace.Dir
@@ -1128,9 +1141,10 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 			logger.Warn("[DinoFactory] Trace enabled but recorder failed; disabling", slog.String("error", err.Error()))
 		} else {
 			agent.SetTracer(rec)
-			f.mu.Lock()
+			traceRec = rec
+			f.traceMu.Lock()
 			f.sessionTracers[sessionID] = rec
-			f.mu.Unlock()
+			f.traceMu.Unlock()
 			// context-trace（评审 B3）：同步给 subagent manager，子代理事件落父 session trace。
 			if f.subagentManager != nil {
 				f.subagentManager.SetSessionTracer(sessionID, rec)
@@ -1392,13 +1406,14 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 
 	// context-trace: orchestration events (planner/approval/question/subagent)
 	// flow to the recorder via the session observer (design §3.3).
-	// CreateSession already holds f.mu (write lock), so read the map directly.
-	if rec, ok := f.sessionTracers[sessionID]; ok {
+	// Uses the locally captured recorder: the map is guarded by traceMu (leaf),
+	// not by f.mu, so it must not be read directly under f.mu.
+	if traceRec != nil {
 		sess.Subscribe(session.ObserverFunc(func(ev *session.Event) {
 			if ev == nil {
 				return
 			}
-			rec.Record(hooks.TraceEvent{Type: dinoTrace.EventOrchestration, Payload: ev})
+			traceRec.Record(hooks.TraceEvent{Type: dinoTrace.EventOrchestration, Payload: ev})
 		}))
 	}
 
@@ -1487,9 +1502,13 @@ func (f *dinoFactory) CloseSession(sessionID string) {
 	delete(f.sessionDiscoveredTools, sessionID)
 	f.discoverMu.Unlock()
 	// context-trace：recorder 生命周期绑 CloseSession（drain + fsync + close）。
-	if tr, exists := f.sessionTracers[sessionID]; exists {
+	// traceMu 只做 map 摘除；Close 在锁外执行（fsync 可能慢），顺序仍是 f.mu → traceMu。
+	f.traceMu.Lock()
+	tr := f.sessionTracers[sessionID]
+	delete(f.sessionTracers, sessionID)
+	f.traceMu.Unlock()
+	if tr != nil {
 		_ = tr.Close()
-		delete(f.sessionTracers, sessionID)
 	}
 	// S3/B1 铺路（评审 B2 BLOCKER）：释放该 session 派生的所有子代理 cancel。
 	// S1 阶段无 spawn，此钩子是接口预留；S3 spawn_agent 落地后生效。
@@ -1521,10 +1540,14 @@ func (f *dinoFactory) CloseAll() {
 	f.sessionDeferredTools = make(map[string]map[string]types.Tool)
 	f.sessionDiscoveredTools = make(map[string][]string)
 	f.discoverMu.Unlock()
-	// context-trace：全部 recorder 一并关闭。
-	for sid, tr := range f.sessionTracers {
+	// context-trace：全部 recorder 一并关闭。先在 traceMu 下整体摘除，
+	// 锁外再 drain + fsync + close。
+	f.traceMu.Lock()
+	tracers := f.sessionTracers
+	f.sessionTracers = make(map[string]hooks.Tracer)
+	f.traceMu.Unlock()
+	for _, tr := range tracers {
 		_ = tr.Close()
-		delete(f.sessionTracers, sid)
 	}
 	// Transcript 实时双写：全部 writer flush + fsync + 关闭。
 	f.stopAllLiveTranscripts()
@@ -1698,7 +1721,7 @@ func (f *dinoFactory) discoverTool(ctx context.Context, sessionID, name string, 
 
 func wrapWorkspacePathTools(t types.Tool, workspaceRoot, sessionID string, store *ApprovalStore, extraRoots []string) types.Tool {
 	switch t.Name() {
-	case "read_file", "write_file", "edit_file", "list_directory", "glob", "grep":
+	case "Read", "Write", "Edit", "Glob", "Grep":
 		return NewExternalPathApprovalTool(t, workspaceRoot, sessionID, store, extraRoots...)
 	default:
 		return t
@@ -1725,6 +1748,17 @@ func (f *dinoFactory) Shutdown(ctx context.Context) error {
 		f.stopAllLiveTranscripts()
 		// P7-A：source-of-truth log 同样 sync 后关闭。
 		f.stopAllTranscriptSources()
+
+		// context-trace：Shutdown 也必须 drain + fsync + close 掉 recorder，
+		// 否则进程退出会丢掉队列里最后一批事件。与 CloseAll 相同：先在
+		// traceMu 下整体摘除，锁外关闭（顺序仍为 f.mu → traceMu）。
+		f.traceMu.Lock()
+		tracers := f.sessionTracers
+		f.sessionTracers = make(map[string]hooks.Tracer)
+		f.traceMu.Unlock()
+		for _, tr := range tracers {
+			_ = tr.Close()
+		}
 
 		if resettable, ok := f.budget.(interface{ ResetAll() }); ok {
 			resettable.ResetAll()
@@ -1764,7 +1798,6 @@ func loadBuiltinTools(reg *dinoTools.Registry, workspace string) error {
 		dinoTools.NewBashTool(workspace),
 		dinoTools.NewGlobTool(workspace),
 		dinoTools.NewGrepTool(workspace),
-		dinoTools.NewListDirectoryTool(workspace),
 		dinoTools.NewQuestionTool(),
 		dinoTools.NewJobKillTool(),
 		dinoTools.NewJobOutputTool(),

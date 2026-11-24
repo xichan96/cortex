@@ -38,14 +38,14 @@ var memoryActions = []string{
 }
 
 type sqliteMemoryTool struct {
-	sessionID            string
-	userID               string // user 全局合并的 uid；空 = 回退 sessionID（per-session）
-	mgr                  memkit.Manager
-	name                 string
-	writeTag             string
-	description          string
-	exposeSearchIndexes  bool
-	hideInternalActions  bool
+	sessionID           string
+	userID              string // user 全局合并的 uid；空 = 回退 sessionID（per-session）
+	mgr                 memkit.Manager
+	name                string
+	writeTag            string
+	description         string
+	exposeSearchIndexes bool
+	hideInternalActions bool
 }
 
 func newSQLiteMemoryTool(sessionID string, mgr memkit.Manager, name, writeTag, description string, exposeSearchIndexes, hideInternalActions bool) types.Tool {
@@ -102,9 +102,9 @@ func (t *sqliteMemoryTool) Schema() map[string]interface{} {
 			// E6（tools-codex-eval §6.3）：模型诚实标注来源是否外部上下文
 			// （web 搜索/抓取、MCP）。标注后 user/feedback 类拒绝、reference 类接受。
 			"external_context": map[string]interface{}{"type": "boolean", "description": "For add_knowledge: true if this fact comes from an external source (web search/fetch, MCP call), not the local conversation. External facts may only be stored as category 'reference'."},
-			"query": map[string]interface{}{"type": "string"},
-			"limit": map[string]interface{}{"type": "integer"},
-			"id":    map[string]interface{}{"type": "string", "description": "For forget_knowledge: the id returned by search_knowledge."},
+			"query":            map[string]interface{}{"type": "string"},
+			"limit":            map[string]interface{}{"type": "integer"},
+			"id":               map[string]interface{}{"type": "string", "description": "For forget_knowledge: the id returned by search_knowledge."},
 		},
 		"required": []string{"action"},
 	}
@@ -220,7 +220,7 @@ func tagsFromInput(in map[string]interface{}) []string {
 // 前缀，评审 R5），但保留前缀匹配以兼容未来名空间化。
 func ExternalContextTool(name string) bool {
 	switch {
-	case name == "web_search" || name == "web_fetch":
+	case name == "WebSearch" || name == "WebFetch":
 		return true
 	case strings.HasPrefix(name, "mcp://"):
 		return true

@@ -413,7 +413,7 @@ func (d *DockerClient) LogContainerStream(ctx context.Context, log ContainerLog)
 
 func (d *DockerClient) TerminalContainer(ctx context.Context, tty *ContainerTerminal) (chan []byte, error) {
 	exportShell := fmt.Sprintf("TERM=xterm-256color; export TERM;  COLUMNS=%d; export COLUMNS;LINES=%d;export LINES;", tty.Cols, tty.Rows)
-	cmdShell := "[ -x /bin/bash ] && ([ -x /usr/bin/script ] && /usr/bin/script -q -c \"/bin/bash\" /dev/null || exec /bin/bash) || exec /bin/sh"
+	cmdShell := "[ -x /bin/Bash ] && ([ -x /usr/bin/script ] && /usr/bin/script -q -c \"/bin/Bash\" /dev/null || exec /bin/Bash) || exec /bin/sh"
 	for _, env := range tty.Env {
 		exportShell += fmt.Sprintf("export %s;", env)
 	}

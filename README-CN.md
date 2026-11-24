@@ -40,7 +40,7 @@ CORTEX 旨在融合轻量级框架的易用性与 Go 语言的稳健性能。它
 - **智能代理引擎**：核心引擎支持复杂的工具调用与逻辑推理，轻松构建智能 Agent。
 - **广泛的 LLM 支持**：深度集成 OpenAI、DeepSeek、火山引擎 (Volce) 等主流模型，并支持自定义 Provider。
 - **多模态交互**：原生支持文本、图像等多模态数据的处理与交互。
-- **动态技能 (Skills)**：基于文件系统的技能与懒加载；YAML 头可配置 `paths`、`when_to_use`、`allowed_tools`，支持路径 glob（`doublestar`）过滤，加载器可选解析符号链接与按真实路径去重。
+- **动态技能 (Skills)**：基于文件系统的技能与懒加载；YAML 头可配置 `paths`、`when_to_use`、`allowed_tools`，支持路径 Glob（`doublestar`）过滤，加载器可选解析符号链接与按真实路径去重。
 - **开放工具生态**：`agent/tools/builtin` 覆盖文件、搜索、Shell/后台任务、网络与 Web、Docker、邮件、数学及 `mcp_client`；可自注册工具扩展。
 - **实时流式响应**：全链路支持流式 (Streaming) 传输，为交互式应用提供丝滑的用户体验。
 - **混合记忆架构**：“全量记录 + 滚动摘要”，异步压缩经互斥与按轮计数（`CompactAfterTurns`）避免重叠；组 prompt 时可按粗略 Token 预算裁剪近期对话（`MaxBudgetTokens`、`RemainPromptTokens`）；Provider 可实现廉价 `StoredMessageCount` 辅助门控。支持 LangChain、MongoDB、Redis、MySQL 及 SQLite。
@@ -83,7 +83,7 @@ cortex/
 
 ### 安装
 
-```bash
+```Bash
 go get github.com/xichan96/cortex
 ```
 
@@ -134,7 +134,7 @@ func main() {
 
 Cortex 提供了开箱即用的 HTTP 服务，支持通过配置文件快速启动：
 
-```bash
+```Bash
 # 使用默认配置 cortex.yaml 启动
 go run cortex.go
 
@@ -189,7 +189,7 @@ llmProvider, _ := llm.VolceClient("ak-...", "doubao-pro-32k")
 
 - `Config.Tools`：`Allowed` / `Denied` / `ApprovalRequired` 控制面；`ToolTimeouts` 与 `ToolTimeoutCalculator` 按工具与入参细化超时。
 - `defined_tool`：`DefinedTool`、`ToolContext`、审批存储（危险操作可阻塞至人工确认）。
-- 内置工具覆盖读写编辑文件、`glob`/`grep`、`bash`、`list_directory` 等；可接 MCP 与基于目录的 Skills（`cfg.Skills`）。
+- 内置工具覆盖读写编辑文件、`Grep`/`Glob`、`Bash`、`WebFetch`/`WebSearch` 等；可接 MCP 与基于目录的 Skills（`cfg.Skills`）。
 
 ### 资源与稳定性
 
@@ -201,7 +201,7 @@ llmProvider, _ := llm.VolceClient("ak-...", "doubao-pro-32k")
 
 ### 最小用法
 
-```bash
+```Bash
 go get github.com/xichan96/cortex/dino
 ```
 
@@ -246,12 +246,12 @@ func main() {
 
 | 目录 | 工具名 |
 |------|--------|
-| `fs/` | `read_file`、`write_file`、`edit_file`、`file` |
-| `search/` | `glob`、`grep`、`codesearch`（当前为占位实现） |
+| `fs/` | `Read`、`Write`、`Edit`、`file` |
+| `search/` | `Glob`、`Grep`、`codesearch`（当前为占位实现） |
 | `runtime/` | `command`（本地 Shell）、`question`（向用户澄清）、`job_kill`、`job_output`（后台命令任务） |
 | `task/` | `todo`（进程内任务：ID、pending / in_progress / completed / cancelled，支持列出与更新） |
 | `net/` | `ssh`、`net_check`（连通性检测） |
-| `web/` | `web_search`、`web_fetch` |
+| `web/` | `WebSearch`、`WebFetch` |
 | `system/` | `get_time`、`http_request` |
 | `email/` | `send_email` |
 | `math/` | `math_calculate` |
@@ -280,7 +280,7 @@ Cortex 实现了一套独特的**基于文件系统的技能系统**，允许您
 ### 工作原理
 
 1.  **定义**：在技能目录中创建 `SKILL.md` 文件（例如 `./skills/my-skill/SKILL.md`）。
-2.  **描述**：使用 Markdown 描述任务并提供可执行示例（如 `curl`、SQL）。可选 YAML 头可写 `name`、`description`、`paths`（适用路径 glob）、`when_to_use`、`allowed_tools`；按当前激活路径过滤后，仅匹配技能会合并进系统提示。
+2.  **描述**：使用 Markdown 描述任务并提供可执行示例（如 `curl`、SQL）。可选 YAML 头可写 `name`、`description`、`paths`（适用路径 Glob）、`when_to_use`、`allowed_tools`；按当前激活路径过滤后，仅匹配技能会合并进系统提示。
 3.  **发现**：扫描技能目录（可选解析符号链接、按真实路径去重）并注入适用技能。
 4.  **执行**：Agent 按 `SKILL.md` 指引完成任务。
 
@@ -296,7 +296,7 @@ description: Get current weather using command line tools.
 
 To check the weather, use `curl` with wttr.in:
 
-```bash
+```Bash
 curl -s "wttr.in/New+York?format=3"
 ```
 ````
