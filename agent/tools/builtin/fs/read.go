@@ -69,19 +69,10 @@ func (t *ReadTool) Execute(ctx context.Context, input map[string]interface{}) (i
 		return nil, err
 	}
 	if info.IsDir() {
-		files, err := os.ReadDir(safePath)
-		if err != nil {
-			return nil, err
-		}
-		var names []string
-		for _, f := range files {
-			if f.IsDir() {
-				names = append(names, f.Name()+"/")
-			} else {
-				names = append(names, f.Name())
-			}
-		}
-		return fmt.Sprintf("Directory listing for %s:\n%s", path, strings.Join(names, "\n")), nil
+		// Align with Claude Code's Read: directories are not files. Returning a
+		// listing here makes the model treat Read as a directory-listing tool
+		// and burn calls; point it at Glob instead.
+		return nil, fmt.Errorf("Read only reads files: %s is a directory. Use Glob to list directory entries.", path)
 	}
 	content, err := os.ReadFile(safePath)
 	if err != nil {

@@ -1,4 +1,4 @@
-- Finds files by Glob pattern. Use this instead of Bash `find`/`ls` when you know part of the path or extension.
+- Finds files by glob pattern. Use this instead of Bash `find`/`ls` when you know part of the path or extension.
 - Returns one matching file path per line, relative to the workspace root. Directories are not included.
 - Supports `**` for recursive matches, e.g. `internal/**/*.go` or `**/*.ts`.
 - Respects .gitignore and skips common noise directories (vendor, node_modules, .git, build output).
