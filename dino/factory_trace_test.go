@@ -190,7 +190,7 @@ func TestTraceDisabledCreatesNoRecorder(t *testing.T) {
 	}
 	matches, err := filepath.Glob(filepath.Join(dir, "trace-*.jsonl"))
 	if err != nil {
-		t.Fatalf("glob trace files: %v", err)
+		t.Fatalf("Glob trace files: %v", err)
 	}
 	if len(matches) != 0 {
 		t.Errorf("Trace.Enabled=false but trace files exist: %v", matches)

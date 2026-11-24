@@ -62,9 +62,9 @@ func sandboxOutput(t *testing.T, res interface{}) map[string]interface{} {
 func TestSandboxToolBashEcho(t *testing.T) {
 	requireSandboxShell(t)
 	sb := newSandboxToolHost(t, sandbox.HostOptions{Root: t.TempDir()})
-	wrapped, ok := WrapToolWithSandbox(&stubSandboxTool{name: "bash"}, sb)
+	wrapped, ok := WrapToolWithSandbox(&stubSandboxTool{name: "Bash"}, sb)
 	if !ok {
-		t.Fatal("WrapToolWithSandbox(bash) = false")
+		t.Fatal("WrapToolWithSandbox(Bash) = false")
 	}
 	res, err := wrapped.Execute(context.Background(), map[string]interface{}{"command": "echo hello"})
 	if err != nil {
@@ -175,19 +175,11 @@ func TestSandboxToolReadWriteList(t *testing.T) {
 		t.Fatalf("window = %q, want line 2 plus continuation hint", res)
 	}
 
-	listTool, ok := WrapToolWithSandbox(&stubSandboxTool{name: "list_directory"}, sb)
-	if !ok {
-		t.Fatal("WrapToolWithSandbox(list_directory) = false")
-	}
-	res, err = listTool.Execute(context.Background(), map[string]interface{}{"path": "nested"})
+	entries, err := sandboxListNames(context.Background(), sb, "nested")
 	if err != nil {
-		t.Fatalf("list_directory: %v", err)
+		t.Fatalf("sandboxListNames: %v", err)
 	}
-	entries, ok := res.([]map[string]interface{})
-	if !ok {
-		t.Fatalf("list result type = %T", res)
-	}
-	if len(entries) != 1 || entries[0]["name"] != "hello.txt" || entries[0]["is_dir"] != false {
+	if len(entries) != 1 || entries[0] != "hello.txt" {
 		t.Fatalf("entries = %+v", entries)
 	}
 }
@@ -209,8 +201,7 @@ func TestSandboxToolRejectsEscapes(t *testing.T) {
 		t.Fatalf("write escape error = %v, want ErrPathEscape", err)
 	}
 
-	listTool := NewSandboxedListDirectoryTool(nil, sb)
-	if _, err := listTool.Execute(context.Background(), map[string]interface{}{"path": ".."}); !errors.Is(err, sandbox.ErrPathEscape) {
+	if _, err := sandboxListNames(context.Background(), sb, ".."); !errors.Is(err, sandbox.ErrPathEscape) {
 		t.Fatalf("list escape error = %v, want ErrPathEscape", err)
 	}
 }
@@ -258,10 +249,10 @@ func TestSandboxToolTruncationPassThrough(t *testing.T) {
 
 func TestWrapToolWithSandboxUnknownTool(t *testing.T) {
 	sb := newSandboxToolHost(t, sandbox.HostOptions{Root: t.TempDir()})
-	original := &stubSandboxTool{name: "web_search", desc: "search"}
+	original := &stubSandboxTool{name: "WebSearch", desc: "search"}
 	got, ok := WrapToolWithSandbox(original, sb)
 	if ok {
-		t.Fatal("WrapToolWithSandbox(web_search) = true, want false")
+		t.Fatal("WrapToolWithSandbox(WebSearch) = true, want false")
 	}
 	if got != original {
 		t.Fatal("unknown tool was replaced")
@@ -305,10 +296,9 @@ func TestSandboxToolFallbackNameAndSchema(t *testing.T) {
 		tool types.Tool
 		name string
 	}{
-		{NewSandboxedBashTool(nil, sb), "bash"},
+		{NewSandboxedBashTool(nil, sb), "Bash"},
 		{NewSandboxedReadFileTool(nil, sb), "Read"},
 		{NewSandboxedWriteFileTool(nil, sb), "Write"},
-		{NewSandboxedListDirectoryTool(nil, sb), "list_directory"},
 	}
 	for _, tc := range cases {
 		if got := tc.tool.Name(); got != tc.name {
@@ -328,7 +318,6 @@ func TestSandboxToolRequiresBackend(t *testing.T) {
 		NewSandboxedBashTool(nil, nil),
 		NewSandboxedReadFileTool(nil, nil),
 		NewSandboxedWriteFileTool(nil, nil),
-		NewSandboxedListDirectoryTool(nil, nil),
 	}
 	for _, tool := range tools {
 		if _, err := tool.Execute(context.Background(), map[string]interface{}{"path": "x", "command": "x", "content": "x"}); err == nil {

@@ -630,6 +630,6 @@ func NewSession(id string, agent *engine.AgentEngine, factory SessionFactory, ct
 1. **P2.3 最终确认**：本设计按"新工具族"定稿。若改判"扩 delegate schema"，影响面见 §11。
 2. **B2 是否需要 product 层开关**：`NotifyCompletion: true` 已存在（`config.go:248`），但"父代理自动醒来"是否要独立开关（如 `wake_on_completion`，默认 false → true 灰度）？默认开还是默认关需拍板。
 3. **mailbox cap / TTL 默认值**：cap 64 / TTL 0（session 生命周期内不过期）是否合理？`review-subagent.md` 建议 TTL 跟随 session 生命周期，本设计默认不开 TTL，可再确认。
-4. **`Event.Source` 字段**：新增字段是否会被现有 UI/harness 消费方破坏（默认 `user`，向后兼容）？需 grep 消费方。
+4. **`Event.Source` 字段**：新增字段是否会被现有 UI/harness 消费方破坏（默认 `user`，向后兼容）？需 Grep 消费方。
 5. **queue 模式下唤醒行为**（§7.4）：默认不特殊处理（随机、可重入），是否需要显式"queue 模式禁用唤醒"配置？
 6. **`model` 覆盖**：S3 仅支持继承；是否需要 S3 就支持 provider 切换（额外工作量）。

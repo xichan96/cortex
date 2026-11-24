@@ -36,13 +36,13 @@ func (t *FileTool) Schema() map[string]interface{} {
 			"type":        "string",
 			"description": "File operation type",
 			"enum": []string{
-				"read_file", "write_file", "append_file", "create_dir",
+				"Read", "Write", "append_file", "create_dir",
 				"delete_file", "delete_dir", "list_dir", "exists",
 				"copy", "move", "is_file", "is_dir",
 			},
 		},
 		"path":        map[string]interface{}{"type": "string", "description": "File or directory path"},
-		"content":     map[string]interface{}{"type": "string", "description": "File content (required for write_file and append_file)"},
+		"content":     map[string]interface{}{"type": "string", "description": "File content (required for Write and append_file)"},
 		"target_path": map[string]interface{}{"type": "string", "description": "Target path (required for copy and move operations)"},
 	}, []string{"operation", "path"})
 }
@@ -64,7 +64,7 @@ func (t *FileTool) Execute(ctx context.Context, input map[string]interface{}) (i
 		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(err)
 	}
 	switch operation {
-	case "read_file":
+	case "Read":
 		data, err := t.file.ReadFile(ctx, safePath)
 		if err != nil {
 			return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(fmt.Errorf("failed to read file: %w", err))
@@ -74,10 +74,10 @@ func (t *FileTool) Execute(ctx context.Context, input map[string]interface{}) (i
 			"size":    len(data),
 		}, nil
 
-	case "write_file":
+	case "Write":
 		content, ok := input["content"].(string)
 		if !ok {
-			return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("'content' parameter is required for write_file operation"))
+			return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("'content' parameter is required for Write operation"))
 		}
 		err := t.file.WriteFile(ctx, safePath, []byte(content))
 		if err != nil {

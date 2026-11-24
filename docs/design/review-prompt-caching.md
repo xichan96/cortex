@@ -22,7 +22,7 @@
 | # | 设计断言 | 核实结果 | 证据 |
 |---|---|---|---|
 | F1 | `agent/types/llm.go:41-47` 的 `Usage` 定义 | **PASS**（行号精确） | `agent/types/llm.go:41-47` |
-| F2 | `CachedTokens`（`llm.go:46`）与 `ReasoningTokens`（`llm.go:45`）全仓无任何写点 | **PASS** | `grep CachedTokens\|ReasoningTokens` 仅命中 `llm.go` 定义处 |
+| F2 | `CachedTokens`（`llm.go:46`）与 `ReasoningTokens`（`llm.go:45`）全仓无任何写点 | **PASS** | `Grep CachedTokens\|ReasoningTokens` 仅命中 `llm.go` 定义处 |
 | F3 | `anthropicRequest`（`anthropic_native.go:28-35`）无 cache_control 字段 | **PASS**（行号 28-35 精确） | `anthropic_native.go:28-35` |
 | F4 | `anthropicContentBlock`（`42-50`）、`anthropicTool`（`52-56`）无 cache_control | **PASS** | `anthropic_native.go:42-50,52-56` |
 | F5 | `buildRequest` 在 `351-462`，system 拼接 string（`355-363`） | **PASS**（行号精确；355-363 为 system 拼接段） | `anthropic_native.go:351-462`，system 拼接实际在 355-363 |
@@ -132,7 +132,7 @@
 ### R4 · `dino/factory.go` 从不调用 `SetConfig`——Step 2 的透传依赖点要写清
 
 - **位置**：§5.1（`prompt-caching.md:457-465`）写的「engine 在 `SetConfig` 里透传」在 dino 路径**不成立**。
-- **事实**：`dino/factory.go:530` 用 `engine.NewAgentEngine(f.llmProvider, agentConfig)` 构造，`NewAgentEngine`（`agent.go:107`）只在构造时把 config 存进 `ae.config`，**全程没有 `SetConfig` 调用**（`grep SetConfig` 在非 vendor 代码里零命中，除了 `agent_config.go` 自身定义）。
+- **事实**：`dino/factory.go:530` 用 `engine.NewAgentEngine(f.llmProvider, agentConfig)` 构造，`NewAgentEngine`（`agent.go:107`）只在构造时把 config 存进 `ae.config`，**全程没有 `SetConfig` 调用**（`Grep SetConfig` 在非 vendor 代码里零命中，除了 `agent_config.go` 自身定义）。
 - **影响**：Step 2 若只改 `SetConfig`，dino 默认路径**永远不触发透传**，缓存默认开启就成了空话。修法二选一：(a) 在 `NewAgentEngine` 里同时做 provider 断言透传（推荐，构造即生效）；(b) dino `factory.go` 构造后显式调用 `agent.SetConfig` 或直接对 provider 调 setter。
 
 ### R5 · `repairLLMMessageToolOrdering` 并非「仅在 trim/压缩后修复」——会无条件改头部
@@ -226,7 +226,7 @@
 | `input_tokens` 不含缓存 | claude-api skill `shared/prompt-caching.md`「`input_tokens` is the uncached remainder only. Total = input_tokens + cache_creation + cache_read」 |
 | 渲染顺序 tools→system→messages | claude-api skill `shared/prompt-caching.md`「Render order is: tools → system → messages」 |
 | 最小缓存阈值按模型 | claude-api skill `shared/prompt-caching.md` 表格（Opus 4.8 4096 / Sonnet 4.6 2048 / Sonnet 4.5 1024） |
-| `factory.go` 不调 `SetConfig` | `dino/factory.go:491-530`（`engine.NewAgentEngine(f.llmProvider, agentConfig)`，无 `SetConfig`）；`agent/engine/agent_config.go:124` 定义；非 vendor `grep .SetConfig(` 零命中 |
+| `factory.go` 不调 `SetConfig` | `dino/factory.go:491-530`（`engine.NewAgentEngine(f.llmProvider, agentConfig)`，无 `SetConfig`）；`agent/engine/agent_config.go:124` 定义；非 vendor `Grep .SetConfig(` 零命中 |
 | 遗漏的 usage 累加点 | `agent/engine/langchain_engine.go:109-111,129-131,169-171` |
 | `repairLLMMessageToolOrdering` 无条件执行 | `agent_execution.go:890` |
 | `extractUsage` token_usage 分支提前 return | `agent/providers/langchain_llm.go:437-467`（`token_usage` 命中即 `return usage`） |

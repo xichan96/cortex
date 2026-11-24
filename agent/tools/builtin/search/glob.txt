@@ -1,5 +1,8 @@
-- Finds files and directories matching a specified pattern.
-- This is useful for discovering files when you know part of the name or extension.
+- Finds files by Glob pattern. Use this instead of Bash `find`/`ls` when you know part of the path or extension.
+- Returns one matching file path per line, relative to the workspace root. Directories are not included.
+- Supports `**` for recursive matches, e.g. `internal/**/*.go` or `**/*.ts`.
+- Respects .gitignore and skips common noise directories (vendor, node_modules, .git, build output).
 
 Usage notes:
-  - Requires a `pattern` to match against file paths (e.g., 'internal/**/*.go').
+  - `pattern` is required.
+  - `path` optionally sets the directory to search in (defaults to the workspace root).

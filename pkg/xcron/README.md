@@ -17,7 +17,7 @@
 
 ## Installation
 
-```bash
+```Bash
 go get github.com/xichan96/cortex/xcron
 ```
 
@@ -112,6 +112,6 @@ scheduler.SetLocker(myRedisLocker)
 ## Testing
 
 Run unit tests:
-```bash
+```Bash
 go test -v ./xcron/...
 ```

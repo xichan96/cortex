@@ -47,12 +47,12 @@
 
 ---
 
-## 1. 现状盘点（grep 证据）
+## 1. 现状盘点（Grep 证据）
 
 ### 1.1 无任何 trace / rollout / 事件日志
 
 ```
-$ grep -rn "rollout\|TraceEvent\|trace-replay\|jsonl\|RolloutWriter" --include="*.go" --include="*.md" .
+$ Grep -rn "rollout\|TraceEvent\|trace-replay\|jsonl\|RolloutWriter" --include="*.go" --include="*.md" .
 # 命中全部是评估报告 / 设计文档里的"Codex 侧"描述，无一个 cortex 实现符号
 ```
 
@@ -476,7 +476,7 @@ go run ./cmd/trace-replay --dir <trace_dir> --session <session_id> [--trace <tra
   · model: gpt-4o · input_est=8.2k tok
   · llm_call (iter 0) → output=256 B · usage: prompt=8100/cache=2100/write=6000/comp=280/reason=0 · 1.2s
   └ TOOL Read(/tests/e2e_test.go) [call_1] → 2.1s · 4.2KB (orig 9.1KB) · exit=0
-  └ TOOL bash(go test ./...) [call_2] → 12.4s · 3.1KB
+  └ TOOL Bash(go test ./...) [call_2] → 12.4s · 3.1KB
   · llm_call (iter 1) → output=1.8KB · usage: ... · 3.4s
   → final: "Fixed: added cleanup in teardown."
 ════ 总计: 4 calls · prompt=16.3k / comp=2.1k · wall=19.7s ════

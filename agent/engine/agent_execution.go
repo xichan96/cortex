@@ -416,7 +416,7 @@ func (ae *AgentEngine) buildToolCallResults(sortedToolCalls []types.ToolCall, ex
 }
 
 // buildOutputHeader assembles the structured header for a tool observation.
-// ExitCode is probed from bash/command-style results (map with exit_code).
+// ExitCode is probed from Bash/command-style results (map with exit_code).
 func (ae *AgentEngine) buildOutputHeader(toolCall types.ToolCall, name string, r stepResult, formatted string) types.OutputHeader {
 	h := types.OutputHeader{
 		ChunkID:        toolCall.ID,
@@ -484,7 +484,7 @@ func (ae *AgentEngine) runToolCallsByLayerIter(ctx context.Context, sortedToolCa
 	// Get hooks
 	hookRunner := hooks.NewRunner(ae.getHooks(), "", "")
 
-	// Global concurrency cap across all layers: parallel bash/MCP calls (same
+	// Global concurrency cap across all layers: parallel Bash/MCP calls (same
 	// layer, no dependencies) are bounded, dependent calls in later layers wait
 	// for earlier layers to release their slots. This is a wall-time throttle
 	// only — correctness is unchanged (errgroup already waits for every call).

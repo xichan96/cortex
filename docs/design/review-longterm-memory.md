@@ -28,7 +28,7 @@
 
 | # | 设计声明 | 核实结果 | 证据 |
 |---|---|---|---|
-| F1 | `dino/mem/` 无任何包 import（死代码） | ✅ PASS | 全仓 grep `"dino/mem"`（排除 dino/mem 自身与 test）零命中；`MemoryTools`/`RunIngestLoop`/`IngestRuntime` 在 dino/mem 外零引用；`dino/README.md:62`、`dino/README-CN.md:62` 确实只提"可选 wiring"。`dino/mem/` 下无任何 `*_test.go` |
+| F1 | `dino/mem/` 无任何包 import（死代码） | ✅ PASS | 全仓 Grep `"dino/mem"`（排除 dino/mem 自身与 test）零命中；`MemoryTools`/`RunIngestLoop`/`IngestRuntime` 在 dino/mem 外零引用；`dino/README.md:62`、`dino/README-CN.md:62` 确实只提"可选 wiring"。`dino/mem/` 下无任何 `*_test.go` |
 | F2 | ingest Phase-1 管线已实现：`ingest.go:27` `runIngestOnce`、`ingest.go:74` 4 worker | ✅ PASS | `runIngestOnce` 在 ingest.go:27；`ingestSessionWorkers = 4`（ingest.go:19），`for i := 0; i < ingestSessionWorkers; i++` 在 ingest.go:74。batch 查询在 :107-108；`minNew` 门在 :127-129；LLM 抽取 `extractKnowledgeItems` :363；落库 :177-213；cursor 写回 :214-216 |
 | F3 | `loop.go:30` 裸 ticker | ✅ PASS | `ticker := time.NewTicker(interval)` 在 loop.go:30；<5s 钳制到 2m 在 :27-29；`enabled=false` continue 在 :38-39。`IngestLoopOptions`/`IngestRuntime` 在 types.go:32-38 ✅ |
 | F4 | `tool.go:189` `sqliteMemoryTool.Execute` | ✅ PASS | `Execute` 定义在 tool.go:189 |
@@ -39,8 +39,8 @@
 | F9 | `Hybrid.GetSummary` `memory.go:303-307` | ✅ PASS | 在 :303-307 |
 | F10 | `SQLite.GetSummary` `sqlite.go:273-283` | ✅ PASS | 在 :273-283 |
 | F11 | `prepareMessages`（`agent_execution.go:840-903`）只读 `GetChatHistory` | ✅ PASS | :843-848 读 `ae.memory.GetChatHistory`；全文无 `GetSummary` 调用。system message 拼接在 :862-867 |
-| F12 | `NewHybrid` 全仓零调用方 | ✅ PASS | grep 确认只有 `dino/chatstore/memory.go` 定义处 |
-| F13 | `GetSummary` 引擎从不调用 | ✅ PASS | grep 全仓 `.GetSummary(` 仅 chatstore 内部实现 + `agent/types/llm.go` 注释提及，无引擎/工厂调用方 |
+| F12 | `NewHybrid` 全仓零调用方 | ✅ PASS | Grep 确认只有 `dino/chatstore/memory.go` 定义处 |
+| F13 | `GetSummary` 引擎从不调用 | ✅ PASS | Grep 全仓 `.GetSummary(` 仅 chatstore 内部实现 + `agent/types/llm.go` 注释提及，无引擎/工厂调用方 |
 | F14 | 压缩后旧行被删只留窗口 + summary（`sqlite.go:285-311`） | ✅ PASS | `Compress` 在 :285-311：`DELETE FROM messages ... NOT IN (... LIMIT KeepRecentCount)` + `INSERT OR REPLACE ... 'summary'` |
 | F15 | `DeterministicCompact` `compact.go:42-140` | ✅ PASS | `DeterministicCompact` 从 :42 到 :140。设计引用的"退化场景"描述与评估报告第三章一致 |
 | F16 | `memdir.go` 零调用方 | ✅ PASS | `MemDirProvider`/`memdir` 在 dino/chatstore/memdir.go 外零引用 |
@@ -171,7 +171,7 @@
 
 | # | 问题 | 证据 | 建议 |
 |---|---|---|---|
-| B1 | **`getGlobalUserID` 的全局 user 前提不成立**：全仓无任何代码写 `metadata.user_id`，`getGlobalUserID` 永远回退 sessionID。设计 §1.3/§7.3/§11 反复宣称"多 session 共享记忆/按 user 全局"不成立；运行时是 **per-session 记忆**。影响 L1 注入 uid、跨 session 检索、`max_unused_days` 剪枝的语义 | `dino/mem/ingest.go:253-261`；全仓 grep 确认 `metadata` 表唯一写入是 `'summary'` 键（`chatstore/sqlite.go:309`），无 `user_id` 写入方 | 实现前锚定语义，二选一：(a) 接受 per-session，删掉/改写 §1.3"多 session 共享"表述，`uid=sessionID`；(b) 在 `SaveContext`/`CreateSession` 写 `user_id` 键（需设计多 session 归属策略）。**推荐 (a) 起步**，把"user 全局合并"列为后续独立任务——与 §12 待定点 5 一致 |
+| B1 | **`getGlobalUserID` 的全局 user 前提不成立**：全仓无任何代码写 `metadata.user_id`，`getGlobalUserID` 永远回退 sessionID。设计 §1.3/§7.3/§11 反复宣称"多 session 共享记忆/按 user 全局"不成立；运行时是 **per-session 记忆**。影响 L1 注入 uid、跨 session 检索、`max_unused_days` 剪枝的语义 | `dino/mem/ingest.go:253-261`；全仓 Grep 确认 `metadata` 表唯一写入是 `'summary'` 键（`chatstore/sqlite.go:309`），无 `user_id` 写入方 | 实现前锚定语义，二选一：(a) 接受 per-session，删掉/改写 §1.3"多 session 共享"表述，`uid=sessionID`；(b) 在 `SaveContext`/`CreateSession` 写 `user_id` 键（需设计多 session 归属策略）。**推荐 (a) 起步**，把"user 全局合并"列为后续独立任务——与 §12 待定点 5 一致 |
 | B2 | **`BuildLayeredPrompt` L1 "每 category 最高 priority 的 3-5 条" 无意义**：所有写入路径都写 `PriorityMedium`，`priority` 全是 5，无 High/Critical 生产者 | `manager.go:294,329`（`Priority: PriorityMedium`）；`AddKnowledgeWithCategory`/`SetUserPreference` 都写 medium；`buildPromptPriorityHigh` 只在 BuildSystemPrompt 读取侧存在 | L1 排序改为 `updated_at DESC` + 每 category 限额；或引入 `usage_count` 预排序（自 Step 2 后可用）。至少要在文档里承认当前 priority 无区分度，不能用 priority 做 L1 选条 |
 | B3 | **引用反馈"返回即计数"是自反馈环**：`search_knowledge` 返回 ≠ 模型使用，却计入 `usage_count` 参与排序 + 保留豁免，高频被搜条目将永不剪枝、永久霸榜 | `dino/mem/tool.go:216-220`（search_knowledge 直接返回 items）；设计 §4.4"返回即计数"；§4.2-3 排序权重；§7.3 `usage_count>0 永不删` | Step 2 默认改为 `turn_observe` 子串/标签匹配（设计已列为增强，升级为默认）；或先只做"引用豁免剪枝"、不加 usage 排序。文档若坚持"返回即计数"，应明确其语义为"被检索即热度"，并**不参与保留豁免** |
 
@@ -243,5 +243,5 @@
 - 被评文档：`docs/design/longterm-memory.md`（worktree `review-longterm-mem`，HEAD b33cdf5）
 - 评估报告：主仓 `docs/optimization-review-vs-codex.md` 第十二章（:297-353）
 - Codex 参照：`~/rust/codex/codex-rs/`（memories.rs / extension.rs / prompts.rs / stream_events_utils.rs / stage_one_system.md / phase1.rs / memory_citation.rs）
-- 核查方式：逐条 grep + Read，53 项事实引用逐一对照 worktree 内真实代码；Codex 侧抽查关键常量与函数
+- 核查方式：逐条 Grep + Read，53 项事实引用逐一对照 worktree 内真实代码；Codex 侧抽查关键常量与函数
 - 评审纪律：只产出本报告，未改动任何业务代码

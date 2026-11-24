@@ -13,7 +13,7 @@
 
 但存在 **3 个必须修改的 BLOCKER**、**8 个落地时应采纳的 RECOMMENDED**、**4 个可选 OPTIONAL**：
 
-- **BLOCKER-1（F2 事实性错误）**：设计 §1.2 与 §3 对「MCP/bash 错误**终止本轮 tool 迭代循环**、`Execute` 返回 `hasMore=false`」的**现状断言与真实代码不符**。真实代码中任何 `err != nil` 都会被 `buildToolCallResults` 追加进 `intermediateSteps`，而 `executeIteration` 的 `hasMore = len(intermediateSteps) > 0`（`agent_execution.go:1090`、`:1353`）恒为 **true**。**错误（含 MCP 错误）从不停迭代——它会继续迭代直到 model 不再请求工具、maxIterations 或 doom loop。** 因此 F2 的「收益描述」（修复 MCP 错误硬终止迭代）是**虚构的收益**；F2 的真实收益只剩「limiter 结果上限生效」，工作量/收益叙事需要重写。这也放大了 F2 把**所有**错误转 `ok:false` 喂回模型的风险：当前循环本来就会把这些错误继续喂给模型，`nonFatalTool` 只是换了个载体（从 tool message 的 observation 变成结构化 map），而**新增的**循环放大主要来自「审批被拒/权限拒绝」这类**不可恢复**错误被转成了可恢复——见 BLOCKER-2。
+- **BLOCKER-1（F2 事实性错误）**：设计 §1.2 与 §3 对「MCP/Bash 错误**终止本轮 tool 迭代循环**、`Execute` 返回 `hasMore=false`」的**现状断言与真实代码不符**。真实代码中任何 `err != nil` 都会被 `buildToolCallResults` 追加进 `intermediateSteps`，而 `executeIteration` 的 `hasMore = len(intermediateSteps) > 0`（`agent_execution.go:1090`、`:1353`）恒为 **true**。**错误（含 MCP 错误）从不停迭代——它会继续迭代直到 model 不再请求工具、maxIterations 或 doom loop。** 因此 F2 的「收益描述」（修复 MCP 错误硬终止迭代）是**虚构的收益**；F2 的真实收益只剩「limiter 结果上限生效」，工作量/收益叙事需要重写。这也放大了 F2 把**所有**错误转 `ok:false` 喂回模型的风险：当前循环本来就会把这些错误继续喂给模型，`nonFatalTool` 只是换了个载体（从 tool message 的 observation 变成结构化 map），而**新增的**循环放大主要来自「审批被拒/权限拒绝」这类**不可恢复**错误被转成了可恢复——见 BLOCKER-2。
 - **BLOCKER-2（F2 审批拒绝被吞）**：`ApprovalTool.Execute` 的「rejected by user」（`defined_tool.go:385`）与 `ExternalPathApprovalTool` 的「denied」（`:511`）是**不可恢复**的用户否决。F2 的包装顺序把 `nonFatal` 放在 approval **外层**，会把这些错误转成 `{ok:false}` 喂回模型 → 模型重试审批 → 再次否决 → 直到 doom loop。**必须**让 approval 拒绝作为 fatal 错误透传（这正是 F3 的范畴，但 F2 阶段就必须处理，否则 F2 上线即引入比现状更差的 UX）。最小解：`nonFatalTool` 对审批拒绝错误（或其包装的错误码）直接透传。
 - **BLOCKER-3（F6 死锁缓解依赖不存在的「引擎结束即 cancel」不变量）**：设计 §6.2 的缓解措施是 `resultSender` 监听 `ae.ctx.Done()`，并声称「`ExecuteStream` 结束即 close + ctx 取消，发送端必然退出」。但 `ae.ctx` 是**引擎生命周期** ctx（`agent.go:68-69,107-110`，仅 `Stop()` 调 `ae.cancel()`，`ExecuteStream` 从不 cancel 它），`resultSender` 闭包（`agent_execution.go:731-737`）也**只捕获 resultChan 未捕获任何 ctx**。消费者停止 `range`（UI 断开/`session.emit` 的 observer 阻塞）时发送端会**永久卡死**，`CancelCurrentTurn` 也救不了（errgroup 阻塞在无 ctx 守卫的发送上）。**必须**把调用方传入的 turn ctx 捕获进 `resultSender` 闭包 + 加死锁回归测试。
 
@@ -63,10 +63,10 @@
 | `nonFatalTool` 错误 → `{ok:false, tool, error, hint}` 喂回模型（`:48-53`） | ✅ `tool_wrappers.go:48-53` | ✅ |
 | `LoopDetectedError` 例外透传（`:42-46`） | ✅ `tool_wrappers.go:42-46` | ✅ |
 | `toolResultLimiter` 默认 120KB/60KB（`:81-85`） | ✅ `tool_wrappers.go:81-85` | ✅ |
-| **零引用断言**：全仓 grep `WrapNonFatalTool`/`WrapToolResultLimiter` 仅命中自身与测试 | ✅ 实测 grep 仅 `tool_wrappers.go:21,77` + `tool_wrappers_test.go` | ✅ |
+| **零引用断言**：全仓 Grep `WrapNonFatalTool`/`WrapToolResultLimiter` 仅命中自身与测试 | ✅ 实测 Grep 仅 `tool_wrappers.go:21,77` + `tool_wrappers_test.go` | ✅ |
 | factory 只接 3 个包装器（`factory.go:548-604`）：path→approval→loopDetection | ✅ `factory.go:561-565, 584-588, 601`（subagent 处 `:601` 只包 loopDetection） | ✅ |
 | 后果：「MCP 调用错误作为硬错误经 `results[idx].err` → `toolObservationError` → 喂回模型但**终止本轮 tool 迭代循环**（`Execute` 返回 `hasMore=false`，`agent_execution.go:1090`）」 | ❌ **事实错误**。见 BLOCKER-1。真实代码：`buildToolCallResults` 对 `r.err != nil` 追加 `intermediateSteps`（`:253-260`），`executeIteration` 返回 `hasMore = len(intermediateSteps) > 0`（`:1090`）→ **true**；`executeStreamIteration` 同（`:1353`）。错误**从不**终止迭代循环。 | ❌ |
-| 「MCP/bash 错误硬终止」在评估报告 §11.1 原文 | ⚠️ 评估报告原文即含此断言（`optimization-review-vs-codex.md:245`），**评估报告本身就错了**，设计沿袭了错误。 | ❌ |
+| 「MCP/Bash 错误硬终止」在评估报告 §11.1 原文 | ⚠️ 评估报告原文即含此断言（`optimization-review-vs-codex.md:245`），**评估报告本身就错了**，设计沿袭了错误。 | ❌ |
 
 ### 1.4 errgroup 无并发上限（F4）
 
@@ -75,7 +75,7 @@
 | `runToolCallsByLayer`（`agent_execution.go:293-426`）拓扑分层 | ✅ `:310` `groupSortedToolCallsByLayer` | ✅ |
 | 每 layer 建 `errgroup.WithContext`（`:321`），`g.Go`（`:334`）无 `SetLimit` | ✅ `:321` `g, gctx := errgroup.WithContext(ctx)`；`:334` `g.Go(...)` 前无 `g.SetLimit(...)` | ✅ |
 | 仅有的闸门是 `MaxToolCallsPerIteration` 总数上限（`prepareToolCalls`，`:233-237`） | ✅ `:234-236`，`cfg.MaxToolCallsPerIteration > 0` 时截断 | ✅ |
-| 「N 个 bash/MCP 全量并发」 | ✅ errgroup 无 limit，同一 layer 内无依赖工具全并发 | ✅ |
+| 「N 个 Bash/MCP 全量并发」 | ✅ errgroup 无 limit，同一 layer 内无依赖工具全并发 | ✅ |
 | `MaxToolCallsPerIteration` 控制**并发度**的否定 | ✅ 它只切列表头部，不管并发 | ✅ |
 
 **注意**：设计 §4.1 说「排队工具被跳过（results[idx] 保持零值，exists[idx] 已为 true）」需要修正——`results` 初始化就是全零值，`exists` 是按工具名查到的 true，Acquire 失败写 `stepResult{err: gctx.Err()}`（§4.4）才正确。设计自己在 §4.4 处理了，OK。
@@ -89,7 +89,7 @@
 | `RequestApproval` 消费上一个值（`:293`）后再 `Respond` 必走 `default` | ✅ `:292-296` 消费 `<-ch` 后 `cleanup()` **从 pending 删掉**；再次 `Respond` 时 `ch == nil` 直接 return（`:311-313`）。**注意**：double-respond 的第二次实际走「未知 id」路径，不是「通道满」路径。通道满只发生在 `RequestApproval` 还在阻塞等值时（比如用户连点两次，第二次响应在消费前到达）。设计 §5.2 对此语义的描述基本对，但把「必走 default」归因于「通道满」略不准确——更多是「已 cleanup 的 nil ch」。 | ⚠️ |
 | `Clear`（`:323-333`）非阻塞 | ✅ `:323-333` | ✅ |
 | 调用链：外部 → `dinoFactory.RespondToolApproval`（`factory.go:705-709`） | ✅ `factory.go:705-709` | ✅ |
-| 「仓库内无其他调用方」 | ✅ 实测 grep 全仓 `RespondToolApproval` 仅 interface（`:290`）+ impl（`:705`）；**但**外部入口是 `dino/client.go` 的 `OnApproval` handler（`:420`）——事件层面才有真正的消费者（`HandlerBuilder.onApproval`）。**没有发现任何**实际的 `RespondToolApproval` 调用方（无 gateway/HTTP 实现，`ApprovalSender` 也没有实现者——`SendToolApprovalRequest` 全仓无 impl）。⚠️ 这意味着 F5 在**当前仓库**影响面是「无人调用」，是死路径的健壮性改进；设计 §1.4 的「外部（HTTP/MCP 网关）」调用链**在本仓库不存在**。 | ⚠️ |
+| 「仓库内无其他调用方」 | ✅ 实测 Grep 全仓 `RespondToolApproval` 仅 interface（`:290`）+ impl（`:705`）；**但**外部入口是 `dino/client.go` 的 `OnApproval` handler（`:420`）——事件层面才有真正的消费者（`HandlerBuilder.onApproval`）。**没有发现任何**实际的 `RespondToolApproval` 调用方（无 gateway/HTTP 实现，`ApprovalSender` 也没有实现者——`SendToolApprovalRequest` 全仓无 impl）。⚠️ 这意味着 F5 在**当前仓库**影响面是「无人调用」，是死路径的健壮性改进；设计 §1.4 的「外部（HTTP/MCP 网关）」调用链**在本仓库不存在**。 | ⚠️ |
 | `ApprovalTool.Execute` 消费通道（`:292-296` 的 `<-ch`） | ✅ `:292-296` | ✅ |
 
 ### 1.6 流式事件背压（F6）
@@ -109,18 +109,18 @@
 |---|---|---|
 | `question` 权限默认 `ActionDeny`（`permission.go:34`）；`ModeBuild`/`ModePlan` 放开（`:65,74`） | ✅ `permission.go:34`（question=Deny）、`:65,68`（Build）、`:74,77`（Plan） | ✅ |
 | `QuestionTool.Execute` 永远返回 `EC_TOOL_EXECUTION_FAILED`（`question.go:45-51`） | ✅ `question.go:49-50` | ✅ |
-| 全仓无 `SourceNodeName=="question"` / `plan_enter` / `plan_exit` 的 runner 侧处理 | ✅ 实测 grep 仅 `question.go:55` 定义 SourceNodeName，无消费 | ✅ |
+| 全仓无 `SourceNodeName=="question"` / `plan_enter` / `plan_exit` 的 runner 侧处理 | ✅ 实测 Grep 仅 `question.go:55` 定义 SourceNodeName，无消费 | ✅ |
 | 「build/plan 模式下 question 可用但会硬错误终止迭代」 | ⚠️ **终止迭代**部分同 BLOCKER-1 错误——`EC_TOOL_EXECUTION_FAILED` 走 `intermediateSteps` → `hasMore=true` → **继续迭代**，不会终止。但「比默认拒绝更糟」的定性仍成立（模型真的会看到 question 工具的报错 observation 而不是「工具不可用」）。 | ⚠️ |
 
 ### 1.8 其他引用
 
 | 设计引用 | 真实代码 | 判定 |
 |---|---|---|
-| `bash/command` 返回 `map{"exit_code": int}`（`command.go:110-124`） | ✅ `command.go:110-124` | ✅ |
+| `Bash/command` 返回 `map{"exit_code": int}`（`command.go:110-124`） | ✅ `command.go:110-124` | ✅ |
 | `trimHistoryToTokenBudget` 在 `agent_execution.go:987-1017` | ✅ `:987-1017` | ✅ |
 | `RoughTokensForMessage` 用 ASCII/4 估算（`tokens.go:7-18`） | ✅ `tokens.go:7-18`（RoughTokenEstimate ASCII/4 + non-ASCII*2） | ✅ |
 | 落盘阈值建议 `OriginalBytes > maxLen*8` | — 待定（§12.2） | — |
-| `ToolResultWriteDir` 默认空，`config.go:193-203` | ✅ 但 `config.go:193-203` 是 Memory 段；`ToolResultWriteDir` 是 **agent 层**配置（`agent.go:84`），dino 侧**从未设置**（grep 确认），默认空串。设计引用的行号不准（应为 agent 层），结论正确。 | ⚠️ |
+| `ToolResultWriteDir` 默认空，`config.go:193-203` | ✅ 但 `config.go:193-203` 是 Memory 段；`ToolResultWriteDir` 是 **agent 层**配置（`agent.go:84`），dino 侧**从未设置**（Grep 确认），默认空串。设计引用的行号不准（应为 agent 层），结论正确。 | ⚠️ |
 | F7 单列、`loadBuiltinTools` 去 `NewQuestionTool`（`factory.go:816`） | ✅ `factory.go:816` | ✅ |
 | F2 默认值对齐 limiter 现值 `tool_wrappers.go:81-85` | ✅ | ✅ |
 | dino `ToolConfig` 在 `config.go:70` 起 | ✅ `config.go:70-75` | ✅ |
@@ -140,7 +140,7 @@
 - `executeStreamWithIterations`（`:1165`）`if !hasMore { break }` —— 有错误就继续下一轮。
 
 **后果**：
-1. 设计 §1.2「MCP 错误硬终止迭代」、§3.2 表格「MCP/bash 返回 err → 本轮 tool 迭代终止」、§11 风险表「原本 MCP 硬错误终止」**全部是虚构前提**。评估报告 §11.1 原判断也错，设计沿袭。
+1. 设计 §1.2「MCP 错误硬终止迭代」、§3.2 表格「MCP/Bash 返回 err → 本轮 tool 迭代终止」、§11 风险表「原本 MCP 硬错误终止」**全部是虚构前提**。评估报告 §11.1 原判断也错，设计沿袭。
 2. F2 的**实际收益只剩**「`toolResultLimiter` 120KB/60KB 结果上限生效」（这是真收益，防 token 溢出），以及「错误以结构化 `{ok:false,...}` 呈现」（比 observation 文本略好，但**不是**「修复迭代终止 bug」）。
 3. 「迭代继续」的行为**现状已存在**，不是 F2 带来的。F2 落地后真正变的是**载体**：错误从 tool message observation 字符串 → 结构化 map。
 
@@ -207,7 +207,7 @@
 设计选全局 semaphore 正确（per-layer 会层数×N）。但注意：拓扑分层后，**第 2 层工具必须等第 1 层全部完成**（`g.Wait()` 在 layer 循环内，`:423`），而全局 semaphore 在**第 1 层内**就限了并发——如果第 1 层有 N 个慢工具占满 semaphore，第 2 层的依赖被拖慢。这是**期望**的（依赖必须等），但要写进测试/文档。另外 `sem.Acquire` 排队时**无优先级**——先到先得，与工具依赖顺序无关（同层内本来就无依赖，无妨）。
 
 ### R-6（F1）release note 处理偏弱
-设计 §9 说「F1 是唯一改模型可见格式的改动，落地时建议配一条 release note」。但 F1 还改了两个**消费端可见**的东西：① `tool_callback.go:34` 的 `SendToolResult` 用 `FormatToolResult(output)` 直接格式化**未截断**结果——这不受影响（它不走 TruncateToolResult）；② **UI 依赖的 observation 字符串格式**（header 行、`Output:` 引导、`…N chars truncated…`）会变。建议 release note 明确：模型提示词若解析 tool 输出格式（如 grep `"Full output saved to:"`）需同步。实际上**当前无模型 prompt 依赖该格式**（grep 确认无），可标注「已验证无依赖」。
+设计 §9 说「F1 是唯一改模型可见格式的改动，落地时建议配一条 release note」。但 F1 还改了两个**消费端可见**的东西：① `tool_callback.go:34` 的 `SendToolResult` 用 `FormatToolResult(output)` 直接格式化**未截断**结果——这不受影响（它不走 TruncateToolResult）；② **UI 依赖的 observation 字符串格式**（header 行、`Output:` 引导、`…N chars truncated…`）会变。建议 release note 明确：模型提示词若解析 tool 输出格式（如 Grep `"Full output saved to:"`）需同步。实际上**当前无模型 prompt 依赖该格式**（Grep 确认无），可标注「已验证无依赖」。
 
 ### R-7（F5）F5 在**当前仓库是无调用方死路径**——应确认外部调用方存在后再改语义
 `RespondToolApproval` 全仓无外部调用，`ApprovalSender` 无实现者。F5 的阻塞+超时改造**无害**但**在当前仓库无人受益**（且 `approvalRespondTimeout=5s` 与 `NewApprovalStore` 的审批超时 `5min` 是两个不同超时，设计未区分）。**建议**：确认 gateway/HTTP 层（`trigger/gateway/protocol.go:18` `MethodToolApproval`）确实会把审批响应接进 `RespondToolApproval`（当前**没有**）；若没有，F5 应降级为 OPTIONAL 或与 F3 一起等「审批链路真正接线」后再做。同时给 `Respond` 的返回值语义加上 `approved` 参数为 false 时**不应预批准**的明确测试（R-7 补充：预批准语义只在「同一 requestID 第二次响应」时发生，测试 #17 已覆盖）。
@@ -257,7 +257,7 @@
 1. **`dino/tools/tool_callback.go:34`**：`ToolCallbackAdapter.OnToolResult` 用 `FormatToolResult(output)` 发**未截断**结果到 stream sender——这是另一条**绕过截断管线**的路径，UI 会看到「原始超大输出」的 tool_result（F1 只改 `buildToolCallResults`，不覆盖这里）。评估报告 §2 说「流式丢事件影响 UI/日志/approval/trace」，但**截断 F1 同样影响 UI 看到的 tool_result 大小**——设计没提这条。
 2. **`trigger/http/handler.go:140`**：SSE 消费者，`for result := range stream` 且每事件 `sendSSEvent`（`ctx.Done()` 检查有，但若客户端断开写失败会 return 退出 range——**F6 死锁分析必须包含 HTTP 消费者**）。HTTP 消费者在 `ctx.Done()` 时退出，比较安全；session 消费者（`session.go:409`）没有主动 ctx 检查，是 F6 主风险点。
 3. **`dino/agent/subagent.go:127`**：subagent 的 `ExecuteStream` 消费者，同样 `for result := range stream`——F6 死锁分析漏了它。
-4. **trace**：仓库内无 trace 系统（grep 确认），评估报告提的 trace 消费者当前不存在，但 F6 修复是前置条件，无冲突。
+4. **trace**：仓库内无 trace 系统（Grep 确认），评估报告提的 trace 消费者当前不存在，但 F6 修复是前置条件，无冲突。
 5. **approval**：`ApprovalStore` 与流无关，但 BLOCKER-2 显示 approval 拒绝的**错误分类**（fatal vs recoverable）被 F2/F3 交叉影响——这是设计遗漏的耦合点。
 
 ---

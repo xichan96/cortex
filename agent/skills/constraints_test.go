@@ -42,7 +42,7 @@ func TestSkillPolicyFromEntry(t *testing.T) {
 }
 
 func TestSkillPolicyFilterToolNames(t *testing.T) {
-	available := []string{"read", "write", "bash"}
+	available := []string{"read", "write", "Bash"}
 
 	filtered, unknown := FilterToolNames(available, nil)
 	if !reflect.DeepEqual(filtered, available) {
@@ -56,9 +56,9 @@ func TestSkillPolicyFilterToolNames(t *testing.T) {
 		t.Error("empty allowed must return a copy, not alias the input")
 	}
 
-	filtered, unknown = FilterToolNames(available, []string{"bash", "read"})
-	if !reflect.DeepEqual(filtered, []string{"read", "bash"}) {
-		t.Errorf("subset = %v, want available order [read bash]", filtered)
+	filtered, unknown = FilterToolNames(available, []string{"Bash", "read"})
+	if !reflect.DeepEqual(filtered, []string{"read", "Bash"}) {
+		t.Errorf("subset = %v, want available order [read Bash]", filtered)
 	}
 	if unknown != nil {
 		t.Errorf("subset unknown = %v, want nil", unknown)
@@ -149,7 +149,7 @@ func TestSkillPolicyAdvertisableForPaths(t *testing.T) {
 		t.Errorf("README.md = %v, want [always]", got)
 	}
 
-	// Go glob matches nested files.
+	// Go Glob matches nested files.
 	got = names(AdvertisableForPaths(ix, []string{"cmd/main.go"}))
 	if !reflect.DeepEqual(got, []string{"always", "go"}) {
 		t.Errorf("cmd/main.go = %v, want [always go]", got)

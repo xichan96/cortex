@@ -123,11 +123,11 @@ func nonFatalToolHint(name string, err error) string {
 		return ""
 	}
 	msg := err.Error()
-	if (name == "bash" || name == "execute_command") && strings.Contains(msg, "command is not allowed") {
-		return "command execution is not allowed. Please use a single safe command, or use glob/grep/Read to split the task."
+	if (name == "Bash" || name == "execute_command") && strings.Contains(msg, "command is not allowed") {
+		return "command execution is not allowed. Please use a single safe command, or use Glob/Grep/Read to split the task."
 	}
-	if name == "grep" && (strings.Contains(msg, "executable file not found") || strings.Contains(msg, "no such file or directory")) {
-		return "ripgrep (rg) is not installed in the current environment. Please install it first, or use glob/Read to split the task."
+	if name == "Grep" && (strings.Contains(msg, "executable file not found") || strings.Contains(msg, "no such file or directory")) {
+		return "ripgrep (rg) is not installed in the current environment. Please install it first, or use Glob/Read to split the task."
 	}
 	return ""
 }
@@ -258,7 +258,7 @@ func (t *loopDetectingTool) Metadata() types.ToolMetadata   { return t.inner.Met
 
 func loopDetectContent(toolName string, input map[string]interface{}) string {
 	switch toolName {
-	case "bash", "execute_command", "command":
+	case "Bash", "execute_command", "command":
 		if input != nil {
 			if cmd, ok := input["command"].(string); ok && cmd != "" {
 				return cmd

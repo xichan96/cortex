@@ -39,7 +39,7 @@ Dino extends the core Cortex agent capabilities with advanced features designed 
 - Automatic loop prevention with user notifications
 
 ### Tool System
-- Built-in tools: `Read`, `Write`, `Edit`, `bash`, `glob`, `grep`, `list_directory`
+- Built-in tools: `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`, `WebFetch`, `WebSearch`
 - Extensible tool registry
 - Dangerous tool approval workflows
 - MCP (Model Context Protocol) support
@@ -66,7 +66,7 @@ Dino extends the core Cortex agent capabilities with advanced features designed 
 
 ## Installation
 
-```bash
+```Bash
 go get github.com/xichan96/cortex/dino
 ```
 
@@ -139,12 +139,12 @@ tools:
     - Read
     - Write
     - Edit
-    - glob
-    - grep
-    - bash
-    - list_directory
+    - Glob
+    - Grep
+    - Bash
+
   approval_required:
-    - bash
+    - Bash
     - Write
     - Edit
 

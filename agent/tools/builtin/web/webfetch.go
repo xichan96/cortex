@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	WebFetchToolName = "web_fetch"
+	WebFetchToolName = "WebFetch"
 	maxResponseSize  = 5 * 1024 * 1024 // 5MB
 	defaultTimeout   = 30 * time.Second
 	maxTimeout       = 120 * time.Second
@@ -61,7 +61,11 @@ func (t *WebFetchTool) Schema() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"url": map[string]interface{}{
 				"type":        "string",
-				"description": "The URL to fetch content from",
+				"description": "The URL to fetch content from.",
+			},
+			"prompt": map[string]interface{}{
+				"type":        "string",
+				"description": "What to extract or analyze from the fetched page.",
 			},
 			"format": map[string]interface{}{
 				"type":        "string",
@@ -255,7 +259,7 @@ func convertHTMLToMarkdown(htmlContent string) (string, error) {
 
 func (t *WebFetchTool) Metadata() types.ToolMetadata {
 	return types.ToolMetadata{
-		SourceNodeName: "web_fetch",
+		SourceNodeName: "WebFetch",
 		IsFromToolkit:  false,
 		ToolType:       "web",
 	}

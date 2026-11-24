@@ -14,7 +14,7 @@ import (
 type OutputHeader struct {
 	ChunkID          string        `json:"chunk_id,omitempty"`
 	WallTime         time.Duration `json:"wall_time,omitempty"`       // execution duration
-	ExitCode         *int          `json:"exit_code,omitempty"`       // bash etc. when available
+	ExitCode         *int          `json:"exit_code,omitempty"`       // Bash etc. when available
 	OriginalBytes    int           `json:"original_bytes,omitempty"`  // raw output bytes before truncation
 	OriginalTokens   int           `json:"original_tokens,omitempty"` // approximate, via RoughTokenEstimate
 	TotalLines       int           `json:"total_lines,omitempty"`     // line count of the raw output
@@ -180,7 +180,7 @@ func TruncateToolResult(content string, maxLen int, writeDir string, header Outp
 			// Body budget is given to the header; the saved-path line must
 			// survive even in a tiny budget, so render header first then trim.
 			hd := BuildOutputHeader(h)
-			hint := "\nFull output saved to: " + path + " — use Read/grep to view.\n"
+			hint := "\nFull output saved to: " + path + " — use Read/Grep to view.\n"
 			full := hd + hint
 			if len(full) <= maxLen {
 				meta.Truncated = true
@@ -269,7 +269,7 @@ func writeToolResult(writeDir, content string) (string, bool) {
 // buildSavedPathOnly returns a display that only carries the saved-path hint
 // (header body dropped) fitting within maxLen bytes, UTF-8 safe.
 func buildSavedPathOnly(path string, maxLen int) string {
-	base := "\nFull output saved to: " + path + " — use Read/grep to view.\n"
+	base := "\nFull output saved to: " + path + " — use Read/Grep to view.\n"
 	if len(base) <= maxLen {
 		return base
 	}

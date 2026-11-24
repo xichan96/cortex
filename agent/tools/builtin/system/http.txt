@@ -6,4 +6,4 @@ Usage notes:
   - The URL must be fully-formed and valid.
   - The tool will follow redirects.
   - Request timeout is set to 30 seconds.
-  - For more advanced web scraping and content extraction, consider using the `web_fetch` tool if available.
+  - For more advanced web scraping and content extraction, consider using the `WebFetch` tool if available.

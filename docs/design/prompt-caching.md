@@ -39,7 +39,7 @@ type Usage struct {
 }
 ```
 
-`CachedTokens`（`llm.go:46`）与 `ReasoningTokens`（`llm.go:45`）**全仓无任何写点**。`grep` 确认仅此定义与 JSON tag。
+`CachedTokens`（`llm.go:46`）与 `ReasoningTokens`（`llm.go:45`）**全仓无任何写点**。`Grep` 确认仅此定义与 JSON tag。
 
 ### 1.2 请求构建：system 是拼接字符串，无 cache_control
 

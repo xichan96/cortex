@@ -56,7 +56,7 @@ func TestParseSpecStandardFields(t *testing.T) {
 	if spec.Compatibility != "Requires pdftotext on PATH" {
 		t.Errorf("Compatibility = %q", spec.Compatibility)
 	}
-	if got, want := spec.AllowedTools, []string{"read", "bash"}; !equalStrings(got, want) {
+	if got, want := spec.AllowedTools, []string{"read", "Bash"}; !equalStrings(got, want) {
 		t.Errorf("AllowedTools = %v, want %v", got, want)
 	}
 	if spec.DisableModelInvocation {
@@ -159,7 +159,7 @@ func TestParseSpecLegacyTopLevelFields(t *testing.T) {
 	if c.WhenToUse != "When testing legacy compatibility." {
 		t.Errorf("WhenToUse = %q", c.WhenToUse)
 	}
-	if !equalStrings(spec.AllowedTools, []string{"read", "grep"}) {
+	if !equalStrings(spec.AllowedTools, []string{"read", "Grep"}) {
 		t.Errorf("AllowedTools = %v", spec.AllowedTools)
 	}
 

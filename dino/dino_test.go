@@ -1291,7 +1291,7 @@ func TestApprovalStore(t *testing.T) {
 func TestApprovalStore_Timeout(t *testing.T) {
 	store := NewApprovalStore(100 * time.Millisecond)
 
-	_, err := store.RequestApproval(context.Background(), "sess-2", "bash", `{"command": "rm -rf /"}`)
+	_, err := store.RequestApproval(context.Background(), "sess-2", "Bash", `{"command": "rm -rf /"}`)
 	if err == nil {
 		t.Error("Should return timeout error")
 	}
@@ -1385,7 +1385,7 @@ func TestStreamEvent(t *testing.T) {
 		Content:    "test content",
 		SessionID:  "sess-1",
 		ToolCallID: "call-1",
-		ToolName:   "bash",
+		ToolName:   "Bash",
 		ToolInput:  map[string]interface{}{"command": "ls"},
 		ToolOutput: "output",
 		Error:      "",
@@ -1543,7 +1543,7 @@ func TestToolConfig(t *testing.T) {
 	cfg := &ToolConfig{
 		Profile:          "coding",
 		Allowed:          []string{"Read", "Write", "Edit"},
-		ApprovalRequired: []string{"bash", "Write"},
+		ApprovalRequired: []string{"Bash", "Write"},
 		Denied:           []string{"delete_file"},
 	}
 
@@ -1916,15 +1916,15 @@ func TestToolInvocationPart(t *testing.T) {
 		ToolInvocation: ToolInvocation{
 			State:      ToolStateCall,
 			ToolCallID: "call-1",
-			ToolName:   "bash",
+			ToolName:   "Bash",
 			Args:       map[string]interface{}{"command": "ls"},
 		},
 	}
 
 	part.isPart()
 
-	if part.ToolInvocation.ToolName != "bash" {
-		t.Errorf("Expected 'bash', got '%s'", part.ToolInvocation.ToolName)
+	if part.ToolInvocation.ToolName != "Bash" {
+		t.Errorf("Expected 'Bash', got '%s'", part.ToolInvocation.ToolName)
 	}
 }
 
@@ -3312,7 +3312,7 @@ func TestCost(t *testing.T) {
 func TestBudgetRequest(t *testing.T) {
 	req := BudgetRequest{
 		SessionID: "session-1",
-		ToolCalls: []string{"Read", "bash"},
+		ToolCalls: []string{"Read", "Bash"},
 		Estimated: Cost{
 			Tokens: 100,
 			Calls:  2,
@@ -3494,7 +3494,8 @@ func (s *recordingApprovalSender) SendToolApprovalRequest(sessionID, requestID, 
 	}{sessionID, requestID, toolName, arguments})
 }
 
-func (s *recordingApprovalSender) SendToolApprovalResponse(sessionID, requestID, toolName string, approved bool) {}
+func (s *recordingApprovalSender) SendToolApprovalResponse(sessionID, requestID, toolName string, approved bool) {
+}
 
 func (s *recordingApprovalSender) firstRequestID() string {
 	s.mu.Lock()
@@ -3520,7 +3521,7 @@ func TestRequestApproval_ThenRespond(t *testing.T) {
 	done := make(chan bool, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		approved, err := store.RequestApproval(context.Background(), "sess", "bash", `{"command":"ls"}`)
+		approved, err := store.RequestApproval(context.Background(), "sess", "Bash", `{"command":"ls"}`)
 		if err != nil {
 			errCh <- err
 			return

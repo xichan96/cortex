@@ -1,6 +1,15 @@
-- Searches for a literal string or regular expression in files.
-- This is useful for finding exact matches of text or patterns within the codebase.
+- Searches file contents for a regular expression pattern.
+- Prefer this tool over running `Grep`/`rg` through Bash: it respects .gitignore and skips noise directories automatically.
+- Supports three output modes: `content` (matching lines, default), `files_with_matches` (file paths only), and `count` (per-file occurrence counts).
+- Paths in the output are relative to the workspace root.
 
 Usage notes:
-  - Requires a `pattern` to search for.
-  - Optionally, a `path` can be provided to limit the search to a specific file or directory.
+  - `pattern` is required and is a regular expression (RE2 syntax).
+  - `path` optionally limits the search to a file or directory.
+  - `Glob` filters candidate files, e.g. `*.go` or `src/**/*.ts`.
+  - `type` filters by language shorthand, e.g. `go`, `js`, `py`.
+  - `-n` adds line numbers to content output; `-i` is case-insensitive; `-o` prints only the matched text.
+  - `-A`/`-B`/`-C` add trailing/leading/both lines of context.
+  - `head_limit` caps the number of output entries.
+  - `multiline` allows patterns to span line boundaries.
+  - No matches is a successful empty result, not an error.

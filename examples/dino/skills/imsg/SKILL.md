@@ -35,7 +35,7 @@ Requirements: Messages.app signed in, Full Disk Access for your terminal, and Au
 
 ### Send a message
 
-```bash
+```Bash
 osascript -e 'tell application "Messages" to send "你好，这是测试消息" to buddy "phone number"'
 ```
 

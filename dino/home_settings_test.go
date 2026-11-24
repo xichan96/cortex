@@ -68,17 +68,17 @@ func TestApplyHomeSettings_DefaultsOnlyFillEmptyFields(t *testing.T) {
 func TestApplyHomeSettings_ToolsModifierSemantics(t *testing.T) {
 	root, cwd := t.TempDir(), t.TempDir()
 	writeTestFile(t, filepath.Join(root, "settings.json"),
-		`{"tools":{"default":["Read","+grep","-bash"]}}`)
+		`{"tools":{"default":["Read","+Grep","-Bash"]}}`)
 	env := newApplySettingsEnv(t, root, cwd, "always")
 
 	cfg := newApplySettingsConfig(root, cwd)
 	applyHomeSettings(cfg, env)
-	assertStrings(t, cfg.Tools.Allowed, []string{"Read", "grep"})
+	assertStrings(t, cfg.Tools.Allowed, []string{"Read", "Grep"})
 
 	explicit := newApplySettingsConfig(root, cwd)
-	explicit.Tools.Allowed = []string{"bash"}
+	explicit.Tools.Allowed = []string{"Bash"}
 	applyHomeSettings(explicit, env)
-	assertStrings(t, explicit.Tools.Allowed, []string{"bash"})
+	assertStrings(t, explicit.Tools.Allowed, []string{"Bash"})
 }
 
 func TestApplyHomeSettings_SessionDir(t *testing.T) {
@@ -170,7 +170,7 @@ func TestApplyHomeSettings_MCPMergeAndTrust(t *testing.T) {
 func TestApplyHomeSettings_DisabledLeavesConfigUntouched(t *testing.T) {
 	root, cwd := t.TempDir(), t.TempDir()
 	writeTestFile(t, filepath.Join(root, "settings.json"),
-		`{"default_provider":"anthropic","default_model":"claude-test","tools":{"default":["grep"]}}`)
+		`{"default_provider":"anthropic","default_model":"claude-test","tools":{"default":["Grep"]}}`)
 	writeTestFile(t, filepath.Join(root, "mcp.json"), `{"mcpServers":{"srv":{"url":"https://example/mcp"}}}`)
 	env := newApplySettingsEnv(t, root, cwd, "always")
 

@@ -229,7 +229,7 @@ This agent's turn failed. If you still need this agent, use the available collab
 **现有导出符号**（外部可能引用，需保持）：
 - `type Result struct { Output string; Error error; Usage types.Usage }`（`subagent.go:21-25`）——**保留字段**，新增字段 `Status string`、`Duration time.Duration`、`Iterations int`、`FilesChanged []string`（`omitempty` 语义）。`Output` 语义不变。
 - `type Request struct{...}`（27-32）不变。
-- `func (t *SubagentTool) Execute(...)`（`manager_subagent.go:193-215`）返回值类型从裸字符串改为 `*DelegateResult`——**这是唯一破坏性签名变更**。兼容：`DelegateResult` 有 `Output` 字段，任何下游把返回值当 `string` 或 `fmt.Sprintf("%v")` 的用法会拿到 JSON——需 grep 确认无外部强断言（见风险 §11.2）。
+- `func (t *SubagentTool) Execute(...)`（`manager_subagent.go:193-215`）返回值类型从裸字符串改为 `*DelegateResult`——**这是唯一破坏性签名变更**。兼容：`DelegateResult` 有 `Output` 字段，任何下游把返回值当 `string` 或 `fmt.Sprintf("%v")` 的用法会拿到 JSON——需 Grep 确认无外部强断言（见风险 §11.2）。
 
 **`delegate_to_agent` 工具 schema** 扩展（`manager_subagent.go:171-187`）：
 ```json
@@ -298,7 +298,7 @@ type SubagentConfig struct {
 
 ### 6.2 触发 files_changed 捕获的挂点
 
-`streamToolCallback` 已把工具事件发到 `StreamResult`（`Type=="tool_event"`, `ToolEvent{Event:"tool_result", ToolName, ToolCallID, Input}`）。`Subagent.Execute` 的 stream 循环（`subagent.go:127-140`）**当前只处理 `chunk` 和 `result` 类型**，需补 `case "tool_event"` 分支，匹配 `Write`/`Edit`/`bash`(git mv/cp) 的 `ToolEvent.Input["path"]`，收集到 `filesChanged []string`。子代理工具集里这些工具的输入键名以 `agent/tools/builtin` 为准（`Write` 用 `path` 等），实现时按实际键名取。
+`streamToolCallback` 已把工具事件发到 `StreamResult`（`Type=="tool_event"`, `ToolEvent{Event:"tool_result", ToolName, ToolCallID, Input}`）。`Subagent.Execute` 的 stream 循环（`subagent.go:127-140`）**当前只处理 `chunk` 和 `result` 类型**，需补 `case "tool_event"` 分支，匹配 `Write`/`Edit`/`Bash`(git mv/cp) 的 `ToolEvent.Input["path"]`，收集到 `filesChanged []string`。子代理工具集里这些工具的输入键名以 `agent/tools/builtin` 为准（`Write` 用 `path` 等），实现时按实际键名取。
 
 ---
 
@@ -306,7 +306,7 @@ type SubagentConfig struct {
 
 ### 7.1 现状问题
 `executeToolWithTimeout`（`agent_tools.go:44-80`）：ctx.WithTimeout 包住 goroutine，超时后 select 走 `ctx.Done()` 返回，但 goroutine 里 `tool.Execute(ctx, args)` 的 ctx **是同一个** —— 已带 timeout。**理论上 LLM HTTP 调用会在超时点被取消**（`anthropic_native.go:179` `NewRequestWithContext`；langchain HTTP 亦传 ctx）。真正的问题是：
-1. **子代理内部的中间工具调用**：某个 `bash` 命令（`agent/tools/builtin`）可能不监听 ctx（外部进程），超时后仍跑。
+1. **子代理内部的中间工具调用**：某个 `Bash` 命令（`agent/tools/builtin`）可能不监听 ctx（外部进程），超时后仍跑。
 2. **超时返回后，父 turn 已把子代理标记失败，但子代理 goroutine 若继续，会继续消费共享 `llmProvider`/budget**。
 
 ### 7.2 根治措施
@@ -317,7 +317,7 @@ type SubagentConfig struct {
 5. **关闭语义**：`SubagentManager.Close()`（`manager_subagent.go:149-153`）改为 cancel 所有进行中的子代理 ctx（`Manager` 持 `map[taskID]context.CancelFunc`），杜绝孤儿。
 
 ### 7.3 副作用确认
-ctx 取消会让**已发出的 LLM 请求**中断（HTTP 层已支持），不会出现"取消后还在烧 token"；`bash` 等进程型工具需要各自监听 ctx（已在 `pkg/shell` 有 ctx 支持则直接用；无则属已知残留，在 §11 风险列明）。
+ctx 取消会让**已发出的 LLM 请求**中断（HTTP 层已支持），不会出现"取消后还在烧 token"；`Bash` 等进程型工具需要各自监听 ctx（已在 `pkg/shell` 有 ctx 支持则直接用；无则属已知残留，在 §11 风险列明）。
 
 ---
 
@@ -394,8 +394,8 @@ ctx 取消会让**已发出的 LLM 请求**中断（HTTP 层已支持），不�
 
 ## 11. 风险点
 
-1. **工具返回值破坏性变更**（S1）：`delegate_to_agent` 从 string → 信封，下游若强断言 `string(result)` 会拿到 JSON。缓解：`DelegateResult.Output` 兜底 + 仓库内 grep 确认消费方（当前仓库内只有 `manager_subagent.go:212` 自身与 `factory.go` 包装层，无外部消费者——需在实现时再 grep 一遍，含 examples/）。
-2. **`files_changed` 依赖 LLM 自觉**：结构化解析 (a) 依赖 prompt 引导，(b) 依赖工具输入键名。缓解：双路并集 + 对 `bash` 的 git 操作做启发式（`git status --porcelain` 快照比对可选，工作量不大但本轮不做）。
+1. **工具返回值破坏性变更**（S1）：`delegate_to_agent` 从 string → 信封，下游若强断言 `string(result)` 会拿到 JSON。缓解：`DelegateResult.Output` 兜底 + 仓库内 Grep 确认消费方（当前仓库内只有 `manager_subagent.go:212` 自身与 `factory.go` 包装层，无外部消费者——需在实现时再 Grep 一遍，含 examples/）。
+2. **`files_changed` 依赖 LLM 自觉**：结构化解析 (a) 依赖 prompt 引导，(b) 依赖工具输入键名。缓解：双路并集 + 对 `Bash` 的 git 操作做启发式（`git status --porcelain` 快照比对可选，工作量不大但本轮不做）。
 3. **后台 goroutine 生命周期**（B1）：`spawn_agent` 后子代理独立跑，父 session 关闭/用户离开时需能回收。缓解：`Manager` 持 cancel map + `Close` 全 cancel + 3 分钟 watchdog。
 4. **mailbox 内存泄漏**：`Put` 后无人 `Drain`（子代理完成但父代理已不在）。缓解：`mailbox` 设 TTL（如 1h 过期清理，`Drop` on session close）。
 5. **`eventbus` 全局实例跨会话串扰**：`dino/bus.go` 的 `Bus` 是实例级（`NewBus()`），但 `eventbus.GlobalBus`（`eventbus.go:654`）是全局的，且 `dino/bus.go:124` 还有 `GetGlobalBus()` 单例。**必须用实例级 `Bus`**（factory 构造一次，注入 notifier），不要用 `eventbus.Slot`/`Emit` 包级函数或 `GetGlobalBus()`，否则多会话事件互相串。
@@ -446,7 +446,7 @@ ctx 取消会让**已发出的 LLM 请求**中断（HTTP 层已支持），不�
 - **B2（session 回收钩子）**：`SubagentManager` 加 `map[sessionID]map[taskID]CancelFunc` 分包 + `CloseSession(sessionID)` + `register/unregisterSubagentCancel` + `cancelSessionAll`；`dino/factory.go` `CloseSession` 已调 `subagentManager.CloseSession(sessionID)`。S1 无 spawn，接口是 S3 预留。
 - **R1（错误折叠）**：`SubagentTool.Execute` 的 error 路径返回 `*DelegateResult{Status:"error", Error:...}` + nil error（不再走 `toolObservationError` 字符串）。
 - **R2（字段类型统一）**：信封时间字段 `TimestampMS int64`（unix_ms）+ `DurationMS int64`，可选字段 omitempty；不用 `time.Time`。
-- **R3（files_changed 双路）**：程序化 (b) 走 `tool_event` 采集 `Write`/`Edit` 的 `path` 键（`StreamEventToolInputStart` 阶段，避免与结果阶段重复）；prompt 引导 (a) 留 S5。bash git 场景已知残留。
+- **R3（files_changed 双路）**：程序化 (b) 走 `tool_event` 采集 `Write`/`Edit` 的 `path` 键（`StreamEventToolInputStart` 阶段，避免与结果阶段重复）；prompt 引导 (a) 留 S5。Bash git 场景已知残留。
 
 **实现中的关键决策（偏离/补充设计）：**
 1. **Iterations 来源改用 `OnAfterIteration` 钩子**：设计 §6.1 提"stream 循环数 result.Result"，但 `ExecuteStream` 只在 `end` 事件携带 `AgentResult`（`agent_execution.go:1225-1228`），stream 循环计数只会是 1。改用 `eng.SetHooks` 的 `OnAfterIteration` 取最大轮数，权威且不依赖 stream 事件。`subagent.go` 的 stream 循环只负责 output/files_changed/usage。

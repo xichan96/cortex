@@ -243,8 +243,8 @@ func statusFromStreamError(err error) string {
 // filesChangedFromToolEvent 从工具事件里提取文件路径：
 // Write/Edit 用 "file_path" 键（兼容旧的 "path"）。
 // 工具事件分 tool_call / tool_input_start / tool_input_end 三个阶段，只取一次即可，
-// 用 tool_input_start 采集避免与结果阶段重复；bash 的 git 操作无 path 键，属已知残留
-// （评审 R3：bash git 场景 files_changed 会漏，S5 用 prompt 引导兜底）。
+// 用 tool_input_start 采集避免与结果阶段重复；Bash 的 git 操作无 path 键，属已知残留
+// （评审 R3：Bash git 场景 files_changed 会漏，S5 用 prompt 引导兜底）。
 func filesChangedFromToolEvent(ev *types.ToolEvent) string {
 	if ev == nil || ev.Input == nil {
 		return ""

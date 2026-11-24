@@ -2,8 +2,6 @@ package tools
 
 import (
 	"context"
-	"fmt"
-	"os"
 
 	"github.com/xichan96/cortex/agent/tools/builtin/fs"
 	"github.com/xichan96/cortex/agent/tools/builtin/mcp"
@@ -33,7 +31,8 @@ func NewEditFileTool(workspace string) types.Tool {
 }
 
 // NewBashTool returns a tool to execute shell commands.
-// Delegates to agent/tools/builtin/runtime.CommandTool but returns name "bash"
+// Delegates to agent/tools/builtin/runtime.CommandTool but exposes the
+// Claude Code-compatible name "Bash" and schema.
 func NewBashTool(workspace string) types.Tool {
 	return &bashToolWrapper{tool: runtime.NewCommandTool(workspace)}
 }
@@ -42,13 +41,58 @@ type bashToolWrapper struct {
 	tool types.Tool
 }
 
-func (t *bashToolWrapper) Name() string                   { return "bash" }
-func (t *bashToolWrapper) Description() string            { return t.tool.Description() }
-func (t *bashToolWrapper) Schema() map[string]interface{} { return t.tool.Schema() }
+func (t *bashToolWrapper) Name() string        { return "Bash" }
+func (t *bashToolWrapper) Description() string { return t.tool.Description() }
+func (t *bashToolWrapper) Schema() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"command": map[string]interface{}{
+				"type":        "string",
+				"description": "The command to execute.",
+			},
+			"timeout": map[string]interface{}{
+				"type":        "integer",
+				"description": "Optional timeout in seconds (max 600).",
+			},
+			"description": map[string]interface{}{
+				"type":        "string",
+				"description": "Clear, concise description of what this command does.",
+			},
+			"run_in_background": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Run the command in the background; use job_output/job_kill to manage it.",
+			},
+			// Retained for backwards compatibility with the runtime tool.
+			"background": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Alias for run_in_background.",
+			},
+		},
+		"required": []string{"command"},
+	}
+}
 func (t *bashToolWrapper) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
+	// Claude Code names the background flag run_in_background; the underlying
+	// command tool understands `background`. Translate without mutating input.
+	if _, ok := input["run_in_background"]; ok {
+		if _, hasBackground := input["background"]; !hasBackground {
+			cloned := make(map[string]interface{}, len(input)+1)
+			for k, v := range input {
+				cloned[k] = v
+			}
+			cloned["background"] = input["run_in_background"]
+			input = cloned
+		}
+	}
 	return t.tool.Execute(ctx, input)
 }
-func (t *bashToolWrapper) Metadata() types.ToolMetadata { return t.tool.Metadata() }
+func (t *bashToolWrapper) Metadata() types.ToolMetadata {
+	md := t.tool.Metadata()
+	md.SourceNodeName = "Bash"
+	md.Extra = map[string]interface{}{"no_cache": true}
+	return md
+}
 
 // deferredMCPTool wraps an MCP tool so its Exposure reports Deferred without
 // mutating the shared *pkg/mcp.MCPTool instance (E1, MCPDeferred config). All
@@ -63,9 +107,9 @@ func NewDeferredMCPTool(tool types.Tool) types.Tool {
 	return &deferredMCPTool{tool: tool}
 }
 
-func (t *deferredMCPTool) Name() string                    { return t.tool.Name() }
-func (t *deferredMCPTool) Description() string             { return t.tool.Description() }
-func (t *deferredMCPTool) Schema() map[string]interface{}  { return t.tool.Schema() }
+func (t *deferredMCPTool) Name() string                   { return t.tool.Name() }
+func (t *deferredMCPTool) Description() string            { return t.tool.Description() }
+func (t *deferredMCPTool) Schema() map[string]interface{} { return t.tool.Schema() }
 func (t *deferredMCPTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	return t.tool.Execute(ctx, input)
 }
@@ -129,73 +173,3 @@ func NewTodoTool() types.Tool {
 func NewMCPClientTool() types.Tool {
 	return mcp.NewMCPClientTool()
 }
-
-type ListDirectoryTool struct {
-	workspace string
-}
-
-func NewListDirectoryTool(workspace string) *ListDirectoryTool {
-	return &ListDirectoryTool{workspace: workspace}
-}
-
-func (t *ListDirectoryTool) Name() string {
-	return "list_directory"
-}
-
-func (t *ListDirectoryTool) Description() string {
-	return "List files in a directory"
-}
-
-func (t *ListDirectoryTool) Schema() map[string]interface{} {
-	return map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"path": map[string]interface{}{"type": "string"},
-		},
-		"required": []string{"path"},
-	}
-}
-
-func (t *ListDirectoryTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
-	path, ok := input["path"].(string)
-	if !ok {
-		return nil, fmt.Errorf("invalid path parameter")
-	}
-
-	absPath, err := fs.SafePath(ctx, t.workspace, path)
-	if err != nil {
-		return nil, err
-	}
-
-	entries, err := os.ReadDir(absPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read directory: %w", err)
-	}
-
-	var result []map[string]interface{}
-	for _, entry := range entries {
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		result = append(result, map[string]interface{}{
-			"name":     entry.Name(),
-			"is_dir":   entry.IsDir(),
-			"size":     info.Size(),
-			"mode":     info.Mode().String(),
-			"mod_time": info.ModTime().Unix(),
-		})
-	}
-
-	return result, nil
-}
-
-func (t *ListDirectoryTool) Metadata() types.ToolMetadata {
-	return types.ToolMetadata{
-		SourceNodeName: "dino",
-		IsFromToolkit:  false,
-		ToolType:       "builtin",
-		Priority:       10,
-	}
-}
-
