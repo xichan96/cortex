@@ -238,7 +238,7 @@ Cortex 有了 trace 后，加一个"任务目录 → 跑批 → 聚合通过率"
 ### 11.1 现状总览（cortex）
 
 - **工具定义**：`types.Tool` 接口（`agent/types/tool.go:6-17`）+ `ToolMetadata`；schema 是**手写 Go map 字面量**，没有 JSON-schema 生成库（`agent/tools/schema/schema.go` 只做输入校验，且校验浅——数组/对象一律接受，`schema.go:122-123`）。
-- **dino 实际注册 14 个工具**（`dino/factory.go:808-823`）：`read_file`/`write_file`/`edit_file`/`bash`/`glob`/`grep`/`list_directory`/`question`/`job_kill`/`job_output`/`web_fetch`/`web_search`/`todo`/`mcp_client`。
+- **dino 实际注册 14 个工具**（`dino/factory.go:808-823`）：`Read`/`Write`/`Edit`/`bash`/`glob`/`grep`/`list_directory`/`question`/`job_kill`/`job_output`/`web_fetch`/`web_search`/`todo`/`mcp_client`。
 - **未注册的能力缺口**：docker 10 件套、ssh、file、command、math、email、http_request 在代码里存在但 dino 的 `loadBuiltinTools` **从不注册**（`internal/app/tools.go:44-107`）。
 - **stub / 半成品**：`question` 权限默认拒绝且无 runner 处理（`dino/permission/permission.go:34`）；`codesearch` 硬编码 "not yet implemented"（`search/codesearch.go:48`）；`http_request` 仅 GET 且从未注册；`web_search` 用手写 SSE 解析器只读第一行 `data:`（`web/websearch.go:182-198`），脆弱。
 - **执行流水线**：`executeIteration` → 拓扑排序 + `MaxToolCallsPerIteration` → `runToolCallsByLayer`（errgroup 并行，`agent_execution.go:320-423`）→ 结果 sanitize。**无并发上限**（errgroup 无 limit），存在 N 个 `bash`/MCP 并行无限制风险。
@@ -261,7 +261,7 @@ Cortex 有了 trace 后，加一个"任务目录 → 跑批 → 聚合通过率"
 - 工具可声明 `Deferred` + `search_info()`；模型初始列表里有一个 `tool_search` 工具（BM25 检索，`tool_search.rs:151-158`），调用后返回匹配的 `LoadableToolSpec`，**下一轮才成为真正的工具定义**。
 - cortex 可做轻量版：`SearchableTool` 接口 + `tool_search` 工具返回工具名/描述，下一轮注入为可用工具。MCP 工具数量增长后收益大。
 
-**④ apply_patch 模式（edit_file 的改造方向）**
+**④ apply_patch 模式（Edit 的改造方向）**
 - `apply_patch` 是 **Lark 语法自由文本工具**，不是 JSON schema（`apply_patch_spec.rs:9-28`），模型直接给整个 patch 文本而非 JSON 参数。
 - **流式增量解析**：`StreamingPatchParser` 消费参数增量，边解析边发 `PatchApplyUpdatedEvent`（500ms 节流，`apply_patch.rs:86-155`），模型能在调用完成前看到 patch 实时解析进度。
 - **写权限从解析出的路径推导**：跳过已有写权限的目录的父目录，避免"可写目录授予父目录访问权"（`apply_patch.rs:236-271`）。
@@ -290,7 +290,7 @@ Cortex 有了 trace 后，加一个"任务目录 → 跑批 → 聚合通过率"
 | 结果结构化 header + 中间截断 | 中 | 正确性 |
 | 并行执行加并发上限 | 极小 | 稳定性 |
 | 补齐 dino 缺失工具（docker/ssh/http 等） | 中 | 能力 |
-| `edit_file` 改造成 patch 流式解析 | 大 | 效率/体验 |
+| `Edit` 改造成 patch 流式解析 | 大 | 效率/体验 |
 
 ---
 

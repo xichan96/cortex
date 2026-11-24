@@ -433,18 +433,18 @@ func TestFactoryInterface(t *testing.T) {
 // TestSubagentRestrictOnly 验证 restrict-only（P2.4）：子代理工具过滤取
 // 「子权限 ∩ 父权限」，父权限不允许的工具子代理不可用。
 func TestSubagentRestrictOnly(t *testing.T) {
-	// 子代理自身权限：允许 read_file 和 write_file。
-	subRuleset := permission.FromAllowDenyAsk(nil, nil, []string{"read_file", "write_file"})
-	// 父权限：只允许 read_file（write_file 父代理不允许）。
-	parentRuleset := permission.FromAllowDenyAsk(nil, nil, []string{"read_file"})
+	// 子代理自身权限：允许 Read 和 Write。
+	subRuleset := permission.FromAllowDenyAsk(nil, nil, []string{"Read", "Write"})
+	// 父权限：只允许 Read（Write 父代理不允许）。
+	parentRuleset := permission.FromAllowDenyAsk(nil, nil, []string{"Read"})
 
 	sa, err := NewSubagent(&Info{
 		Name:       "test",
 		Mode:       ModeSubagent,
 		Permission: subRuleset,
 	}, &mockLLMProvider{response: "hello"}, []types.Tool{
-		&mockTool{name: "read_file"},
-		&mockTool{name: "write_file"},
+		&mockTool{name: "Read"},
+		&mockTool{name: "Write"},
 	}, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -460,22 +460,22 @@ func TestSubagentRestrictOnly(t *testing.T) {
 	if len(filtered) != 1 {
 		t.Fatalf("expected 1 tool after restrict-only intersection, got %d", len(filtered))
 	}
-	if filtered[0].Name() != "read_file" {
-		t.Errorf("expected only read_file to survive parent restriction, got %s", filtered[0].Name())
+	if filtered[0].Name() != "Read" {
+		t.Errorf("expected only Read to survive parent restriction, got %s", filtered[0].Name())
 	}
 }
 
 // TestSubagentNoParentRulesetBackwardCompat 验证无父权限约束时（向后兼容），
 // 子代理工具过滤只受自身权限约束。
 func TestSubagentNoParentRulesetBackwardCompat(t *testing.T) {
-	subRuleset := permission.FromAllowDenyAsk(nil, nil, []string{"read_file", "write_file"})
+	subRuleset := permission.FromAllowDenyAsk(nil, nil, []string{"Read", "Write"})
 	sa, err := NewSubagent(&Info{
 		Name:       "test",
 		Mode:       ModeSubagent,
 		Permission: subRuleset,
 	}, &mockLLMProvider{response: "hello"}, []types.Tool{
-		&mockTool{name: "read_file"},
-		&mockTool{name: "write_file"},
+		&mockTool{name: "Read"},
+		&mockTool{name: "Write"},
 	}, 0)
 	if err != nil {
 		t.Fatal(err)

@@ -4,8 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"fmt"
 	stderrors "errors"
+	"fmt"
 	"strings"
 
 	"github.com/xichan96/cortex/agent/types"
@@ -124,10 +124,10 @@ func nonFatalToolHint(name string, err error) string {
 	}
 	msg := err.Error()
 	if (name == "bash" || name == "execute_command") && strings.Contains(msg, "command is not allowed") {
-		return "command execution is not allowed. Please use a single safe command, or use glob/grep/read_file to split the task."
+		return "command execution is not allowed. Please use a single safe command, or use glob/grep/Read to split the task."
 	}
 	if name == "grep" && (strings.Contains(msg, "executable file not found") || strings.Contains(msg, "no such file or directory")) {
-		return "ripgrep (rg) is not installed in the current environment. Please install it first, or use glob/read_file to split the task."
+		return "ripgrep (rg) is not installed in the current environment. Please install it first, or use glob/Read to split the task."
 	}
 	return ""
 }

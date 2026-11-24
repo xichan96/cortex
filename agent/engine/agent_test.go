@@ -1610,7 +1610,7 @@ func TestHasQuestionSentinel(t *testing.T) {
 		Observation: `{"ok": true, "question": "proceed?", "ask_user": true}`,
 	}
 	normalStep := types.ToolCallData{
-		Action:      types.ToolActionStep{Tool: "read_file", ToolCallID: "c2"},
+		Action:      types.ToolActionStep{Tool: "Read", ToolCallID: "c2"},
 		Observation: "file content",
 	}
 

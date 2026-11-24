@@ -91,7 +91,7 @@ func TestFileStoreRoundTrip(t *testing.T) {
 	if err := first.Put(PermissionRecord{Tool: "bash", Pattern: "git push", Scope: ScopeAlways, Decision: ActionAllow}); err != nil {
 		t.Fatalf("Put allow: %v", err)
 	}
-	if err := first.Put(PermissionRecord{Tool: "write_file", Pattern: "secret.txt", Scope: ScopeWorkspace, Decision: ActionDeny}); err != nil {
+	if err := first.Put(PermissionRecord{Tool: "Write", Pattern: "secret.txt", Scope: ScopeWorkspace, Decision: ActionDeny}); err != nil {
 		t.Fatalf("Put deny: %v", err)
 	}
 
@@ -100,9 +100,9 @@ func TestFileStoreRoundTrip(t *testing.T) {
 	if !ok || rec.Decision != ActionAllow || rec.Scope != ScopeAlways {
 		t.Fatalf("reloaded bash record = %+v ok=%v", rec, ok)
 	}
-	rec, ok = second.Lookup("write_file", "secret.txt")
+	rec, ok = second.Lookup("Write", "secret.txt")
 	if !ok || rec.Decision != ActionDeny {
-		t.Fatalf("reloaded write_file record = %+v ok=%v", rec, ok)
+		t.Fatalf("reloaded Write record = %+v ok=%v", rec, ok)
 	}
 	if got := len(second.List()); got != 2 {
 		t.Fatalf("reloaded %d records, want 2", got)

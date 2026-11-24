@@ -246,7 +246,7 @@ Builtins live under `agent/tools/builtin/` by package; register `types.Tool` ins
 
 | Package | Tool names |
 |---------|------------|
-| `fs/` | `read_file`, `write_file`, `edit_file`, `file` |
+| `fs/` | `Read`, `Write`, `Edit`, `file` |
 | `search/` | `glob`, `grep`, `codesearch` (placeholder) |
 | `runtime/` | `command`, `question`, `job_kill`, `job_output` |
 | `task/` | `todo` (in-process tasks: IDs, pending / in_progress / completed / cancelled, list & update) |

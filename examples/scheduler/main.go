@@ -185,7 +185,7 @@ func main() {
 	defer cronScheduler.Stop()
 
 	// 6. Register Essential Tools
-	// The agent needs 'read_file' to read skill definitions, and 'command' to execute skill instructions.
+	// The agent needs 'Read' to read skill definitions, and 'command' to execute skill instructions.
 	agentEngine.AddTool(ctx, fs.NewFileTool(""))
 	agentEngine.AddTool(ctx, runtime.NewCommandTool(""))
 

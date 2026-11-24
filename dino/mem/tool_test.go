@@ -131,7 +131,7 @@ func TestExternalContextTool(t *testing.T) {
 			t.Errorf("ExternalContextTool(%q) = false, want true", name)
 		}
 	}
-	internal := []string{"read_file", "bash", "grep", "memory", ""}
+	internal := []string{"Read", "bash", "grep", "memory", ""}
 	for _, name := range internal {
 		if ExternalContextTool(name) {
 			t.Errorf("ExternalContextTool(%q) = true, want false", name)

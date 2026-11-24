@@ -69,7 +69,7 @@ func TestEnvelopeFields(t *testing.T) {
 func TestJSONLAppend(t *testing.T) {
 	r, _ := newTestRecorder(t, DefaultConfig())
 	for i := 0; i < 5; i++ {
-		r.Record(hooks.TraceEvent{Type: EventToolCall, Payload: ToolCallPayload{ToolName: "read_file"}})
+		r.Record(hooks.TraceEvent{Type: EventToolCall, Payload: ToolCallPayload{ToolName: "Read"}})
 	}
 	if err := r.Flush(); err != nil {
 		t.Fatalf("Flush: %v", err)
@@ -95,7 +95,7 @@ func TestJSONLAppend(t *testing.T) {
 		if err := json.Unmarshal(ev.Payload, &p); err != nil {
 			t.Fatalf("line %d payload: %v", i, err)
 		}
-		if p.ToolName != "read_file" {
+		if p.ToolName != "Read" {
 			t.Errorf("line %d payload tool_name = %q", i, p.ToolName)
 		}
 	}

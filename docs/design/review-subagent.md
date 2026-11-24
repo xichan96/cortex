@@ -84,7 +84,7 @@
 **R2. `DurationMS`/`Timestamp` 用 `time.Time`/`int64` 混排 + `Truncated` 用 `maxRunes`，字段语义要统一**
 设计 §3.1 自己已经指出了 `time.Duration` JSON 不友好并改成 `int64`（§3.1 注），但 `Timestamp time.Time`（RFC3339）与 `duration_ms int64` 混排会增加模型解析负担；`types.Usage` 有 json tag（`agent/types/llm.go:41-52`，可确认）。建议：`Timestamp` 也转 `unix_ms` 或 `omitempty`，`Truncated` 的 `maxRunes` 上限明确对齐 codex `COMPLETION_MESSAGE_MAX_TOKENS=1000`（`codex-rs/core/src/session_prefix.rs:10`，已核实）。
 
-**R3. `files_changed` 双路采集的成本被低估：结构化解析 (a) 依赖 prompt 引导的 LLM 自觉，程序化 (b) 依赖 tool_event 但**当前 `subagentImpl.Execute` 的 stream 循环只处理 `chunk` 和 `result` 两类**（`subagent.go:127-140`），补 `tool_event` 分支是实打实的新逻辑 + 键名兼容（`write_file`/`edit_file` 用 `path` 键，`fs/write.go:37` `fs/edit.go:36` 已核实）**
+**R3. `files_changed` 双路采集的成本被低估：结构化解析 (a) 依赖 prompt 引导的 LLM 自觉，程序化 (b) 依赖 tool_event 但**当前 `subagentImpl.Execute` 的 stream 循环只处理 `chunk` 和 `result` 两类**（`subagent.go:127-140`），补 `tool_event` 分支是实打实的新逻辑 + 键名兼容（`Write`/`Edit` 用 `path` 键，`fs/write.go:37` `fs/edit.go:36` 已核实）**
 证据：`subagent.go:131-139` 只 `switch result.Type` 到 `chunk` 且只检查 `result.Result != nil`；`streamToolCallback` 发 `tool_event`（`agent_execution.go:123-131`）；write/edit 的 path 键在 `agent/tools/builtin/fs/write.go:37`、`edit.go:36`。
 另注意：**bash 的 git 操作没有 path 键**，设计建议的启发式（git status 快照）自认本轮不做，那么 bash 改文件的场景 `files_changed` 会漏——需在 §9.1#4/#5 之外补一个"bash git 操作"测试或明确降级说明。
 

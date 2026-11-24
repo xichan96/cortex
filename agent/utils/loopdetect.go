@@ -311,7 +311,7 @@ func loopDetectWarning(key string) string {
 	if strings.Contains(key, "bash") || strings.Contains(key, "execute_command") || strings.HasPrefix(key, "command:") {
 		return "Warning: repeated command execution detected. Consider using a different approach or combining commands."
 	}
-	if strings.Contains(key, "read_file") || strings.Contains(key, "glob") || strings.Contains(key, "grep") {
+	if strings.HasPrefix(key, "Read:") || strings.Contains(key, "glob") || strings.Contains(key, "grep") {
 		return "Warning: repeated file operations detected. Try to be more specific with paths or use different search strategies."
 	}
 	return "Warning: repeated actions detected. Consider verifying the current state before continuing."
@@ -321,7 +321,7 @@ func loopDetectSuggestion(key string) string {
 	if strings.Contains(key, "bash") || strings.Contains(key, "execute_command") || strings.HasPrefix(key, "command:") {
 		return "Detected repeated command execution. Consider trying a different approach."
 	}
-	if strings.Contains(key, "read_file") || strings.Contains(key, "glob") {
+	if strings.HasPrefix(key, "Read:") || strings.Contains(key, "glob") {
 		return "Detected repeated file operations. Try specifying a more specific path."
 	}
 	return "Detected repeated actions. The agent may be stuck in a loop."

@@ -47,9 +47,9 @@ Always provide clear and concise responses.`
 	cfg.Skills.AutoLoad = true
 
 	cfg.Tools.Allowed = []string{
-		"read_file",
-		"write_file",
-		"edit_file",
+		"Read",
+		"Write",
+		"Edit",
 		"glob",
 		"grep",
 		"bash",
@@ -71,9 +71,9 @@ Always provide clear and concise responses.`
 		"web_search": 45 * time.Second,
 		"glob":       10 * time.Second,
 		"grep":       30 * time.Second,
-		"read_file":  15 * time.Second,
-		"write_file": 30 * time.Second,
-		"edit_file":  15 * time.Second,
+		"Read":       15 * time.Second,
+		"Write":      30 * time.Second,
+		"Edit":       15 * time.Second,
 	}
 
 	cfg.ToolTimeoutCalculator = func(toolName string, input map[string]interface{}) time.Duration {

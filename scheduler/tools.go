@@ -171,12 +171,12 @@ func (t *ScheduleJobTool) Execute(ctx context.Context, input map[string]interfac
 					}
 				}
 				// Normalize and auto-inject safe defaults:
-				// - 'file' tool (for read_file operation to read SKILL.md)
+				// - 'file' tool (for the read operation to read SKILL.md)
 				// - 'command' tool (to run shell commands required by skills)
 				if len(skills) > 0 {
-					// normalize 'read_file' -> 'file'
-					if _, hasReadFile := toolsList["read_file"]; hasReadFile {
-						delete(toolsList, "read_file")
+					// normalize 'Read' -> 'file'
+					if _, hasRead := toolsList["Read"]; hasRead {
+						delete(toolsList, "Read")
 						toolsList["file"] = struct{}{}
 					}
 					// ensure 'file' and 'command'

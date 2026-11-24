@@ -246,7 +246,7 @@ func main() {
 
 | 目录 | 工具名 |
 |------|--------|
-| `fs/` | `read_file`、`write_file`、`edit_file`、`file` |
+| `fs/` | `Read`、`Write`、`Edit`、`file` |
 | `search/` | `glob`、`grep`、`codesearch`（当前为占位实现） |
 | `runtime/` | `command`（本地 Shell）、`question`（向用户澄清）、`job_kill`、`job_output`（后台命令任务） |
 | `task/` | `todo`（进程内任务：ID、pending / in_progress / completed / cancelled，支持列出与更新） |

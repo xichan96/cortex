@@ -51,8 +51,8 @@
 | bash | `dino/tools/builtin.go:37-51` 包装 `runtime.NewCommandTool`；bash 工具本体在 `pkg/shell` | 实测 `builtin.go:37-51` `NewBashTool`；`command.go:19-23` `NewCommandTool`；命令执行在 `pkg/shell` | **PASS** |
 | bash | `dino/verify/shell.go:10` 的 `VerifyShell` 是 verifier 非 bash 本体 | 实测 `dino/verify/shell.go:10-41` `VerifyShell`（`exec.CommandContext("sh","-c",...)`），是 runner 环境 verifier，**与 bash 工具无关** | **PASS**（设计主动纠正过） |
 | bash | `command.go:78-94` 超时（默认 30s），`:67-76` background，cwd=`fs.EffectiveWorkingDir`，`shell.go:330` bytes.Buffer 无界 | 实测 `command.go:78-94`（timeout 逻辑，默认 `30*time.Second`）、`:67-76`（background → `defaultBgManager.Start`）、`common.go:128-136`（EffectiveWorkingDir 恒返回 workspace）、`shell.go:330`（`var stdout, stderr bytes.Buffer`） | **PASS** |
-| edit_file | 单 hunk 精确替换，非 diff、无多 hunk | 实测 `edit.go:74-77` `strings.Replace(content, oldStr, newStr, 1)` | **PASS** |
-| read_file | 无 offset/limit，整文件读；目录读返回 listing | 实测 `read.go:34-38`（schema 仅 path）、`:74`（`os.ReadFile`）、`:59-72`（目录 listing） | **PASS** |
+| Edit | 单 hunk 精确替换，非 diff、无多 hunk | 实测 `edit.go:74-77` `strings.Replace(content, oldStr, newStr, 1)` | **PASS** |
+| Read | 无 offset/limit，整文件读；目录读返回 listing | 实测 `read.go:34-38`（schema 仅 path）、`:74`（`os.ReadFile`）、`:59-72`（目录 listing） | **PASS** |
 | web_fetch | 5MB 上限（`:26,151-153`）、timeout 30s/120s（`:96-105`）、HTML→Markdown（`:179-188`） | 实测 `webfetch.go:26`（`maxResponseSize = 5 * 1024 * 1024`）、`:140-160`（body 5MB 校验）、`:96-107`（timeout）、`:179-188`（convertHTMLToMarkdown）；**注**：行号引用 `:26,151-153` 里 `151-153` 指 body 校验段（实测 `:152-156` `len(body) > maxResponseSize`），接近 | **PASS** |
 | web_search | `websearch.go:182-198` 手写 SSE 只读第一个 `data:` 行 | 实测 `websearch.go:182-198`：`bufio.Scanner` 循环，**命中第一个可解析且有 Content 的 `data:` 行即 return**——后续 `data:` 块丢弃 | **PASS** |
 | grep | `grep.go:89-109` `exec.CommandContext("grep","-r",…)`，exit 1 当 error、无上限 | 实测 `grep.go:89-106`：`cmd.CombinedOutput()`，`:106` `return string(result), errors.EC_TOOL_EXECUTION_FAILED.Wrap(err)` | **PASS** |
@@ -62,7 +62,7 @@
 | question | `runtime/question.go:57-71` 返回 `SentinelQuestionResult{ask_user:true}`；P2.1 已接（`session.go:507-517`→`EventTypeQuestion`→`client.go:448-451` onQuestion）；**`AnswerQuestion` 方法不存在** | 实测 `question.go:57-71`；`session.go:506-519`（question 分支 emit EventTypeQuestion）；`client.go:448-451`（onQuestion 回调）；grep 全仓**无 `AnswerQuestion` 方法**，仅在 `dino/session/event.go:27` 注释里提到「随后用 AnswerQuestion 把回答注入」 | **PASS**（设计对现状的判断准确） |
 | MCP | `pkg/mcp/client.go` 只 http/httpStreamable/sse，无 stdio；allow-list 靠 env `_goclaw_mcp_allow`（`manager.go:73-83`）；错误码 11xxx | 实测 `client.go:64-92`（transport switch，无 stdio 分支）、`manager.go:73-83`（allowSet）、`ec.go:80-91`（11xxx） | **PASS** |
 | MCP | `mcp_client` 逃生舱工具 `factory.go:1167` 绕过权限包装 | 实测 `loadBuiltinTools`（`factory.go:1152-1175`）含 `NewMCPClientTool()`（`:1167`）；**表述需精确化**：mcp_client 仍走 wrapSessionTool 链（limiter/nonFatal/loop），它绕过的是 **per-MCP-tool 的权限门控**（模型可运行时 connect 任意 URL + call_tool，单个工具名 `mcp_client` 只受自身权限约束），见 R7 | **PASS**（概念需精确化） |
-| write_file | `fs/write.go` 整文件覆盖写 | 实测 `write.go:40-45` schema（path/content），Execute 整写 | **PASS** |
+| Write | `fs/write.go` 整文件覆盖写 | 实测 `write.go:40-45` schema（path/content），Execute 整写 | **PASS** |
 
 ### 2.3 其他断言
 
@@ -143,7 +143,7 @@
 
 **低配版本存在一个被低估的路径：不需要 E1 也能缓解「MCP 多时上下文膨胀」**——设计把根治押在 E1+E2 上，但 P1 之前可以先做**「MCP 工具按 server 分组 + description 聚合」或「MCP 全量 exposure 默认 Deferred（仅 E1，先不做 tool_search，用描述引导直接暴露精选工具）」**。这属于可选旁路，不改变设计推荐顺序；但若 E2 的 BLOCKER（B1/B2）修复成本超出预期，这一降级路径可作为 P1 的 Plan B。**不构成 BLOCKER，仅备注。**
 
-另一条：**`grep.go:106` 的 `exit 1 → error`** 与 **`read_file` 无 offset/limit** 是仅有的两个「模型可见行为错误/低效」项，设计都已识别（P2），无遗漏。
+另一条：**`grep.go:106` 的 `exit 1 → error`** 与 **`Read` 无 offset/limit** 是仅有的两个「模型可见行为错误/低效」项，设计都已识别（P2），无遗漏。
 
 ### 4.3 建议的落地入口
 

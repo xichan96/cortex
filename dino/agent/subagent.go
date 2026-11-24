@@ -195,7 +195,7 @@ func (s *subagentImpl) Execute(ctx context.Context, req *Request) (*Result, erro
 		case "chunk":
 			output.WriteString(result.Content)
 		case "tool_event":
-			// 程序化 files_changed 采集：捕获 write_file/edit_file 工具输入里的 path 键。
+			// 程序化 files_changed 采集：捕获 Write/Edit 工具输入里的 file_path 键。
 			if result.ToolEvent != nil {
 				if p := filesChangedFromToolEvent(result.ToolEvent); p != "" {
 					if _, ok := seenFiles[p]; !ok {
@@ -241,7 +241,7 @@ func statusFromStreamError(err error) string {
 }
 
 // filesChangedFromToolEvent 从工具事件里提取文件路径：
-// write_file/edit_file 用 "path" 键（fs/write.go:37、fs/edit.go:36）。
+// Write/Edit 用 "file_path" 键（兼容旧的 "path"）。
 // 工具事件分 tool_call / tool_input_start / tool_input_end 三个阶段，只取一次即可，
 // 用 tool_input_start 采集避免与结果阶段重复；bash 的 git 操作无 path 键，属已知残留
 // （评审 R3：bash git 场景 files_changed 会漏，S5 用 prompt 引导兜底）。
@@ -250,15 +250,18 @@ func filesChangedFromToolEvent(ev *types.ToolEvent) string {
 		return ""
 	}
 	switch ev.ToolName {
-	case "write_file", "edit_file":
+	case "Write", "Edit":
 	default:
 		return ""
 	}
 	if ev.Event != types.StreamEventToolInputStart {
 		return ""
 	}
-	p, ok := ev.Input["path"].(string)
+	p, ok := ev.Input["file_path"].(string)
 	if !ok || p == "" {
+		p, _ = ev.Input["path"].(string)
+	}
+	if p == "" {
 		return ""
 	}
 	return p
