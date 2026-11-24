@@ -105,8 +105,8 @@ func TestStreamTextReasoningToolCallsAndUsage(t *testing.T) {
 		sseData(`{"id":"chatcmpl-1","model":"gpt-4o","choices":[{"index":0,"delta":{"reasoning_content":"think."},"finish_reason":null}]}`) +
 		sseData(`{"id":"chatcmpl-1","model":"gpt-4o","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}`) +
 		sseData(`{"id":"chatcmpl-1","model":"gpt-4o","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":null}]}`) +
-		sseData(`{"id":"chatcmpl-1","model":"gpt-4o","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"read_file","arguments":"{\"path\":"}}]},"finish_reason":null}]}`) +
-		sseData(`{"id":"chatcmpl-1","model":"gpt-4o","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_b","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"b.txt\"}"}}]},"finish_reason":null}]}`) +
+		sseData(`{"id":"chatcmpl-1","model":"gpt-4o","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"Read","arguments":"{\"path\":"}}]},"finish_reason":null}]}`) +
+		sseData(`{"id":"chatcmpl-1","model":"gpt-4o","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_b","type":"function","function":{"name":"Write","arguments":"{\"path\":\"b.txt\"}"}}]},"finish_reason":null}]}`) +
 		sseData(`{"id":"chatcmpl-1","model":"gpt-4o","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"a.txt\"}"}}]},"finish_reason":null}]}`) +
 		sseData(`{"id":"chatcmpl-1","model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`) +
 		sseData(`{"id":"chatcmpl-1","model":"gpt-4o","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150,"prompt_tokens_details":{"cached_tokens":20},"completion_tokens_details":{"reasoning_tokens":10}}}`) +
@@ -134,7 +134,7 @@ func TestStreamTextReasoningToolCallsAndUsage(t *testing.T) {
 			{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.ContentText, Text: "read a.txt"}}},
 		},
 		Tools: []model.ToolDeclaration{{
-			Name:        "read_file",
+			Name:        "Read",
 			Description: "Read a file",
 			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`),
 		}},
@@ -187,11 +187,11 @@ func TestStreamTextReasoningToolCallsAndUsage(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("tool calls = %+v", calls)
 	}
-	if calls[0].ID != "call_a" || calls[0].Name != "read_file" || calls[0].Arguments["path"] != "a.txt" ||
+	if calls[0].ID != "call_a" || calls[0].Name != "Read" || calls[0].Arguments["path"] != "a.txt" ||
 		calls[0].ArgumentsError != nil {
 		t.Fatalf("first tool call = %+v", calls[0])
 	}
-	if calls[1].ID != "call_b" || calls[1].Name != "write_file" || calls[1].Arguments["path"] != "b.txt" {
+	if calls[1].ID != "call_b" || calls[1].Name != "Write" || calls[1].Arguments["path"] != "b.txt" {
 		t.Fatalf("second tool call = %+v", calls[1])
 	}
 	if message.StopReason != model.StopReasonToolUse {
@@ -249,7 +249,7 @@ func TestStreamTextReasoningToolCallsAndUsage(t *testing.T) {
 	}
 	tool := tools[0].(map[string]any)
 	function := tool["function"].(map[string]any)
-	if tool["type"] != "function" || function["name"] != "read_file" || function["description"] != "Read a file" {
+	if tool["type"] != "function" || function["name"] != "Read" || function["description"] != "Read a file" {
 		t.Fatalf("tool = %+v", tool)
 	}
 	schema := function["parameters"].(map[string]any)
@@ -284,7 +284,7 @@ func TestRequestConversionImagesToolResultsAndThinking(t *testing.T) {
 				{Type: model.ContentThinking, Thinking: "secret reasoning"},
 				{Type: model.ContentText, Text: "calling"},
 				{Type: model.ContentToolCall, ToolCall: &model.ToolCall{
-					ID: "call_9", Name: "read_file", Arguments: map[string]any{"path": "a.txt"},
+					ID: "call_9", Name: "Read", Arguments: map[string]any{"path": "a.txt"},
 				}},
 			}},
 			{Role: model.RoleTool, Content: []model.ContentBlock{
@@ -293,7 +293,7 @@ func TestRequestConversionImagesToolResultsAndThinking(t *testing.T) {
 			{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.ContentText, Text: "thanks"}}},
 		},
 		Tools: []model.ToolDeclaration{{
-			Name:       "read_file",
+			Name:       "Read",
 			Parameters: json.RawMessage(`{"properties":{"path":{"type":"string"}}}`),
 		}},
 		Temperature: &temperature,
@@ -336,7 +336,7 @@ func TestRequestConversionImagesToolResultsAndThinking(t *testing.T) {
 	toolCalls := assistant["tool_calls"].([]any)
 	call := toolCalls[0].(map[string]any)
 	fn := call["function"].(map[string]any)
-	if call["id"] != "call_9" || call["type"] != "function" || fn["name"] != "read_file" {
+	if call["id"] != "call_9" || call["type"] != "function" || fn["name"] != "Read" {
 		t.Fatalf("tool call = %+v", call)
 	}
 	if fn["arguments"] != `{"path":"a.txt"}` {

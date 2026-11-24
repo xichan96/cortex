@@ -178,7 +178,7 @@ func TruncateToolResult(content string, maxLen int, writeDir string, header Outp
 重构后：超大输出（`OriginalBytes > maxLen*8`，建议阈值可配）直接：
 ```
 <header: chunk id / 耗时 / exit code / OriginalBytes / OriginalTokens / TotalLines>
-<"Full output saved to: PATH — use read_file/grep to view.">
+<"Full output saved to: PATH — use Read/grep to view.">
 ```
 正文不出现；header+提示行总长受 `HeaderBudget` 约束（提示行如果超预算，PATH 必须保留、其余 header 行让位——实现按「PATH 行优先级最高」排 header 字段顺序）。
 

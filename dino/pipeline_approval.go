@@ -122,7 +122,7 @@ func approvalRule(c *pipeline.Call) string {
 		if cmd := stringArg(c.Args, "command"); cmd != "" {
 			return commandPattern(cmd)
 		}
-	case "write_file", "edit_file", "read_file", "file", "list_directory":
+	case "Write", "Edit", "Read", "file", "list_directory":
 		if p := stringArg(c.Args, "path", "file_path", "filepath"); p != "" {
 			return filepath.Clean(p)
 		}

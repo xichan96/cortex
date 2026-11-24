@@ -68,12 +68,12 @@ func TestApplyHomeSettings_DefaultsOnlyFillEmptyFields(t *testing.T) {
 func TestApplyHomeSettings_ToolsModifierSemantics(t *testing.T) {
 	root, cwd := t.TempDir(), t.TempDir()
 	writeTestFile(t, filepath.Join(root, "settings.json"),
-		`{"tools":{"default":["read_file","+grep","-bash"]}}`)
+		`{"tools":{"default":["Read","+grep","-bash"]}}`)
 	env := newApplySettingsEnv(t, root, cwd, "always")
 
 	cfg := newApplySettingsConfig(root, cwd)
 	applyHomeSettings(cfg, env)
-	assertStrings(t, cfg.Tools.Allowed, []string{"read_file", "grep"})
+	assertStrings(t, cfg.Tools.Allowed, []string{"Read", "grep"})
 
 	explicit := newApplySettingsConfig(root, cwd)
 	explicit.Tools.Allowed = []string{"bash"}

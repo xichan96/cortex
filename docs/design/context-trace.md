@@ -475,7 +475,7 @@ go run ./cmd/trace-replay --dir <trace_dir> --session <session_id> [--trace <tra
 → USER   「修复 flaky test」
   · model: gpt-4o · input_est=8.2k tok
   · llm_call (iter 0) → output=256 B · usage: prompt=8100/cache=2100/write=6000/comp=280/reason=0 · 1.2s
-  └ TOOL read_file(/tests/e2e_test.go) [call_1] → 2.1s · 4.2KB (orig 9.1KB) · exit=0
+  └ TOOL Read(/tests/e2e_test.go) [call_1] → 2.1s · 4.2KB (orig 9.1KB) · exit=0
   └ TOOL bash(go test ./...) [call_2] → 12.4s · 3.1KB
   · llm_call (iter 1) → output=1.8KB · usage: ... · 3.4s
   → final: "Fixed: added cleanup in teardown."

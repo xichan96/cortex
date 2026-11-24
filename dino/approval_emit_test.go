@@ -132,7 +132,7 @@ func TestExtraReadRootsSkipApproval(t *testing.T) {
 
 type fakePathTool struct{}
 
-func (f *fakePathTool) Name() string                   { return "read_file" }
+func (f *fakePathTool) Name() string                   { return "Read" }
 func (f *fakePathTool) Description() string            { return "fake" }
 func (f *fakePathTool) Schema() map[string]interface{} { return nil }
 func (f *fakePathTool) Metadata() types.ToolMetadata   { return types.ToolMetadata{} }

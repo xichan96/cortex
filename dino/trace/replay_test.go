@@ -30,7 +30,7 @@ func makeReplayEvents() []TraceEvent {
 			Payload: mustJSON(LLMCallEndPayload{
 				Usage:      types.Usage{PromptTokens: 12, CompletionTokens: 5, TotalTokens: 17},
 				DurationMS: 500,
-				ToolCalls:  []types.ToolCallRequest{{Tool: "read_file", ToolCallID: "c1"}},
+				ToolCalls:  []types.ToolCallRequest{{Tool: "Read", ToolCallID: "c1"}},
 			}),
 		},
 		{
@@ -38,7 +38,7 @@ func makeReplayEvents() []TraceEvent {
 			TraceID: "t1", SessionID: "s1", TurnID: 1, Type: EventToolCall,
 			Iteration: intPtr(1),
 			Payload: mustJSON(ToolCallPayload{
-				ToolName: "read_file", ToolCallID: "c1", Input: map[string]any{"path": "/x"},
+				ToolName: "Read", ToolCallID: "c1", Input: map[string]any{"path": "/x"},
 			}),
 		},
 		{
@@ -46,7 +46,7 @@ func makeReplayEvents() []TraceEvent {
 			TraceID: "t1", SessionID: "s1", TurnID: 1, Type: EventToolResult,
 			Iteration: intPtr(1),
 			Payload: mustJSON(ToolResultPayload{
-				ToolName: "read_file", ToolCallID: "c1", Output: "file content", DurationMS: 700,
+				ToolName: "Read", ToolCallID: "c1", Output: "file content", DurationMS: 700,
 			}),
 		},
 		{
@@ -74,7 +74,7 @@ func mustJSON(v any) json.RawMessage {
 func TestReplayRenderText(t *testing.T) {
 	evts := makeReplayEvents()
 	text := RenderText(evts)
-	for _, want := range []string{"Turn t1", "session s1", "llm_call (iter 0)", "TOOL read_file [c1]", "final: done"} {
+	for _, want := range []string{"Turn t1", "session s1", "llm_call (iter 0)", "TOOL Read [c1]", "final: done"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("render missing %q in:\n%s", want, text)
 		}
@@ -104,7 +104,7 @@ func TestReplayReduceJSON(t *testing.T) {
 	foundTool := false
 	for _, iter := range tr.Iterations {
 		for _, tc := range iter.ToolCalls {
-			if tc.ToolName == "read_file" && tc.ToolCallID == "c1" {
+			if tc.ToolName == "Read" && tc.ToolCallID == "c1" {
 				if tc.Output != "file content" || tc.DurationMS != 700 {
 					t.Errorf("tool call folded wrong: %+v", tc)
 				}

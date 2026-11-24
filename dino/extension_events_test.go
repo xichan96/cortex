@@ -269,9 +269,9 @@ func TestExtensionEventSinkMapsToolEvents(t *testing.T) {
 
 	sink := newExtensionEventSink(reg, "ext-events-tools")
 	sink.emitSessionStart()
-	sink.OnEvent(&session.Event{Type: session.EventTypeToolCall, ToolName: "read_file", ToolCallID: "call-1", ToolInput: map[string]any{"path": "/secret"}})
-	sink.OnEvent(&session.Event{Type: session.EventTypeToolInputDelta, ToolName: "read_file", ToolCallID: "call-1", Content: "secret-args"})
-	sink.OnEvent(&session.Event{Type: session.EventTypeToolResult, ToolName: "read_file", ToolCallID: "call-1", ToolOutput: "secret-output"})
+	sink.OnEvent(&session.Event{Type: session.EventTypeToolCall, ToolName: "Read", ToolCallID: "call-1", ToolInput: map[string]any{"path": "/secret"}})
+	sink.OnEvent(&session.Event{Type: session.EventTypeToolInputDelta, ToolName: "Read", ToolCallID: "call-1", Content: "secret-args"})
+	sink.OnEvent(&session.Event{Type: session.EventTypeToolResult, ToolName: "Read", ToolCallID: "call-1", ToolOutput: "secret-output"})
 
 	if got := rec.count(extensions.EventToolExecutionStart); got != 1 {
 		t.Errorf("tool_execution_start = %d, want 1", got)

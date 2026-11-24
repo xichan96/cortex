@@ -23,7 +23,7 @@ Codex 的 7 类模式逐一评估结论（详见 §2–§8）：
 | E6 | **`contains_external_context()` 输出标记** | **做（轻量）**。记忆写入时按工具名分类：`web_*`/MCP 输出不落入长期记忆抽取；短期 chatstore 已按「tool 角色整体跳过」兜底。改动极小（一个分类函数 + ingest 过滤） | **P2** | 小 |
 | E7 | **错误二分（可恢复喂回 vs 致命）** | **已做**（F3，`FatalToolError` + `FatalToolErrorKind`）。剩余工作是把更多错误码纳入 fatal 清单（`EC_TOOL_AUTH_ERROR`/`EC_TOOL_INPUT_ERROR`/MCP 分类），单独评审 | **P2** | 小 |
 
-**按工具逐个对比 Codex 的结论**（§9）：bash/read_file/grep/glob/list_directory/web_fetch/web_search/todo/question/MCP/edit_file/write_file。**唯一值得动刀的是 web_search（SSE 只读第一行，脆弱）与 bash（输出无硬上限，但已被 F1 截断兜底）。** 其余「现状足够、不做」。
+**按工具逐个对比 Codex 的结论**（§9）：bash/Read/grep/glob/list_directory/web_fetch/web_search/todo/question/MCP/Edit/Write。**唯一值得动刀的是 web_search（SSE 只读第一行，脆弱）与 bash（输出无硬上限，但已被 F1 截断兜底）。** 其余「现状足够、不做」。
 
 **推荐落地顺序**：E1+E2（一套体系，连带退场 `mcp_client`）→ E6（外部上下文标记）→ E7（fatal 清单补全）→ E3（P3 排期）。
 
@@ -64,8 +64,8 @@ ChatWithTools (agent_execution.go:1228,1244)
 ### 1.3 内置工具逐个对比（详见 §9 表格）
 
 - **bash**：`dino/tools/builtin.go:37-51` 包装 `runtime.NewCommandTool` → `pkg/shell/shell.go:139-152`（注：`dino/verify/shell.go:10` 的 `VerifyShell` 是 runner 的 verifier，不是 bash 工具本体）。支持 timeout（`command.go:78-94`，ctx deadline 或显式 `timeout` 参数，默认 30s）、background（`command.go:67-76` → `pkg/shell/background.go`）、工作目录（`fs.EffectiveWorkingDir`）。**无输出硬上限**（bytes.Buffer 无界，`shell.go:330`），靠 F1 截断兜底。
-- **edit_file**：`fs/edit.go:34-40`，单 hunk 精确字符串替换（`strings.Replace(…,1)`），非 diff 语义，不支持多 hunk。
-- **read_file**：`fs/read.go:34-78`，**无 offset/limit**，整文件读；目录读返回 listing。大文件靠 F1 截断兜底。
+- **Edit**：`fs/edit.go:34-40`，单 hunk 精确字符串替换（`strings.Replace(…,1)`），非 diff 语义，不支持多 hunk。
+- **Read**：`fs/read.go:34-78`，**无 offset/limit**，整文件读；目录读返回 listing。大文件靠 F1 截断兜底。
 - **web_fetch**：`web/webfetch.go`，5MB 上限（`:26,151-153`）、timeout（`:96-105`，默认 30s 上限 120s）、HTML→Markdown（`:179-188`）。**无限流**。
 - **web_search**：`web/websearch.go:182-198`，**手写 SSE 只读第一个 `data:` 行**，脆弱（正是评估报告 11.1 点名的）。
 - **grep**：`search/grep.go:89-109`，`exec.CommandContext("grep", "-r", …)`，无上限（输出行数无 cap）、无 ignore 规则、exit 1（无匹配）当 error 返回。
@@ -74,7 +74,7 @@ ChatWithTools (agent_execution.go:1228,1244)
 - **todo**：`task/todo.go`，完整 add/remove/update/list + 状态机 + 唯一 in_progress。Codex 无对应内置（用 agent 自管理）。**现状足够**。
 - **question**：`runtime/question.go:57-71` 返回 `SentinelQuestionResult{ask_user:true}`；P2.1 已接异步事件（`dino/session/session.go:507-517` → `EventTypeQuestion` → `client.go:448-451` onQuestion 回调）。**用户回答回流无 `AnswerQuestion` 通道**（`session.go` 只有 `Input()`/`ObserveOneUserTurn`，事件注释里写的 `AnswerQuestion` 方法**不存在**）。
 - **MCP**：`pkg/mcp/client.go`（http/httpStreamable/sse，无 stdio）；allow-list 靠 env `_goclaw_mcp_allow`（`dino/tools/manager.go:73-83`）；错误码 11xxx（`pkg/errors`）。`mcp_client` 逃生舱工具（`factory.go:1167`）绕过权限包装——E1 落地后应退场。
-- **write_file**：`fs/write.go:35-40`，整文件覆盖写。
+- **Write**：`fs/write.go:35-40`，整文件覆盖写。
 
 ### 1.4 「额外评估项」落地状态
 
@@ -200,7 +200,7 @@ for _, t := range deferredTools {
 
 | 工具 | 建议 exposure | 理由 |
 |---|---|---|
-| read_file / write_file / edit_file / bash / glob / grep / list_directory / todo / question / job_kill / job_output | `Direct`（默认，零改动） | 高频核心工具 |
+| Read / Write / Edit / bash / glob / grep / list_directory / todo / question / job_kill / job_output | `Direct`（默认，零改动） | 高频核心工具 |
 | web_fetch / web_search | `Direct`（默认） | 现有行为不变；E6 落地后记忆不受污染 |
 | **MCP 工具（全部）** | **`Deferred`（推荐）** | 工具多时上下文爆炸的根治；靠 tool_search 按需发现 |
 | memory_*（`dino/mem/subsystem.go:152-...`） | `Deferred`（可选） | 记忆操作低频，模型需要时再发现；与 E2 的 `search_knowledge` 检索语义天然契合 |
@@ -383,10 +383,10 @@ Deferred + tool_search 后：
 
 ### 4.4 中间态：多 hunk JSON patch（P2，可选）
 
-不改工具形态，扩展 `edit_file` schema 支持**多 hunk**：
+不改工具形态，扩展 `Edit` schema 支持**多 hunk**：
 
 ```go
-// edit_file schema 扩展（保持向后兼容：hunks 缺省时用旧 path/old_str/new_str）
+// Edit schema 扩展（保持向后兼容：hunks 缺省时用旧 path/old_str/new_str）
 "properties": {
     "path": {"type": "string", "description": "File to edit"},
     "hunks": {
@@ -426,11 +426,11 @@ Codex 用 `async RwLock`：并行工具 `lock.read()`（并发），非并行工
 
 **不做。** 理由：
 
-1. cortex 的依赖拓扑已把「必须串行」建模为**层间依赖**（`Dependencies`，`agent_execution.go:433-458` 拓扑排序）；同层工具**天然可并行**。Codex 的写锁是给「同一工具并发写会冲突」（如 `edit_file` 并发改同一文件）的场景，但 cortex 的 `MaxToolCallsPerIteration` + 单 hunk edit 已把冲突面压到极小。
+1. cortex 的依赖拓扑已把「必须串行」建模为**层间依赖**（`Dependencies`，`agent_execution.go:433-458` 拓扑排序）；同层工具**天然可并行**。Codex 的写锁是给「同一工具并发写会冲突」（如 `Edit` 并发改同一文件）的场景，但 cortex 的 `MaxToolCallsPerIteration` + 单 hunk edit 已把冲突面压到极小。
 2. 引入共享/独占需要每个工具声明 `ParallelSafe bool`，且要在 errgroup 之上再套一层锁调度——复杂度不成比例。
 3. **真正要防的**是「N 个 bash/MCP 全量并发」——已被 SetLimit 解决。
 
-**残余风险标注**：同层多个 `edit_file` 改同一文件仍可能并发竞态（`edit.go` 无文件锁）。当前默认并发 4–32，概率低；若要做，只需给 `fs` 工具加一个**进程内 per-path 锁**（`sync.Map[string]*sync.Mutex`），比 Codex 的读写锁更精准。列入「可选 P3」。
+**残余风险标注**：同层多个 `Edit` 改同一文件仍可能并发竞态（`edit.go` 无文件锁）。当前默认并发 4–32，概率低；若要做，只需给 `fs` 工具加一个**进程内 per-path 锁**（`sync.Map[string]*sync.Mutex`），比 Codex 的读写锁更精准。列入「可选 P3」。
 
 ---
 
@@ -554,17 +554,17 @@ func classifyToolError(err error) error {
 - **输出硬上限（值得，小）**：`command.go` 或 `pkg/shell` 加 `MaxOutputBytes`（默认如 4MB），超限即截断返回 + 提示。**但** F1 已把「喂模型」的上限做好（`TruncateToolResult` 落盘/中间截断），真正缺的是「内存上限」（超大输出撑爆 bytes.Buffer）。**P2 小项**：给 `pkg/shell` 的 `exec` 用 `io.LimitReader` 风格的有界 buffer。
 - **会话复用（暂缓）**：需要跨调用的 cwd/env 状态容器（session 级 `*shell.Shell` 单例 + mutex），与「模型 `cd` 后状态延续」的收益绑定。但**有状态 shell 是调试陷阱**（状态泄漏难查），且 cortex 工作流多用绝对路径（`SafePath` 已返回绝对路径）。**P3 暂缓**，除非产品明确要「长会话 shell 状态」。
 
-### 8.2 edit_file
+### 8.2 Edit
 
 | 维度 | cortex 现状 | Codex 做法 | 差距 |
 |---|---|---|---|
-| 精确替换 vs 整文件重写 | `old_str`/`new_str` **精确字符串替换**（`edit.go:74-77`）；`write_file` 是整文件重写 | `apply_patch` Lark：多 hunk、增删文件 | 精度已对齐（甚至更稳）；**hunk 数不足** |
+| 精确替换 vs 整文件重写 | `old_str`/`new_str` **精确字符串替换**（`edit.go:74-77`）；`Write` 是整文件重写 | `apply_patch` Lark：多 hunk、增删文件 | 精度已对齐（甚至更稳）；**hunk 数不足** |
 | diff 语义 | 无 diff，单次 `Replace` | patch 应用 + 上下文校验 | 单 hunk 找错时整批失败（原子性好） |
 | 流式 | 无 | 流式解析 + 进度事件 | 见 §4，cortex 无中途反馈通道 |
 
 **结论**：精确字符串替换是 Codex 的**超集替代**（对当前模型更稳）。唯一值得做的是 §4.4 的多 hunk JSON（P2 可选）。**不做 Lark。**
 
-### 8.3 read_file
+### 8.3 Read
 
 | 维度 | cortex 现状 | Codex 做法 | 差距 |
 |---|---|---|---|
@@ -572,7 +572,7 @@ func classifyToolError(err error) error {
 | 目录读 | 返回 listing（`read.go:59-72`） | 有 `list_directory` | 已有 |
 | 大文件 | F1 截断兜底 | 行范围 + 自动截断提示 | 见上 |
 
-**是否值得优化**：**P2 小项**。给 `read_file` schema 加 `offset`/`limit`（行号范围），超范围返回「TotalLines + 截断提示」——一次 API 改动（`read.go`）即可，复用 `fs/common.go` 的工具。收益：大文件高效读取、避免 F1 截断整读浪费。**这是本表里性价比最高的单工具优化之一。**
+**是否值得优化**：**P2 小项**。给 `Read` schema 加 `offset`/`limit`（行号范围），超范围返回「TotalLines + 截断提示」——一次 API 改动（`read.go`）即可，复用 `fs/common.go` 的工具。收益：大文件高效读取、避免 F1 截断整读浪费。**这是本表里性价比最高的单工具优化之一。**
 
 ### 8.4 web_fetch / web_search
 
@@ -623,16 +623,16 @@ func classifyToolError(err error) error {
 
 **结论**：MCP 的优化都在 E1（Deferred）+ E7（错误分类）里覆盖，无需单独设计。**名空间前缀（可选 P3）**：`mcp://server/tool` 命名规避撞名——但会改变模型可见工具名，需与 E1 一起评估。
 
-### 8.8 write_file
+### 8.8 Write
 
-`fs/write.go` 整文件覆盖写，与 Codex 的 `write_file` 等价。**不做**（整写语义正确，模型有 read 兜底）。
+`fs/write.go` 整文件覆盖写，与 Codex 的 `Write` 等价。**不做**（整写语义正确，模型有 read 兜底）。
 
 ### 8.9 逐工具优化优先级汇总
 
 | 工具 | 优化项 | 优先级 | 工作量 | 落地方案 |
 |---|---|---|---|---|
 | web_search | SSE 完整解析 | **P1** | 小-中 | `websearch.go:182-198` 改完整 SSE 循环 |
-| read_file | offset/limit 行范围 | **P2** | 小 | `read.go` schema + 实现 |
+| Read | offset/limit 行范围 | **P2** | 小 | `read.go` schema + 实现 |
 | grep | 无匹配返回空 + 结果上限 | **P2** | 小 | `grep.go:106` + LimitReader |
 | bash | 输出内存硬上限 | **P2** | 小 | `pkg/shell` 有界 buffer |
 | question | 回答回流 `AnswerQuestion` | **P2**（与 F7 合并） | 中 | session 注入 + 挂起 |
@@ -654,10 +654,10 @@ func classifyToolError(err error) error {
 | **下一轮（P1）** | web_search SSE 完整解析 | 评估报告点名脆弱点，改动小 | 无 |
 | **P2** | E6 外部上下文标记 | 防记忆污染（轻量） | E1 的 exposure 命名空间（`mcp://`） |
 | **P2** | E7 fatal 清单补全 | 防连接态错误无限重试 | 无 |
-| **P2** | read_file offset/limit | 大文件高效读 | 无 |
+| **P2** | Read offset/limit | 大文件高效读 | 无 |
 | **P2** | grep 空结果 + bash 内存上限 | 正确性 + 稳定性小项 | 无 |
 | **P2（与 F7 合并）** | question 回答回流 | 提问能力闭环 | F7 评审 |
-| **P2（可选）** | edit_file 多 hunk JSON | 减少 round-trip | 无 |
+| **P2（可选）** | Edit 多 hunk JSON | 减少 round-trip | 无 |
 | **P3** | E3 apply_patch Lark + 流式 | 收益依赖无的中途反馈通道 | — |
 | **P3** | glob `**` / grep ignore / bash 会话复用 / MCP 名空间 / fetch 限流 | 收益中、冲突小 | — |
 
@@ -679,7 +679,7 @@ func classifyToolError(err error) error {
 - **web_search SSE**：`web/websearch.go` 的 `Execute` 里 `bufio.Scanner` 循环收集全部 `data:` 行 → 合并解析；或引入 `github.com/r3labs/sse/v2`。测试用 `httptest` mock SSE 流。
 - **E6**：`dino/mem/tool.go` `add_knowledge` schema 加 `external_context: bool` + `ExternalContextTool(name)` 分类；校验 user/feedback 拒绝外部来源。
 - **E7**：`dino/tools/tool_wrappers.go` `classifyToolError` + 测试。
-- **read_file offset/limit**：`agent/tools/builtin/fs/read.go` schema 加 `offset`/`limit`（int），实现按行切片，返回 `total_lines`。
+- **Read offset/limit**：`agent/tools/builtin/fs/read.go` schema 加 `offset`/`limit`（int），实现按行切片，返回 `total_lines`。
 - **grep**：`search/grep.go` 改 `cmd.Output()` 分支（exit 1 空输出 → 空结果）+ 结果上限。
 - **bash 内存上限**：`pkg/shell/shell.go` `exec` 用有界 buffer（如 `cap = 8MB`，超限截断并标记）。
 
@@ -731,7 +731,7 @@ func classifyToolError(err error) error {
 3. **MCP 工具名空间**：是否在 E1 落地时一并引入 `mcp://server/tool` 前缀？（改变模型可见名，需 release note。）
 4. **question 回答回流**：是否进入本季度？它跨 engine+dino 两层，且与 `tool-pipeline.md` F7 的未做项重叠——建议合并排期，但需确认产品「提问-回答」近期是否要用。
 5. **bash 会话复用**：P3 的「长会话 shell 状态」是否有产品诉求？有状态 shell 是调试陷阱，倾向不做。
-6. **edit_file 多 hunk**：P2 可选。是否需要？（当前单 hunk + 多次调用模型已能工作。）
+6. **Edit 多 hunk**：P2 可选。是否需要？（当前单 hunk + 多次调用模型已能工作。）
 7. **E3 apply_patch**：确认暂缓到 P3？（本设计的判断是：Lark 语法收益依赖 cortex 没有的「中途反馈」通道。）
 
 ---

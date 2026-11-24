@@ -485,8 +485,12 @@ func collectOutsideAbsPaths(workspace, toolName string, input map[string]interfa
 		return nil
 	}
 	switch toolName {
-	case "read_file", "write_file", "edit_file", "list_directory":
-		if p, ok := input["path"].(string); ok {
+	case "Read", "Write", "Edit", "list_directory":
+		if p, ok := input["file_path"].(string); ok && p != "" {
+			if err := add(p); err != nil {
+				return nil, err
+			}
+		} else if p, ok := input["path"].(string); ok {
 			if err := add(p); err != nil {
 				return nil, err
 			}

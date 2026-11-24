@@ -292,13 +292,13 @@ type SubagentConfig struct {
 | `Usage` | `lastUsage` + `eng.GetTotalUsage()` 兜底（141-143 行） |
 | `Iterations` | `AgentEngine` 迭代计数：`ExecuteStream` 已暴露 `result.Type=="final"`/`AgentResult`；在 stream 循环里数 `result.Result != nil` 的次数；或给 `AgentEngine` 加 `GetIterationCount()`（`agent.go` 引擎现有循环维护，见 `agent_execution.go` 的迭代状态） |
 | `Duration` | `time.Since(start)` 在 `Execute` 入口/出口 |
-| `FilesChanged` | 两条路：(a) **结构化**：子代理 `general.txt` prompt 注入"最终答案须列出改动文件路径"（对齐 codex `multi_agents_spec.rs:731`），父解析 `Output` 里的路径清单；(b) **程序化**：子代理 engine 加 `toolEvent` 观察器（`streamToolCallback`，`agent_execution.go:133-202`），捕获 `write_file`/`edit_file` 的 `ToolInput` 里的 `path` 字段。本轮实现 (b) 兜底 + (a) prompt 引导，输出取并集去重。 |
+| `FilesChanged` | 两条路：(a) **结构化**：子代理 `general.txt` prompt 注入"最终答案须列出改动文件路径"（对齐 codex `multi_agents_spec.rs:731`），父解析 `Output` 里的路径清单；(b) **程序化**：子代理 engine 加 `toolEvent` 观察器（`streamToolCallback`，`agent_execution.go:133-202`），捕获 `Write`/`Edit` 的 `ToolInput` 里的 `path` 字段。本轮实现 (b) 兜底 + (a) prompt 引导，输出取并集去重。 |
 | `Status` | 终态判定：正常结束 `completed`；`Result.Error != nil` → `error`；ctx deadline → `timeout`；ctx canceled → `cancelled` |
 | `TaskID` | 每次委派在 `SubagentTool.Execute`/`Spawn` 入口 `uuid.NewString()`（`github.com/google/uuid` 已在 go.mod，`session.go` 在用） |
 
 ### 6.2 触发 files_changed 捕获的挂点
 
-`streamToolCallback` 已把工具事件发到 `StreamResult`（`Type=="tool_event"`, `ToolEvent{Event:"tool_result", ToolName, ToolCallID, Input}`）。`Subagent.Execute` 的 stream 循环（`subagent.go:127-140`）**当前只处理 `chunk` 和 `result` 类型**，需补 `case "tool_event"` 分支，匹配 `write_file`/`edit_file`/`bash`(git mv/cp) 的 `ToolEvent.Input["path"]`，收集到 `filesChanged []string`。子代理工具集里这些工具的输入键名以 `agent/tools/builtin` 为准（`write_file` 用 `path` 等），实现时按实际键名取。
+`streamToolCallback` 已把工具事件发到 `StreamResult`（`Type=="tool_event"`, `ToolEvent{Event:"tool_result", ToolName, ToolCallID, Input}`）。`Subagent.Execute` 的 stream 循环（`subagent.go:127-140`）**当前只处理 `chunk` 和 `result` 类型**，需补 `case "tool_event"` 分支，匹配 `Write`/`Edit`/`bash`(git mv/cp) 的 `ToolEvent.Input["path"]`，收集到 `filesChanged []string`。子代理工具集里这些工具的输入键名以 `agent/tools/builtin` 为准（`Write` 用 `path` 等），实现时按实际键名取。
 
 ---
 
@@ -350,7 +350,7 @@ ctx 取消会让**已发出的 LLM 请求**中断（HTTP 层已支持），不�
 2. `TestDelegateResult_Truncated_Completed`：正常态信封格式 + 超限截断。
 3. `TestDelegateResult_Truncated_Error`：错误态含回退文案。
 4. `TestSubagentExecute_Structured`：mock LLM 返回含 files list，断言 `FilesChanged` 被解析。
-5. `TestSubagentExecute_CollectsToolEvents`：mock 工具 `write_file` 触发 tool_event，断言 `FilesChanged` 含该 path。
+5. `TestSubagentExecute_CollectsToolEvents`：mock 工具 `Write` 触发 tool_event，断言 `FilesChanged` 含该 path。
 6. `TestSubagentExecute_StatusError`：`Execute` 中途 `Result.Error` → `Status=="error"`。
 7. `TestSubagentExecute_StatusTimeout`：mock LLM 阻塞到 ctx deadline → `Status=="timeout"`，且 mock LLM 收到 cancel（断言 ctx.Done 传播）。
 8. `TestSubagentTool_ReturnsEnvelope`：`SubagentTool.Execute` 返回 `*DelegateResult` 且 `Output` 与旧 `Result.Output` 相等（向后兼容）。
@@ -446,7 +446,7 @@ ctx 取消会让**已发出的 LLM 请求**中断（HTTP 层已支持），不�
 - **B2（session 回收钩子）**：`SubagentManager` 加 `map[sessionID]map[taskID]CancelFunc` 分包 + `CloseSession(sessionID)` + `register/unregisterSubagentCancel` + `cancelSessionAll`；`dino/factory.go` `CloseSession` 已调 `subagentManager.CloseSession(sessionID)`。S1 无 spawn，接口是 S3 预留。
 - **R1（错误折叠）**：`SubagentTool.Execute` 的 error 路径返回 `*DelegateResult{Status:"error", Error:...}` + nil error（不再走 `toolObservationError` 字符串）。
 - **R2（字段类型统一）**：信封时间字段 `TimestampMS int64`（unix_ms）+ `DurationMS int64`，可选字段 omitempty；不用 `time.Time`。
-- **R3（files_changed 双路）**：程序化 (b) 走 `tool_event` 采集 `write_file`/`edit_file` 的 `path` 键（`StreamEventToolInputStart` 阶段，避免与结果阶段重复）；prompt 引导 (a) 留 S5。bash git 场景已知残留。
+- **R3（files_changed 双路）**：程序化 (b) 走 `tool_event` 采集 `Write`/`Edit` 的 `path` 键（`StreamEventToolInputStart` 阶段，避免与结果阶段重复）；prompt 引导 (a) 留 S5。bash git 场景已知残留。
 
 **实现中的关键决策（偏离/补充设计）：**
 1. **Iterations 来源改用 `OnAfterIteration` 钩子**：设计 §6.1 提"stream 循环数 result.Result"，但 `ExecuteStream` 只在 `end` 事件携带 `AgentResult`（`agent_execution.go:1225-1228`），stream 循环计数只会是 1。改用 `eng.SetHooks` 的 `OnAfterIteration` 取最大轮数，权威且不依赖 stream 事件。`subagent.go` 的 stream 循环只负责 output/files_changed/usage。

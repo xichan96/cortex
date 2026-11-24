@@ -399,9 +399,9 @@ func TestApprovalRulePatterns(t *testing.T) {
 		{"bash", map[string]any{"command": "ls"}, "ls"},
 		{"bash", map[string]any{}, "*"},
 		{"execute_command", map[string]any{"command": "git push"}, "git push"},
-		{"write_file", map[string]any{"path": "./a/../b.txt"}, "b.txt"},
-		{"edit_file", map[string]any{"file_path": "/tmp/x.go"}, "/tmp/x.go"},
-		{"read_file", map[string]any{"path": "notes.md"}, "notes.md"},
+		{"Write", map[string]any{"path": "./a/../b.txt"}, "b.txt"},
+		{"Edit", map[string]any{"file_path": "/tmp/x.go"}, "/tmp/x.go"},
+		{"Read", map[string]any{"path": "notes.md"}, "notes.md"},
 		{"question", map[string]any{"question": "go?"}, "*"},
 	}
 	for _, tc := range cases {

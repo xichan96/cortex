@@ -353,9 +353,9 @@ func DefaultConfig() *Config {
 			"web_search": 45 * time.Second,
 			"glob":       10 * time.Second,
 			"grep":       30 * time.Second,
-			"read_file":  15 * time.Second,
-			"write_file": 30 * time.Second,
-			"edit_file":  15 * time.Second,
+			"Read":       15 * time.Second,
+			"Write":      30 * time.Second,
+			"Edit":       15 * time.Second,
 		},
 		LoopDetection: LoopDetectionConfig{
 			Enabled:             true,
@@ -371,9 +371,9 @@ func DefaultConfig() *Config {
 		Tools: ToolConfig{
 			Profile: "coding",
 			Allowed: []string{
-				"read_file",
-				"write_file",
-				"edit_file",
+				"Read",
+				"Write",
+				"Edit",
 				"glob",
 				"grep",
 				"bash",
@@ -384,8 +384,8 @@ func DefaultConfig() *Config {
 			},
 			ApprovalRequired: []string{
 				"bash",
-				"write_file",
-				"edit_file",
+				"Write",
+				"Edit",
 			},
 			// E1/E2 默认：tool_search 开，MCP Deferred 灰度关，discover 上限 32。
 			ToolSearchEnabled:  true,

@@ -641,6 +641,12 @@ func (ae *AgentEngine) runToolCallsByLayerIter(ctx context.Context, sortedToolCa
 						if !noCache {
 							ae.setCachedToolResult(canonicalName, args, toolResult, nil)
 						}
+						// A mutating tool (Write/Edit/Bash) invalidates previously
+						// cached observations so a later Read cannot serve stale
+						// pre-write content. Runs even for noCache tools.
+						if toolInvalidatesCache(tool) {
+							ae.InvalidateToolCache()
+						}
 						if callback != nil {
 							callback.OnToolResult(tool.Name(), toolCallID, toolResult)
 						}

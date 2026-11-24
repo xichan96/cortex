@@ -10,7 +10,6 @@ import (
 
 	"github.com/xichan96/cortex/agent/tools/prompts"
 	"github.com/xichan96/cortex/agent/types"
-	"github.com/xichan96/cortex/pkg/errors"
 )
 
 type WriteTool struct {
@@ -22,56 +21,62 @@ func NewWriteTool(workspace string) types.Tool {
 }
 
 func (t *WriteTool) Name() string {
-	return "write_file"
+	return "Write"
 }
 
-//go:embed write_file.txt
-var writeFileDescription string
+//go:embed write.txt
+var writeDescription string
 
 func (t *WriteTool) Description() string {
-	return strings.TrimSpace(writeFileDescription + "\n\n" + prompts.WriteToolGuidance + "\n\n" + prompts.DirExistsGuidance)
+	return strings.TrimSpace(writeDescription + "\n\n" + prompts.WriteToolGuidance + "\n\n" + prompts.DirExistsGuidance)
 }
 
 func (t *WriteTool) Schema() map[string]interface{} {
 	return schemaObject(map[string]interface{}{
-		"path":    map[string]interface{}{"type": "string", "description": "The path to the file to write"},
-		"content": map[string]interface{}{"type": "string", "description": "The content to write"},
-	}, []string{"path", "content"})
+		"file_path": map[string]interface{}{"type": "string", "description": "The absolute path to the file to write"},
+		"content":   map[string]interface{}{"type": "string", "description": "The content to write to the file"},
+	}, []string{"file_path", "content"})
 }
 
 func (t *WriteTool) Execute(ctx context.Context, input map[string]interface{}) (interface{}, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	path, ok := input["path"].(string)
-	if !ok || path == "" {
-		return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("path is required"))
+	path := pathArg(input)
+	if path == "" {
+		return nil, fmt.Errorf("file_path is required")
 	}
 	content, ok := input["content"].(string)
 	if !ok {
-		return nil, errors.EC_PARAMETER_MISSING.Wrap(fmt.Errorf("content is required"))
+		return nil, fmt.Errorf("content is required")
 	}
 	safePath, err := SafePath(ctx, t.workspace, path)
 	if err != nil {
-		return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(err)
+		return nil, err
 	}
+	existed := false
 	info, err := os.Stat(safePath)
-	if err == nil {
+	switch {
+	case err == nil:
 		if info.IsDir() {
-			return nil, errors.EC_TOOL_PARAMETER_INVALID.Wrap(fmt.Errorf("path is a directory, not a file: %s", path))
+			return nil, fmt.Errorf("path is a directory, not a file: %s", path)
 		}
-	} else if !os.IsNotExist(err) {
-		return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(err)
+		existed = true
+	case !os.IsNotExist(err):
+		return nil, err
 	}
 	if err := os.MkdirAll(filepath.Dir(safePath), 0755); err != nil {
-		return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(err)
+		return nil, err
 	}
 	if err := os.WriteFile(safePath, []byte(content), 0644); err != nil {
-		return nil, errors.EC_TOOL_EXECUTION_FAILED.Wrap(err)
+		return nil, err
 	}
-	return map[string]interface{}{"path": path, "message": "Successfully wrote to " + path}, nil
+	if existed {
+		return fmt.Sprintf("The file %s has been updated successfully.", path), nil
+	}
+	return fmt.Sprintf("File created successfully at: %s", path), nil
 }
 
 func (t *WriteTool) Metadata() types.ToolMetadata {
-	return metadataFS("write_file")
+	return metadataFSInvalidating("Write")
 }
