@@ -30,6 +30,27 @@ const (
 	defaultSummaryMaxInput = 200
 )
 
+// compactionInstructionsKey carries optional user focus for the next summary
+// (manual /compact <focus>). It is read once by GenerateSummary.
+type compactionInstructionsKey struct{}
+
+// WithCompactionInstructions attaches focus instructions to a compaction call.
+func WithCompactionInstructions(ctx context.Context, instructions string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, compactionInstructionsKey{}, instructions)
+}
+
+// CompactionInstructionsFromContext returns the focus instructions, if any.
+func CompactionInstructionsFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	v, _ := ctx.Value(compactionInstructionsKey{}).(string)
+	return strings.TrimSpace(v)
+}
+
 // LLMSummaryAdapter 桥接 types.LLMProvider → chatstore.LLMProvider。
 // 不改 types.LLMProvider 接口体（与 prompt-caching R3 的类型断言策略一致）。
 type LLMSummaryAdapter struct {
@@ -99,10 +120,14 @@ func (a *LLMSummaryAdapter) GenerateSummary(ctx context.Context, messages []Mess
 	if maxTokens <= 0 {
 		maxTokens = defaultSummaryMaxTokens
 	}
+	systemPrompt := fmt.Sprintf(summarySystemPrompt, maxTokens)
+	if focus := CompactionInstructionsFromContext(ctx); focus != "" {
+		systemPrompt += "\n\nAdditional focus for this summary (respect it while keeping the sections above):\n" + focus
+	}
 	msgs := make([]agenttypes.Message, 0, 1+len(input))
 	msgs = append(msgs, agenttypes.Message{
 		Role:    "system",
-		Content: fmt.Sprintf(summarySystemPrompt, maxTokens),
+		Content: systemPrompt,
 	})
 	for _, m := range input {
 		msgs = append(msgs, agenttypes.Message{

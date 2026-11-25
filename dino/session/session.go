@@ -14,6 +14,7 @@ import (
 	"github.com/xichan96/cortex/agent/question"
 	"github.com/xichan96/cortex/agent/tools/builtin/runtime"
 	"github.com/xichan96/cortex/agent/types"
+	"github.com/xichan96/cortex/dino/chatstore"
 	"github.com/xichan96/cortex/pkg/logger"
 
 	agentutils "github.com/xichan96/cortex/agent/utils"
@@ -446,9 +447,18 @@ type CompactResult = engine.CompactResult
 // A session whose stored message count is at or below the provider's retention
 // window is a no-op: it returns a result with Compacted == 0 and no error.
 func (s *Session) Compact(ctx context.Context) (*CompactResult, error) {
+	return s.CompactWithInstructions(ctx, "")
+}
+
+// CompactWithInstructions 手动压缩，并把用户关注点带进摘要提示词
+// （/compact <focus>）。空 instructions 等价于 Compact。
+func (s *Session) CompactWithInstructions(ctx context.Context, instructions string) (*CompactResult, error) {
 	agent := s.GetAgent()
 	if agent == nil {
 		return nil, errors.New("session: agent is not available")
+	}
+	if strings.TrimSpace(instructions) != "" {
+		ctx = chatstore.WithCompactionInstructions(ctx, instructions)
 	}
 	return agent.CompactMemory(ctx)
 }

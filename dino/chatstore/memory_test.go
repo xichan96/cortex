@@ -559,3 +559,17 @@ func TestHybrid_SQLite_Roundtrip(t *testing.T) {
 		t.Fatalf("最后一项应为 [Summary] user 消息，got role=%q content=%q", last.Role, last.Content)
 	}
 }
+
+func TestLLMSummaryAdapter_FocusInstructions(t *testing.T) {
+	llm := &mockChatLLM{resp: "summary"}
+	a := NewLLMSummaryAdapter(llm)
+	ctx := WithCompactionInstructions(context.Background(), "保留所有接口路径")
+	if _, err := a.GenerateSummary(ctx, []Message{{Role: "user", Content: "hi"}}); err != nil {
+		t.Fatalf("GenerateSummary: %v", err)
+	}
+	llm.mu.Lock()
+	defer llm.mu.Unlock()
+	if !strings.Contains(llm.lastMsgs[0].Content, "保留所有接口路径") {
+		t.Fatalf("focus instructions missing from system prompt: %q", llm.lastMsgs[0].Content)
+	}
+}
