@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -15,6 +16,19 @@ import (
 // defaultReadLimit caps an unbounded read window so a huge file cannot flood
 // the context. It matches Claude Code's Read default.
 const defaultReadLimit = 2000
+
+// maxReadFileBytes rejects accidental whole-file reads of binary blobs or
+// multi-megabyte artifacts. Offset/limit still work inside this cap.
+const maxReadFileBytes = 32 << 20
+
+// looksBinary reports whether the first block contains a NUL byte, which is a
+// reliable signal for images/archives/compiled artifacts in practice.
+func looksBinary(b []byte) bool {
+	if len(b) > 8192 {
+		b = b[:8192]
+	}
+	return bytes.IndexByte(b, 0) >= 0
+}
 
 type ReadTool struct {
 	workspace string
@@ -74,9 +88,15 @@ func (t *ReadTool) Execute(ctx context.Context, input map[string]interface{}) (i
 		// and burn calls; point it at Glob instead.
 		return nil, fmt.Errorf("Read only reads files: %s is a directory. Use Glob to list directory entries.", path)
 	}
+	if info.Size() > maxReadFileBytes {
+		return nil, fmt.Errorf("File is too large to read in one call: %s (%d bytes, limit %d). Read a smaller file or use Bash.", path, info.Size(), maxReadFileBytes)
+	}
 	content, err := os.ReadFile(safePath)
 	if err != nil {
 		return nil, err
+	}
+	if looksBinary(content) {
+		return nil, fmt.Errorf("%s appears to be a binary file (contains NUL bytes); use Bash or an image-capable tool.", path)
 	}
 
 	offset, hasOffset := intArg(input, "offset")

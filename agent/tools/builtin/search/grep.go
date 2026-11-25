@@ -23,6 +23,9 @@ const (
 	outputModeContent          = "content"
 	outputModeFilesWithMatches = "files_with_matches"
 	outputModeCount            = "count"
+	// defaultGrepMaxResults caps unbounded searches so a broad pattern cannot
+	// flood the context. 0 in head_limit gets this default.
+	defaultGrepMaxResults = 500
 )
 
 // typeExtensions maps the Claude Code `type` shorthand to file extensions.
@@ -251,22 +254,31 @@ func (t *GrepTool) Execute(ctx context.Context, input map[string]interface{}) (i
 		}
 	}
 
+	limit := headLimit
+	if limit <= 0 {
+		limit = defaultGrepMaxResults
+	}
 	switch outputMode {
 	case outputModeFilesWithMatches:
-		return joinLimited(filePaths, headLimit), nil
+		return joinLimited(filePaths, limit), nil
 	case outputModeCount:
 		shown := countLines
-		if headLimit > 0 && len(shown) > headLimit {
-			shown = shown[:headLimit]
+		truncated := false
+		if len(shown) > limit {
+			shown = shown[:limit]
+			truncated = true
 		}
 		result := strings.Join(shown, "\n")
 		summary := fmt.Sprintf("Found %d total occurrences across %d files.", totalOccurrences, len(filePaths))
+		if truncated {
+			summary += fmt.Sprintf(" (truncated: showing %d of %d files; narrow the pattern or set head_limit)", len(shown), len(countLines))
+		}
 		if result == "" {
 			return summary, nil
 		}
 		return result + "\n" + summary, nil
 	default:
-		return joinLimited(contentEntries, headLimit), nil
+		return joinLimited(contentEntries, limit), nil
 	}
 }
 
@@ -431,7 +443,9 @@ func formatEntry(rel string, lineNo int, text string, sep byte, showLineNo bool)
 
 func joinLimited(entries []string, limit int) string {
 	if limit > 0 && len(entries) > limit {
-		entries = entries[:limit]
+		shown := entries[:limit]
+		return strings.Join(shown, "\n") +
+			fmt.Sprintf("\n(truncated: showing %d of %d results; narrow the pattern or set head_limit)", len(shown), len(entries))
 	}
 	return strings.Join(entries, "\n")
 }

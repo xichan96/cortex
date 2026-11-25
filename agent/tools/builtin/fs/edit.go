@@ -1,11 +1,14 @@
 package fs
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/xichan96/cortex/agent/tools/prompts"
@@ -123,6 +126,8 @@ func (t *EditTool) Execute(ctx context.Context, input map[string]interface{}) (i
 	if err != nil {
 		return nil, err
 	}
+	unlock := lockPathMutation(safePath)
+	defer unlock()
 	info, err := os.Stat(safePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -133,31 +138,189 @@ func (t *EditTool) Execute(ctx context.Context, input map[string]interface{}) (i
 	if info.IsDir() {
 		return nil, fmt.Errorf("cannot edit directory: %s", path)
 	}
-	contentBytes, err := os.ReadFile(safePath)
+	raw, err := os.ReadFile(safePath)
 	if err != nil {
 		return nil, err
 	}
-	content := string(contentBytes)
-	newContent := content
-	// 原子性：先在内存里对全部 hunk 做替换，任一失败即整体失败，不落盘任何 hunk。
-	for _, h := range hunks {
-		count := strings.Count(newContent, h.Old)
-		if count == 0 {
-			return nil, fmt.Errorf("old_string not found in %s: found 0 matches", path)
-		}
-		if replaceAll {
-			newContent = strings.ReplaceAll(newContent, h.Old, h.New)
-			continue
-		}
-		if count > 1 {
-			return nil, fmt.Errorf("old_string is not unique in %s: found %d matches. Provide more surrounding context or set replace_all=true.", path, count)
-		}
-		newContent = strings.Replace(newContent, h.Old, h.New, 1)
+	bom := bytes.HasPrefix(raw, []byte{0xEF, 0xBB, 0xBF})
+	content := string(raw)
+	if bom {
+		content = content[3:]
 	}
-	if err := os.WriteFile(safePath, []byte(newContent), 0644); err != nil {
+	eol := "\n"
+	if strings.Contains(content, "\r\n") {
+		eol = "\r\n"
+		content = strings.ReplaceAll(content, "\r\n", "\n")
+	}
+	// 原子性：先在内存里对全部 hunk 做替换，任一失败即整体失败，不落盘任何 hunk。
+	newContent := content
+	for _, h := range hunks {
+		newContent, err = applyEdit(newContent, h.Old, h.New, replaceAll, path)
+		if err != nil {
+			return nil, err
+		}
+	}
+	out := newContent
+	if eol == "\r\n" {
+		out = strings.ReplaceAll(out, "\n", "\r\n")
+	}
+	if bom {
+		out = "\ufeff" + out
+	}
+	if err := atomicWriteFile(safePath, []byte(out), info.Mode().Perm()); err != nil {
 		return nil, err
 	}
 	return fmt.Sprintf("The file %s has been updated successfully.", path), nil
+}
+
+// applyEdit performs one replacement. Exact substring matching is tried first
+// (it handles partial-line anchors the way Claude's Edit does); if that finds
+// nothing, a per-line tolerance ladder handles whitespace/typographic
+// differences the model commonly introduces. Uniqueness is enforced at the
+// level that matches, so ambiguous edits fail with line numbers.
+func applyEdit(content, old, new string, replaceAll bool, path string) (string, error) {
+	if old == "" {
+		return "", fmt.Errorf("old_string must not be empty")
+	}
+	if count := strings.Count(content, old); count > 0 {
+		if replaceAll {
+			return strings.ReplaceAll(content, old, new), nil
+		}
+		if count > 1 {
+			return "", fmt.Errorf("old_string is not unique in %s: found %d matches at line(s) %s. Provide more surrounding context or set replace_all=true.",
+				path, count, exactMatchLines(content, old))
+		}
+		return strings.Replace(content, old, new, 1), nil
+	}
+
+	lines := splitLines(content)
+	oldLines := splitLines(old)
+	if len(oldLines) == 0 {
+		return "", fmt.Errorf("old_string must not be empty")
+	}
+	for level := 1; level <= 3; level++ {
+		starts := findLineRanges(lines, oldLines, level)
+		if len(starts) == 0 {
+			continue
+		}
+		if len(starts) > 1 && !replaceAll {
+			return "", fmt.Errorf("old_string is not unique in %s: found %d matches at line(s) %s. Provide more surrounding context or set replace_all=true.",
+				path, len(starts), formatLineNumbers(starts))
+		}
+		newLines := splitLines(new)
+		if replaceAll {
+			for i := len(starts) - 1; i >= 0; i-- {
+				lines = spliceLines(lines, starts[i], len(oldLines), newLines)
+			}
+			return strings.Join(lines, "\n"), nil
+		}
+		lines = spliceLines(lines, starts[0], len(oldLines), newLines)
+		return strings.Join(lines, "\n"), nil
+	}
+	return "", fmt.Errorf("old_string not found in %s: found 0 matches", path)
+}
+
+func lineEqual(a, b string, level int) bool {
+	switch level {
+	case 0:
+		return a == b
+	case 1:
+		return strings.TrimRight(a, " \t") == strings.TrimRight(b, " \t")
+	case 2:
+		return strings.TrimSpace(a) == strings.TrimSpace(b)
+	default:
+		return strings.TrimSpace(normalizeTypography(a)) == strings.TrimSpace(normalizeTypography(b))
+	}
+}
+
+func findLineRanges(lines, oldLines []string, level int) []int {
+	var starts []int
+	for i := 0; i+len(oldLines) <= len(lines); i++ {
+		ok := true
+		for j := range oldLines {
+			if !lineEqual(lines[i+j], oldLines[j], level) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			starts = append(starts, i)
+		}
+	}
+	return starts
+}
+
+func spliceLines(lines []string, start, remove int, add []string) []string {
+	out := make([]string, 0, len(lines)-remove+len(add))
+	out = append(out, lines[:start]...)
+	out = append(out, add...)
+	out = append(out, lines[start+remove:]...)
+	return out
+}
+
+func exactMatchLines(content, old string) string {
+	var lineNos []int
+	line := 1
+	for i := 0; ; {
+		idx := strings.Index(content[i:], old)
+		if idx < 0 {
+			break
+		}
+		pos := i + idx
+		lineNos = append(lineNos, line+strings.Count(content[:pos], "\n"))
+		i = pos + len(old)
+	}
+	return joinInts(lineNos)
+}
+
+func formatLineNumbers(starts []int) string {
+	nos := make([]int, len(starts))
+	for i, s := range starts {
+		nos[i] = s + 1
+	}
+	return joinInts(nos)
+}
+
+func joinInts(ns []int) string {
+	parts := make([]string, len(ns))
+	for i, n := range ns {
+		parts[i] = strconv.Itoa(n)
+	}
+	return strings.Join(parts, ", ")
+}
+
+func normalizeTypography(s string) string {
+	return strings.NewReplacer(
+		"‘", "'", "’", "'", "“", "\"", "”", "\"",
+		"–", "-", "—", "-", " ", " ",
+	).Replace(s)
+}
+
+// atomicWriteFile writes through a temp file in the same directory and renames
+// it into place, so a crash or partial write cannot truncate the target.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".cortex-edit-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(name, perm); err != nil {
+		return err
+	}
+	return os.Rename(name, path)
 }
 
 func (t *EditTool) Metadata() types.ToolMetadata {

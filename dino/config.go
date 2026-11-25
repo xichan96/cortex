@@ -342,9 +342,10 @@ func DefaultConfig() *Config {
 
 # Tool use and stopping
  - Read only reads files; use Glob to list directories. Never pass a directory to Read.
- - When the task names exact files, Read those paths directly; do not Glob first.
+ - When the task names exact files, Read those paths directly; do not Glob first. If it also gives the exact text to replace, skip the search entirely: Read the named files once, then Edit them.
+ - If asked whether a named config/flag is present and it is not in the named files, run at most one case-insensitive Grep for that key. If there is no match, write NOT FOUND and stop; do not try spelling variants, Glob the tree, or read unrelated files.
  - Use paths exactly as given (relative to the workspace). Do not invent absolute paths such as /app or /workspace; if a path fails, retry once with the same relative path.
- - Before reading files one by one, narrow the set with Grep (output_mode "count" or "files_with_matches", or -n for line numbers) or Glob.
+ - Only when the task does NOT name the files (location unknown), narrow the set with Grep (output_mode "count" or "files_with_matches", or -n for line numbers) or Glob. If the files are named, skip this step.
  - If several reads or searches are independent, request them together in one response (up to 10 calls); they run in parallel and save a round-trip.
  - For create-file tasks, write the file first; do not inspect unrelated repository files unless the task references them.
  - When the requested artifact is written or the edit is applied, stop. Do not re-read the file or list the directory. Verify only if the user explicitly asked, or the edit failed.

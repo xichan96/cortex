@@ -169,3 +169,69 @@ func TestEditToolNameSchemaAndMetadata(t *testing.T) {
 		t.Errorf("Edit metadata invalidates_cache = %v, want true", extra["invalidates_cache"])
 	}
 }
+
+func TestEditWhitespaceTolerance(t *testing.T) {
+	ws, p := writeEditFile(t, "func f() {\n\treturn a - b\n}\n")
+	tool := NewEditTool(ws)
+	_, err := tool.Execute(context.Background(), map[string]interface{}{
+		"file_path":  "f.txt",
+		"old_string": "    return a - b", // spaces while the file has a tab
+		"new_string": "\treturn a + b",
+	})
+	if err != nil {
+		t.Fatalf("whitespace-tolerant edit failed: %v", err)
+	}
+	if got := readEditFile(t, p); !strings.Contains(got, "\treturn a + b") {
+		t.Fatalf("file = %q, want replaced line", got)
+	}
+}
+
+func TestEditAmbiguousReportsLineNumbers(t *testing.T) {
+	ws, _ := writeEditFile(t, "x\nsame\nsame\ny\n")
+	tool := NewEditTool(ws)
+	_, err := tool.Execute(context.Background(), map[string]interface{}{
+		"file_path":  "f.txt",
+		"old_string": "same",
+		"new_string": "other",
+	})
+	if err == nil || !strings.Contains(err.Error(), "line(s) 2, 3") {
+		t.Fatalf("error = %v, want ambiguous match with line numbers", err)
+	}
+}
+
+func TestEditPreservesCRLFAndBOM(t *testing.T) {
+	ws, p := writeEditFile(t, "\ufeffline1\r\nline2\r\n")
+	tool := NewEditTool(ws)
+	_, err := tool.Execute(context.Background(), map[string]interface{}{
+		"file_path":  "f.txt",
+		"old_string": "line2",
+		"new_string": "LINE2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := readEditFile(t, p)
+	if !strings.HasPrefix(got, "\ufeff") {
+		t.Fatalf("BOM lost: %q", got)
+	}
+	if !strings.Contains(got, "LINE2\r\n") || strings.Contains(got, "\n\n") {
+		t.Fatalf("CRLF not preserved: %q", got)
+	}
+}
+
+func TestEditReplaceAll(t *testing.T) {
+	ws, p := writeEditFile(t, "a\na\na\n")
+	tool := NewEditTool(ws)
+	_, err := tool.Execute(context.Background(), map[string]interface{}{
+		"file_path":   "f.txt",
+		"old_string":  "a",
+		"new_string":  "b",
+		"replace_all": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readEditFile(t, p); got != "b\nb\nb\n" {
+		t.Fatalf("got %q", got)
+	}
+}

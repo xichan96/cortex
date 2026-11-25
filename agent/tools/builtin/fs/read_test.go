@@ -143,3 +143,16 @@ func TestReadToolNameSchemaAndMetadata(t *testing.T) {
 		t.Errorf("Read metadata no_cache = %v, want true", extra["no_cache"])
 	}
 }
+
+func TestReadRejectsBinary(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "blob.bin")
+	if err := os.WriteFile(p, []byte{0x00, 0x01, 0x02, 0xff}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewReadTool(dir)
+	_, err := tool.Execute(context.Background(), map[string]interface{}{"file_path": "blob.bin"})
+	if err == nil || !strings.Contains(err.Error(), "binary") {
+		t.Fatalf("Read(binary) error = %v, want binary error", err)
+	}
+}

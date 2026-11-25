@@ -54,6 +54,8 @@ func (t *WriteTool) Execute(ctx context.Context, input map[string]interface{}) (
 	if err != nil {
 		return nil, err
 	}
+	unlock := lockPathMutation(safePath)
+	defer unlock()
 	existed := false
 	info, err := os.Stat(safePath)
 	switch {
@@ -68,7 +70,11 @@ func (t *WriteTool) Execute(ctx context.Context, input map[string]interface{}) (
 	if err := os.MkdirAll(filepath.Dir(safePath), 0755); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(safePath, []byte(content), 0644); err != nil {
+	perm := os.FileMode(0o644)
+	if existed {
+		perm = info.Mode().Perm()
+	}
+	if err := atomicWriteFile(safePath, []byte(content), perm); err != nil {
 		return nil, err
 	}
 	if existed {

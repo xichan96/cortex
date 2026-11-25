@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/xichan96/cortex/agent/types"
 )
@@ -168,6 +169,19 @@ func schemaObject(properties map[string]interface{}, required []string) map[stri
 		"properties": properties,
 		"required":   required,
 	}
+}
+
+// pathMutationLocks serializes read-modify-write operations per absolute path
+// across concurrent tool calls and subagents in the same process. Reads do not
+// take the lock: Edit/Write publish via temp-file rename, so readers only ever
+// see the old or the new complete file.
+var pathMutationLocks sync.Map // abs path -> *sync.Mutex
+
+func lockPathMutation(absPath string) func() {
+	v, _ := pathMutationLocks.LoadOrStore(absPath, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 func metadataFS(sourceNodeName string) types.ToolMetadata {

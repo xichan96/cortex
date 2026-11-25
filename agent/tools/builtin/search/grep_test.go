@@ -196,8 +196,11 @@ func TestGrep_ContextLines(t *testing.T) {
 func TestGrep_HeadLimit(t *testing.T) {
 	_, tool := newGrepFixture(t)
 	out := runGrep(t, tool, map[string]interface{}{"pattern": "alpha", "-n": true, "head_limit": 1})
-	if strings.Contains(out, "\n") {
-		t.Fatalf("head_limit=1 must return one entry, got:\n%s", out)
+	if !strings.HasPrefix(out, "sample.txt:1:alpha\n") {
+		t.Fatalf("head_limit=1 must return the first entry, got:\n%s", out)
+	}
+	if !strings.Contains(out, "truncated: showing 1 of 2 results") {
+		t.Fatalf("head_limit truncation must be explicit, got:\n%s", out)
 	}
 }
 
