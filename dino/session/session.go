@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/xichan96/cortex/agent/engine"
+	"github.com/xichan96/cortex/agent/question"
 	"github.com/xichan96/cortex/agent/tools/builtin/runtime"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/logger"
@@ -38,6 +39,14 @@ type Config struct {
 	// ExtraSystemPrompt 会话级系统提示词，**追加**在工厂级 SystemPrompt 之后。
 	// 空 = 只用工厂级。用于「同一个 agent 在不同会话里承担不同角色」。
 	ExtraSystemPrompt string
+	// QuestionBlocking 打开 question 工具的同轮阻塞模式：工具在 turn 内 emit
+	// 一次 EventTypeQuestion（QuestionPending=true）并等待答案，答案作为 tool
+	// result 返回，模型继续本轮。false（默认）保持旧行为：工具返回哨兵、
+	// 本轮结束，答案通过 AnswerQuestion 作为新输入开启下一轮。
+	QuestionBlocking bool
+	// QuestionTimeout 是同轮阻塞的等待上限。<=0 表示只受 turn ctx（工具超时 /
+	// 用户取消）约束。超时返回 question.ErrQuestionTimeout，不会永久卡住。
+	QuestionTimeout time.Duration
 }
 
 func DefaultConfig() *Config {
@@ -100,6 +109,16 @@ func WithUserID(userID string) Option {
 	}
 }
 
+// WithQuestionBlocking enables same-turn blocking for the question tool: the
+// tool waits for the user's answer and returns it as its tool result. timeout
+// bounds the wait; <=0 relies on the turn/tool context.
+func WithQuestionBlocking(enabled bool, timeout time.Duration) Option {
+	return func(c *Config) {
+		c.QuestionBlocking = enabled
+		c.QuestionTimeout = timeout
+	}
+}
+
 type SessionFactory interface {
 	RecordLoop(sessionID string, action agentutils.LoopDetectAction)
 	RecordTokens(ctx context.Context, sessionID string, tokens int)
@@ -133,6 +152,14 @@ type Session struct {
 
 	turnMu            sync.Mutex
 	cancelCurrentTurn context.CancelFunc
+
+	// 同轮阻塞提问的待答表（QuestionBlocking=true 时使用）。
+	// questionMu 保护两张表：pendingQuestions 以请求 ID 为键，questionToolCalls
+	// 把 tool_call_id 映射到请求 ID（兼容只拿到 tool call ID 的旧消费方）。
+	// 每个请求独立 channel，答案按 ID 路由，并发提问互不串扰。
+	questionMu        sync.Mutex
+	pendingQuestions  map[string]*pendingQuestion
+	questionToolCalls map[string]string
 }
 
 type Observer interface {
@@ -174,6 +201,9 @@ func NewSession(id string, agent *engine.AgentEngine, factory SessionFactory, ct
 		budget:    budget,
 		wake:      wake,
 		observers: make(map[string]Observer),
+
+		pendingQuestions:  make(map[string]*pendingQuestion),
+		questionToolCalls: make(map[string]string),
 	}
 }
 
@@ -214,6 +244,165 @@ func (s *Session) AnswerQuestion(toolCallID, answer string) error {
 // user 输入混淆）。session 循环 type-switch 识别后走 questionAnswerDisplay 标记。
 type questionAnswerInput struct {
 	text string
+}
+
+// pendingQuestion 是一次等待中的结构化提问。answers 只需 1 个缓冲：投递方
+// 在投递前先从表里摘除，保证「只答一次」。
+type pendingQuestion struct {
+	requestID  string
+	toolCallID string
+	answers    chan question.Answers
+}
+
+// AnswerQuestionWithData 回答一次**同轮阻塞**的提问（QuestionPending=true 的
+// EventTypeQuestion）。id 可以是事件里的 QuestionID（请求 ID），也可以是
+// ToolCallID（兼容只持有 tool call ID 的消费方）。答案按请求 ID 路由到对应
+// 的等待者，作为 question 工具的 tool result 返回，本轮继续。
+//
+// 空闲/旧模式下没有等待中的请求时返回 question.ErrUnknownQuestion；旧模式
+// 回答请继续使用 AnswerQuestion。
+func (s *Session) AnswerQuestionWithData(id string, answers map[string][]string) error {
+	if s == nil {
+		return errors.New("question: nil session")
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return errors.New("question: request id is required")
+	}
+	return s.deliverQuestionAnswers(id, question.Answers(answers))
+}
+
+// deliverQuestionAnswers 按请求 ID（或 tool_call_id）投递答案。
+func (s *Session) deliverQuestionAnswers(id string, answers question.Answers) error {
+	s.questionMu.Lock()
+	pq := s.pendingQuestions[id]
+	if pq == nil {
+		if requestID, ok := s.questionToolCalls[id]; ok {
+			pq = s.pendingQuestions[requestID]
+		}
+	}
+	if pq == nil {
+		s.questionMu.Unlock()
+		return fmt.Errorf("%w: %s", question.ErrUnknownQuestion, id)
+	}
+	// 投递前摘除：重复回答得到 ErrUnknownQuestion，而不会阻塞或覆盖。
+	delete(s.pendingQuestions, pq.requestID)
+	if pq.toolCallID != "" {
+		delete(s.questionToolCalls, pq.toolCallID)
+	}
+	s.questionMu.Unlock()
+
+	select {
+	case pq.answers <- question.NormalizeAnswers(answers):
+		return nil
+	default:
+		return fmt.Errorf("%w: %s", question.ErrUnknownQuestion, id)
+	}
+}
+
+func (s *Session) registerPendingQuestion(pq *pendingQuestion) error {
+	s.questionMu.Lock()
+	defer s.questionMu.Unlock()
+	if _, ok := s.pendingQuestions[pq.requestID]; ok {
+		return fmt.Errorf("%w: %s", question.ErrDuplicateQuestion, pq.requestID)
+	}
+	if pq.toolCallID != "" {
+		if _, taken := s.questionToolCalls[pq.toolCallID]; taken {
+			return fmt.Errorf("%w: tool_call_id %s", question.ErrDuplicateQuestion, pq.toolCallID)
+		}
+		s.questionToolCalls[pq.toolCallID] = pq.requestID
+	}
+	s.pendingQuestions[pq.requestID] = pq
+	return nil
+}
+
+func (s *Session) unregisterPendingQuestion(pq *pendingQuestion) {
+	s.questionMu.Lock()
+	defer s.questionMu.Unlock()
+	if cur, ok := s.pendingQuestions[pq.requestID]; ok && cur == pq {
+		delete(s.pendingQuestions, pq.requestID)
+	}
+	if pq.toolCallID != "" {
+		if requestID, ok := s.questionToolCalls[pq.toolCallID]; ok && requestID == pq.requestID {
+			delete(s.questionToolCalls, pq.toolCallID)
+		}
+	}
+}
+
+// PendingQuestionIDs 返回当前等待回答的请求 ID（调试/管理用）。
+func (s *Session) PendingQuestionIDs() []string {
+	if s == nil {
+		return nil
+	}
+	s.questionMu.Lock()
+	defer s.questionMu.Unlock()
+	out := make([]string, 0, len(s.pendingQuestions))
+	for id := range s.pendingQuestions {
+		out = append(out, id)
+	}
+	return out
+}
+
+// sessionQuestionAsker 把 Session 适配成 question.Asker：emit 一次问题事件，
+// 然后阻塞等待 AnswerQuestionWithData。turn ctx 取消、会话关闭、请求超时都会
+// 返回明确错误并清理待答表，不会永久卡住。
+type sessionQuestionAsker struct {
+	sess *Session
+}
+
+func (a *sessionQuestionAsker) Ask(ctx context.Context, req question.Request) (question.Answers, error) {
+	if a == nil || a.sess == nil {
+		return nil, question.ErrQuestionUnavailable
+	}
+	return a.sess.askQuestion(ctx, req)
+}
+
+func (s *Session) askQuestion(ctx context.Context, req question.Request) (question.Answers, error) {
+	if len(req.Questions) == 0 {
+		return nil, fmt.Errorf("question: no questions to ask")
+	}
+	requestID := strings.TrimSpace(req.ID)
+	if requestID == "" {
+		requestID = "question-" + uuid.NewString()
+	}
+	pq := &pendingQuestion{
+		requestID:  requestID,
+		toolCallID: req.ToolCallID,
+		answers:    make(chan question.Answers, 1),
+	}
+	if err := s.registerPendingQuestion(pq); err != nil {
+		return nil, err
+	}
+	defer s.unregisterPendingQuestion(pq)
+
+	// 只 emit 一次：事件用请求 ID 作为 QuestionID，ToolCallID 关联工具分片。
+	s.emit(&Event{
+		Type:            EventTypeQuestion,
+		ToolName:        "question",
+		ToolCallID:      req.ToolCallID,
+		QuestionID:      requestID,
+		Question:        question.FirstText(req.Questions),
+		Questions:       req.Questions,
+		QuestionPending: true,
+	})
+
+	var timeoutCh <-chan time.Time
+	if s.config != nil && s.config.QuestionTimeout > 0 {
+		timer := time.NewTimer(s.config.QuestionTimeout)
+		defer timer.Stop()
+		timeoutCh = timer.C
+	}
+
+	select {
+	case answers := <-pq.answers:
+		return answers, nil
+	case <-timeoutCh:
+		return nil, fmt.Errorf("%w: %s", question.ErrQuestionTimeout, requestID)
+	case <-ctx.Done():
+		return nil, question.ContextError(requestID, ctx.Err())
+	case <-s.ctx.Done():
+		return nil, fmt.Errorf("%w: %s: session closed", question.ErrQuestionCancelled, requestID)
+	}
 }
 
 func (s *Session) Output() <-chan *Event {
@@ -481,6 +670,11 @@ func (s *Session) executeWithInput(ctx context.Context, agentInput types.AgentIn
 	}
 
 	turnCtx, cancelTurn := context.WithCancel(ctx)
+	// 同轮阻塞提问：只有显式开启时才把 asker 注入 turn ctx。没有 asker 的
+	// turn 里 question 工具回退为哨兵/暂停（旧行为），所以关闭时行为不变。
+	if s.config != nil && s.config.QuestionBlocking {
+		turnCtx = question.WithAsker(turnCtx, &sessionQuestionAsker{sess: s})
+	}
 	s.turnMu.Lock()
 	s.cancelCurrentTurn = cancelTurn
 	s.turnMu.Unlock()
@@ -600,14 +794,17 @@ func (s *Session) executeWithInput(ctx context.Context, agentInput types.AgentIn
 				case "tool_result":
 					// P2.1 question 工具：输出为 SentinelQuestionResult（AskUser=true）
 					// 时 emit EventTypeQuestion，UI 拿到问题后可回答注入。
+					// 同轮阻塞模式的结果没有 ask_user 标记，且问题事件已由
+					// askQuestion 发出，这里不会重复 emit。
 					if result.ToolEvent.ToolName == "question" {
-						if q := questionFromOutput(result.ToolEvent.Output); q != "" {
+						if q := runtime.SentinelFromOutput(result.ToolEvent.Output); q != nil {
 							s.emit(&Event{
 								Type:       EventTypeQuestion,
 								SessionID:  s.id,
 								ToolName:   result.ToolEvent.ToolName,
 								ToolCallID: result.ToolEvent.ToolCallID,
-								Question:   q,
+								Question:   q.Question,
+								Questions:  q.Questions,
 							})
 						}
 					}
@@ -758,23 +955,8 @@ func generateUUID() string {
 // 要求类型同一性，匿名 struct 断言对命名类型永不命中（此前 P2.1 的
 // EventTypeQuestion 因此在真实流中从未触发）。
 func questionFromOutput(output interface{}) string {
-	if output == nil {
-		return ""
-	}
-	// struct 形态：命名类型 runtime.SentinelQuestionResult。
-	if v, ok := output.(runtime.SentinelQuestionResult); ok {
-		if v.AskUser {
-			return v.Question
-		}
-		return ""
-	}
-	// map 形态（工具结果经 FormatToolResult / JSON round-trip 后）。
-	if m, ok := output.(map[string]interface{}); ok {
-		if ask, ok := m["ask_user"].(bool); ok && ask {
-			if q, ok := m["question"].(string); ok {
-				return q
-			}
-		}
+	if q := runtime.SentinelFromOutput(output); q != nil {
+		return q.Question
 	}
 	return ""
 }

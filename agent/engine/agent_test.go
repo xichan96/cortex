@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/xichan96/cortex/agent/providers"
+	"github.com/xichan96/cortex/agent/question"
 	"github.com/xichan96/cortex/agent/types"
 )
 
@@ -1614,13 +1615,14 @@ func TestHasQuestionSentinel(t *testing.T) {
 		Observation: "file content",
 	}
 
-	if !hasQuestionSentinel([]types.ToolCallData{normalStep, questionStep}) {
+	ctx := context.Background()
+	if !hasQuestionSentinel(ctx, []types.ToolCallData{normalStep, questionStep}) {
 		t.Error("question sentinel should be detected by tool name")
 	}
-	if hasQuestionSentinel([]types.ToolCallData{normalStep}) {
+	if hasQuestionSentinel(ctx, []types.ToolCallData{normalStep}) {
 		t.Error("non-question steps should not trigger")
 	}
-	if hasQuestionSentinel(nil) {
+	if hasQuestionSentinel(ctx, nil) {
 		t.Error("empty steps should not trigger")
 	}
 	// Tool name match regardless of observation content (truncation-robust).
@@ -1628,7 +1630,16 @@ func TestHasQuestionSentinel(t *testing.T) {
 		Action:      types.ToolActionStep{Tool: "question", ToolCallID: "c3"},
 		Observation: `{"ok": true, "question": "very long... \n…truncated…"`,
 	}
-	if !hasQuestionSentinel([]types.ToolCallData{truncatedQ}) {
+	if !hasQuestionSentinel(ctx, []types.ToolCallData{truncatedQ}) {
 		t.Error("question detection must be robust to truncated observation")
+	}
+
+	// Blocking mode: the session injected an asker, so the question tool
+	// already returned the answers and the turn must continue.
+	blockingCtx := question.WithAsker(ctx, question.AskerFunc(func(context.Context, question.Request) (question.Answers, error) {
+		return question.Answers{"question": {"yes"}}, nil
+	}))
+	if hasQuestionSentinel(blockingCtx, []types.ToolCallData{questionStep}) {
+		t.Error("blocking mode must not halt the turn")
 	}
 }

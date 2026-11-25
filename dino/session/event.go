@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/xichan96/cortex/agent/question"
 	agenttypes "github.com/xichan96/cortex/agent/types"
 )
 
@@ -53,8 +54,16 @@ type Event struct {
 	Plan      *Plan  `json:"plan,omitempty"`
 	StopCause string `json:"stop_cause,omitempty"`
 	// Question question 工具向用户提问的内容（P2.1）。配套 QuestionID 供回答注入。
+	// 结构化提问时 Question 保留首题文本，兼容旧消费方。
 	QuestionID string `json:"question_id,omitempty"`
 	Question   string `json:"question,omitempty"`
+	// Questions 是结构化的 1-3 个问题（id/header/question/options/multiSelect/
+	// isSecret）。Dojo 按 questions[] 解析；旧消费方只看 Question 仍可用。
+	Questions []question.Spec `json:"questions,omitempty"`
+	// QuestionPending 为 true 表示本轮阻塞等待答案（同轮阻塞模式）。
+	// 消费方用 QuestionID（请求 ID）调用 AnswerQuestionWithData 回灌；
+	// false/缺失表示旧模式：答案通过 AnswerQuestion 作为新输入回流。
+	QuestionPending bool `json:"question_pending,omitempty"`
 	// Source 事件来源（S4/B2，subagent-s3s4 §7.7）。默认 "user"（向后兼容，
 	// 缺失字段 = user）。唤醒注入 turn = "subagent"，供消费方（client.go /
 	// turn_observe.go）识别并折叠，避免"幽灵用户消息"喷到 UI 与 assistant-text。

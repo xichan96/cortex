@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/xichan96/cortex/agent/question"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/logger"
 )
@@ -355,6 +356,7 @@ type HandlerBuilder struct {
 	onDone            func()
 	onApproval        func(toolName string, approved bool)
 	onQuestion        func(question string, toolCallID string)
+	onQuestions       func(questionID, toolCallID string, questions []question.Spec)
 }
 
 func (hb *HandlerBuilder) OnMessage(fn func(content string)) *HandlerBuilder {
@@ -401,8 +403,18 @@ func (hb *HandlerBuilder) OnApproval(fn func(toolName string, approved bool)) *H
 
 // OnQuestion 注册 question 工具提问回调（P2.1）。question 工具被调用且返回
 // SentinelQuestionResult 时触发，调用方可把问题展示给用户。
+// 同轮阻塞模式下答案应通过 OnQuestions 拿到的请求 ID 调用
+// Session.AnswerQuestionWithData；本回调的 toolCallID 只适合旧模式。
 func (hb *HandlerBuilder) OnQuestion(fn func(question string, toolCallID string)) *HandlerBuilder {
 	hb.onQuestion = fn
+	return hb
+}
+
+// OnQuestions 注册结构化提问回调。questionID 是同轮阻塞模式的请求 ID（用
+// Session.AnswerQuestionWithData 回灌）；旧模式下它为空，答案走 AnswerQuestion。
+// OnQuestion 仍会同时触发（携带首题文本），方便未迁移的调用方。
+func (hb *HandlerBuilder) OnQuestions(fn func(questionID, toolCallID string, questions []question.Spec)) *HandlerBuilder {
+	hb.onQuestions = fn
 	return hb
 }
 
@@ -446,6 +458,9 @@ func (hb *HandlerBuilder) Build() string {
 				hb.onApproval(event.ToolName, event.Approved)
 			}
 		case EventTypeQuestion:
+			if hb.onQuestions != nil && len(event.Questions) > 0 {
+				hb.onQuestions(event.QuestionID, event.ToolCallID, event.Questions)
+			}
 			if hb.onQuestion != nil {
 				hb.onQuestion(event.Question, event.ToolCallID)
 			}

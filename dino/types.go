@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xichan96/cortex/agent/question"
 	"github.com/xichan96/cortex/dino/session"
 )
 
@@ -53,6 +54,10 @@ type ExecuteResponse = session.ExecuteResponse
 type ToolCallInfo = session.ToolCallInfo
 type Plan = session.Plan
 type PlanStep = session.PlanStep
+
+// QuestionSpec / QuestionOption 是结构化提问的公开类型（事件 Questions 字段）。
+type QuestionSpec = question.Spec
+type QuestionOption = question.Option
 type sessionConfig = session.Config
 
 const (

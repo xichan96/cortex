@@ -1,6 +1,11 @@
-- Asks the user a question and waits for their response.
-- This is useful when you need clarification or input from the user to proceed.
+- Asks the user 1-3 structured questions and, when the host supports it, waits for the answers within the current turn.
+- Use when you genuinely need a decision or missing information that you cannot infer from the workspace.
 
 Usage notes:
-  - Requires a `question` to ask the user.
-  - The tool will return the user's answer as a string.
+  - Prefer `questions`: an array of objects with `id` (snake_case), `header` (<= 12 characters), `question`, and optional `options` (2-4 entries with `label` + `description`), `multiSelect`, `isSecret`.
+  - Omit `options` for a free-text question. Do not add an "Other" option; clients append it.
+  - Put the recommended option first and append " (Recommended)" to its label.
+  - Set `isSecret` for credentials and other values the UI must mask.
+  - Do not repeat questions the user already answered. Do not use this tool for "may I proceed?" execution confirmations.
+  - The legacy single-string form `{question: "..."}` is still accepted and becomes one free-text question with id "question".
+  - The tool result contains `answers`, keyed by question id (free text is prefixed with "user_note:"). In hosts without interactive support the turn pauses instead and a sentinel/question event is emitted.
