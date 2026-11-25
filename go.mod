@@ -13,6 +13,7 @@ require (
 	github.com/docker/go-connections v0.6.0
 	github.com/docker/go-units v0.5.0
 	github.com/gin-gonic/gin v1.9.1
+	github.com/glebarez/go-sqlite v1.21.2
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/google/uuid v1.6.0
@@ -37,7 +38,6 @@ require (
 	gopkg.in/gomail.v2 v2.0.0-20160411212932-81ebce5c23df
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/mysql v1.6.0
-	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gen v0.3.27
 	gorm.io/gorm v1.31.1
 	gorm.io/plugin/dbresolver v1.6.2
@@ -64,7 +64,6 @@ require (
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.2 // indirect
 	github.com/gin-contrib/sse v0.1.0 // indirect
-	github.com/glebarez/go-sqlite v1.21.2 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect

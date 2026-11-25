@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -23,7 +23,10 @@ import (
 func setupTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
-	path := filepath.Join(t.TempDir(), "xcron-test.db") + "?_journal_mode=WAL&_busy_timeout=5000"
+	// pure-Go driver (modernc via glebarez/sqlite): the CGO sqlite driver is a
+	// stub under CGO_ENABLED=0. modernc uses _pragma=key(value) instead of the
+	// mattn-style _key=value query parameters.
+	path := filepath.Join(t.TempDir(), "xcron-test.db") + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
 	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open test database: %v", err)

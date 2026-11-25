@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gorm.io/driver/sqlite"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
 	"github.com/xichan96/cortex/pkg/xcron"
@@ -24,7 +24,8 @@ import (
 func newTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
-	dsn := filepath.Join(t.TempDir(), "scheduler-test.db") + "?_journal_mode=WAL&_busy_timeout=5000"
+	// pure-Go driver so the package also builds/tests with CGO_ENABLED=0.
+	dsn := filepath.Join(t.TempDir(), "scheduler-test.db") + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open test database: %v", err)
