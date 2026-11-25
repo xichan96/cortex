@@ -1539,7 +1539,7 @@ func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Me
 			slog.Duration("duration", time.Since(startTime)))
 
 		// question 工具哨兵 → 结束本轮（回答会作为新输入回流，question-reflow §2.1）。
-		if hasQuestionSentinel(intermediateSteps) {
+		if hasQuestionSentinel(ctx, intermediateSteps) {
 			return result, false, nil
 		}
 
@@ -1967,7 +1967,7 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 			slog.Int("intermediate_steps", len(intermediateSteps)))
 
 		// question 工具哨兵 → 结束本轮（回答会作为新输入回流，question-reflow §2.1）。
-		if hasQuestionSentinel(intermediateSteps) {
+		if hasQuestionSentinel(ctx, intermediateSteps) {
 			return result, false, nil
 		}
 

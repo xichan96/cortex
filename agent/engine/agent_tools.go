@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/xichan96/cortex/agent/pipeline"
+	"github.com/xichan96/cortex/agent/question"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
 )
@@ -56,6 +57,13 @@ func (ae *AgentEngine) executeToolCallWithTimeout(ctx context.Context, tool type
 	if timeout > 0 {
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
+	}
+
+	// Make the model's tool-call id visible to tools that need to correlate
+	// side-channel interactions with the tool part (the question tool emits a
+	// blocking request carrying this id).
+	if toolCallID != "" {
+		ctx = question.WithToolCallID(ctx, toolCallID)
 	}
 
 	p := ae.ToolPipeline()
