@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/glebarez/go-sqlite"
 	"github.com/xichan96/cortex/dino/chatstore"
 )
 
@@ -138,7 +138,7 @@ func readFirstUserMessageTitle(ctx context.Context, dbPath string) string {
 	if err != nil {
 		return ""
 	}
-	db, err := sql.Open("sqlite3", abs+"?mode=ro")
+	db, err := sql.Open("sqlite", abs+"?_pragma=query_only(1)")
 	if err != nil {
 		return ""
 	}
@@ -204,7 +204,7 @@ func readLegacySQLiteChatHistory(ctx context.Context, dbPath string) ([]ChatHist
 	if err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite3", abs+"?mode=ro")
+	db, err := sql.Open("sqlite", abs+"?_pragma=query_only(1)")
 	if err != nil {
 		return nil, err
 	}

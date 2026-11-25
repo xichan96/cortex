@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/glebarez/go-sqlite"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/logger"
 )
@@ -77,7 +77,7 @@ func openSharedSQLite(dir, sqliteFile string) (*sql.DB, error) {
 
 	// WAL + busy_timeout: ingest 后台写与用户会话写共享同一连接池，
 	// 默认 rollback-journal 下写事务会偶发 "database is locked"。
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
@@ -151,7 +151,7 @@ func migrateLegacySessionDBs(ctx context.Context, shared *sql.DB, absDir, shared
 			continue
 		}
 		legacyPath := filepath.Join(absDir, name)
-		legDB, err := sql.Open("sqlite3", legacyPath+"?mode=ro")
+		legDB, err := sql.Open("sqlite", legacyPath+"?_pragma=query_only(1)")
 		if err != nil {
 			continue
 		}
