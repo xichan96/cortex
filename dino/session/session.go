@@ -273,6 +273,25 @@ func (s *Session) AnswerQuestionWithData(id string, answers map[string][]string)
 	return s.deliverQuestionAnswers(id, question.Answers(answers))
 }
 
+// NotifyCompaction is called by the host's compaction observer to surface an
+// automatic compression as a session event. Safe to call from the background
+// compression goroutine: emit only pushes to the output channel.
+func (s *Session) NotifyCompaction(reason string, result engine.CompactResult) {
+	if s == nil {
+		return
+	}
+	s.emit(&Event{
+		Type: EventTypeCompaction,
+		Compaction: &CompactionInfo{
+			Reason:     reason,
+			Compacted:  result.Compacted,
+			Kept:       result.Kept,
+			SummaryLen: result.SummaryLen,
+			UsedLLM:    result.UsedLLM,
+		},
+	})
+}
+
 // deliverQuestionAnswers 按请求 ID（或 tool_call_id）投递答案。
 func (s *Session) deliverQuestionAnswers(id string, answers question.Answers) error {
 	s.questionMu.Lock()

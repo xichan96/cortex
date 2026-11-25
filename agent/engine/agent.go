@@ -83,6 +83,10 @@ type AgentEngine struct {
 
 	memoryCompletedTurns atomic.Uint32
 	memoryCompressMu     sync.Mutex
+	// compactionObserver reports a completed automatic compression (threshold /
+	// turn-based). Injected by the host (dino/session) so it can surface a UI
+	// event; nil = no observer.
+	compactionObserver func(reason string, result CompactResult)
 
 	// Tool callback for real-time events
 	toolCallback types.ToolCallback

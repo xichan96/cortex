@@ -1418,6 +1418,13 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	}
 
 	sess := session.NewSession(sessionID, agent, f, ctx, cfg, plannerHelper, f.budget, wake)
+	// 自动压缩（threshold/compact_after_turns）完成后把结果转成 session 事件，
+	// 宿主可以据此展示“上下文已压缩”提示；手动 CompactMemory 不走这里。
+	if agent != nil {
+		agent.SetCompactionObserver(func(reason string, result engine.CompactResult) {
+			sess.NotifyCompaction(reason, result)
+		})
+	}
 
 	// context-trace: orchestration events (planner/approval/question/subagent)
 	// flow to the recorder via the session observer (design §3.3).

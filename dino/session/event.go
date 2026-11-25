@@ -27,6 +27,10 @@ const (
 	EventTypeApproval       EventType = "approval"
 	EventTypePlan           EventType = "plan"
 	EventTypePlanStep       EventType = "plan_step"
+	// EventTypeCompaction 自动压缩完成（threshold / compact_after_turns）。
+	// 宿主据此展示“上下文已压缩”提示；手动 /compact 通过 Compact 返回值。
+	EventTypeCompaction EventType = "compaction"
+
 	// EventTypeQuestion question 工具向用户提问（P2.1，异步事件模型）。
 	// session 检测到 SentinelQuestionResult 时 emit；UI 经 onQuestion 回调拿到
 	// 问题，随后用 AnswerQuestion 把回答注入（作为下一条 user 消息喂回）。
@@ -49,10 +53,11 @@ type Event struct {
 	ApprovalPending bool `json:"approval_pending,omitempty"`
 	// RequestID 审批请求 ID（ApprovalPending 为 true 时有值）。
 	// 消费方拿到后调 DinoFactory.RespondToolApproval(requestID, approved) 回灌。
-	RequestID string `json:"request_id,omitempty"`
-	Usage     *Usage `json:"usage,omitempty"`
-	Plan      *Plan  `json:"plan,omitempty"`
-	StopCause string `json:"stop_cause,omitempty"`
+	RequestID  string          `json:"request_id,omitempty"`
+	Usage      *Usage          `json:"usage,omitempty"`
+	Plan       *Plan           `json:"plan,omitempty"`
+	Compaction *CompactionInfo `json:"compaction,omitempty"`
+	StopCause  string          `json:"stop_cause,omitempty"`
 	// Question question 工具向用户提问的内容（P2.1）。配套 QuestionID 供回答注入。
 	// 结构化提问时 Question 保留首题文本，兼容旧消费方。
 	QuestionID string `json:"question_id,omitempty"`
@@ -72,6 +77,15 @@ type Event struct {
 }
 
 // EventSource 事件来源标记（S4/B2）。默认 user 保持现有行为。
+// CompactionInfo describes one automatic memory compression.
+type CompactionInfo struct {
+	Reason     string `json:"reason"` // threshold | compact_after_turns | threshold_and_turns
+	Compacted  int    `json:"compacted"`
+	Kept       int    `json:"kept"`
+	SummaryLen int    `json:"summary_len"`
+	UsedLLM    bool   `json:"used_llm"`
+}
+
 type EventSource string
 
 const (

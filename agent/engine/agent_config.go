@@ -74,6 +74,15 @@ type CompactResult struct {
 	UsedLLM bool `json:"used_llm"`
 }
 
+// SetCompactionObserver installs a callback for automatically triggered
+// compressions. Manual CompactMemory does not invoke it (the caller already
+// has the result). Pass nil to clear.
+func (ae *AgentEngine) SetCompactionObserver(fn func(reason string, result CompactResult)) {
+	ae.mu.Lock()
+	ae.compactionObserver = fn
+	ae.mu.Unlock()
+}
+
 // CompactMemory compacts the conversation memory on demand (the manual /compact
 // entry point). It runs the same provider compression the engine schedules
 // automatically and serializes with it on memoryCompressMu, so an in-flight
@@ -107,6 +116,12 @@ func (ae *AgentEngine) CompactMemory(ctx context.Context) (*CompactResult, error
 		return nil, err
 	}
 
+	return ae.buildCompactResult(ctx, mem, before, hadBefore), nil
+}
+
+// buildCompactResult reads the post-compression counts/summary. before/hadBefore
+// come from the pre-compression storedMessageCount.
+func (ae *AgentEngine) buildCompactResult(ctx context.Context, mem types.MemoryProvider, before int, hadBefore bool) *CompactResult {
 	after, hadAfter := ae.storedMessageCount(ctx, mem)
 
 	result := &CompactResult{}
@@ -129,8 +144,7 @@ func (ae *AgentEngine) CompactMemory(ctx context.Context) (*CompactResult, error
 			result.SummaryLen = len(summary)
 		}
 	}
-
-	return result, nil
+	return result
 }
 
 // storedMessageCount reads the raw stored message count, preferring

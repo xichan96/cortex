@@ -858,6 +858,8 @@ func (ae *AgentEngine) saveToMemoryAndMaybeCompress(ctx context.Context, inputMa
 
 	ae.mu.RLock()
 	llm := ae.model
+	mem := ae.memory
+	observer := ae.compactionObserver
 	ae.mu.RUnlock()
 	if llm == nil {
 		return
@@ -885,13 +887,17 @@ func (ae *AgentEngine) saveToMemoryAndMaybeCompress(ctx context.Context, inputMa
 		}
 		compressCtx, cancel := context.WithTimeout(context.Background(), dt)
 		defer cancel()
-		if err := ae.memory.CompressMemory(compressCtx, llm, keepWindow); err != nil {
+		if err := mem.CompressMemory(compressCtx, llm, keepWindow); err != nil {
 			logger.LogError("saveToMemoryAndMaybeCompress", err, slog.String("phase", "compress_memory_async"))
 		} else {
+			result := ae.buildCompactResult(compressCtx, mem, stored, true)
 			logger.Info("Memory compressed successfully",
 				slog.String("reason", reason),
 				slog.Int("stored_message_count", stored),
 				slog.Int("keep_window", keepWindow))
+			if observer != nil {
+				observer(reason, *result)
+			}
 		}
 	}()
 }
