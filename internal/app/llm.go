@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/xichan96/cortex/agent/llm"
+	lcllm "github.com/xichan96/cortex/agent/llm/langchain"
 	"github.com/xichan96/cortex/agent/types"
 )
 
@@ -25,7 +25,7 @@ func (a *agent) setupLLM(ctx context.Context) (types.LLMProvider, error) {
 
 func (a *agent) initOpenAI(ctx context.Context) (types.LLMProvider, error) {
 	cfg := a.config.LLM.OpenAI
-	opts := llm.OpenAIOptions{
+	opts := lcllm.OpenAIOptions{
 		APIKey:  cfg.APIKey,
 		BaseURL: cfg.BaseURL,
 		Model:   cfg.Model,
@@ -33,7 +33,7 @@ func (a *agent) initOpenAI(ctx context.Context) (types.LLMProvider, error) {
 		APIType: cfg.APIType,
 	}
 
-	provider, err := llm.NewOpenAIClient(opts)
+	provider, err := lcllm.NewOpenAIClient(opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize OpenAI client: %w", err)
 	}
@@ -42,13 +42,13 @@ func (a *agent) initOpenAI(ctx context.Context) (types.LLMProvider, error) {
 
 func (a *agent) initDeepSeek(ctx context.Context) (types.LLMProvider, error) {
 	cfg := a.config.LLM.DeepSeek
-	opts := llm.DeepSeekOptions{
+	opts := lcllm.DeepSeekOptions{
 		APIKey:  cfg.APIKey,
 		BaseURL: cfg.BaseURL,
 		Model:   cfg.Model,
 	}
 
-	provider, err := llm.NewDeepSeekClient(opts)
+	provider, err := lcllm.NewDeepSeekClient(opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize DeepSeek client: %w", err)
 	}
@@ -57,13 +57,13 @@ func (a *agent) initDeepSeek(ctx context.Context) (types.LLMProvider, error) {
 
 func (a *agent) initVolce(ctx context.Context) (types.LLMProvider, error) {
 	cfg := a.config.LLM.Volce
-	opts := llm.VolceOptions{
+	opts := lcllm.VolceOptions{
 		APIKey:  cfg.APIKey,
 		BaseURL: cfg.BaseURL,
 		Model:   cfg.Model,
 	}
 
-	provider, err := llm.NewVolceClient(opts)
+	provider, err := lcllm.NewVolceClient(opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize Volce client: %w", err)
 	}

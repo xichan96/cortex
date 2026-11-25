@@ -159,6 +159,9 @@ Cortex 提供了统一的接口适配多种 LLM Provider，支持灵活的参数
 
 ```go
 // OpenAI
+import llm "github.com/xichan96/cortex/agent/llm/langchain"
+import _ "github.com/xichan96/cortex/dino/llmcompat"
+
 llmProvider, _ := llm.OpenAIClient("sk-...", "gpt-4o")
 
 // DeepSeek
@@ -354,7 +357,9 @@ Cortex 引入了先进的**混合记忆架构 (Hybrid Memory Architecture)**，�
 ```go
 // 示例：使用 Redis 作为记忆存储
 redisClient := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
-memory := providers.NewRedisMemoryProvider(redisClient, "session-id")
+import redismemory "github.com/xichan96/cortex/agent/providers/redismemory"
+
+memory := redismemory.NewRedisMemoryProvider(redisClient, "session-id")
 agentEngine.SetMemory(context.Background(), memory)
 ```
 

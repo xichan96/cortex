@@ -108,7 +108,7 @@ func (p *MySQLMemoryProvider) AddMessage(ctx context.Context, message types.Mess
 	p.mu.RUnlock()
 
 	partsJSON, _ := types.SerializeMessageParts(message.Parts)
-	extras := encodeMessageToolExtras(message)
+	extras := EncodeMessageToolExtras(message)
 
 	doc := MySQLMessageDocument{
 		SessionID:  sessionID,
@@ -167,7 +167,7 @@ func (p *MySQLMemoryProvider) GetMessages(ctx context.Context, limit int) ([]typ
 			Name:    docs[i].Name,
 			Parts:   parts,
 		}
-		applyStoredToolExtras(&m, docs[i].ToolExtras)
+		ApplyStoredToolExtras(&m, docs[i].ToolExtras)
 		messages = append(messages, m)
 	}
 

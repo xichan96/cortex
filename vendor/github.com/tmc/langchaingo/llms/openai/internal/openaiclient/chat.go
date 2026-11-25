@@ -83,6 +83,10 @@ type ChatRequest struct {
 
 	// Metadata allows you to specify additional information that will be passed to the model.
 	Metadata map[string]any `json:"metadata,omitempty"`
+
+	// WebSearchOptions configures web search behavior for search-enabled models
+	// like gpt-4o-search-preview and gpt-4o-mini-search-preview.
+	WebSearchOptions *WebSearchOptions `json:"web_search_options,omitempty"`
 }
 
 // MarshalJSON ensures that only one of MaxTokens or MaxCompletionTokens is sent.
@@ -99,9 +103,9 @@ func (r ChatRequest) MarshalJSON() ([]byte, error) {
 		Alias: (*Alias)(&r),
 	}
 
-	// Handle temperature for reasoning models
-	if isReasoningModel(r.Model) {
-		// Reasoning models (GPT-5, o1, o3) only accept temperature=1 (default)
+	// Handle temperature for reasoning and search-preview models
+	if isReasoningModel(r.Model) || isSearchPreviewModel(r.Model) {
+		// These models reject non-default temperature values.
 		// Omit temperature field to let API use its default value
 		aux.Temperature = nil
 	} else {
@@ -124,6 +128,12 @@ func (r ChatRequest) MarshalJSON() ([]byte, error) {
 	}
 
 	return json.Marshal(&aux)
+}
+
+// isSearchPreviewModel reports whether model is a search-preview model,
+// including dated snapshots such as gpt-4o-search-preview-2025-03-11.
+func isSearchPreviewModel(model string) bool {
+	return strings.Contains(model, "-search-preview")
 }
 
 // isReasoningModel returns true if the model is a reasoning model that has temperature constraints.
@@ -150,6 +160,39 @@ type ToolType string
 const (
 	ToolTypeFunction ToolType = "function"
 )
+
+// WebSearchOptions configures web search behavior for OpenAI models.
+// This is used with search-enabled models like gpt-4o-search-preview.
+type WebSearchOptions struct {
+	// SearchContextSize controls how much context is gathered from web search.
+	// Valid values: "low", "medium", "high". Higher values provide more context
+	// but increase latency and cost.
+	SearchContextSize string `json:"search_context_size,omitempty"`
+
+	// UserLocation provides approximate user location for localized search results.
+	UserLocation *UserLocation `json:"user_location,omitempty"`
+}
+
+// UserLocation represents the user's approximate location for web search.
+type UserLocation struct {
+	// Type must be "approximate" for user-provided location.
+	Type string `json:"type"`
+
+	// Approximate contains the approximate location details.
+	Approximate *ApproximateLocation `json:"approximate,omitempty"`
+}
+
+// ApproximateLocation contains approximate location information.
+type ApproximateLocation struct {
+	// Country is the two-letter ISO country code (e.g., "US", "GB").
+	Country string `json:"country,omitempty"`
+
+	// City is the city name (e.g., "San Francisco", "London").
+	City string `json:"city,omitempty"`
+
+	// Region is the region or state (e.g., "California", "London").
+	Region string `json:"region,omitempty"`
+}
 
 // Tool is a tool to use in a chat request.
 type Tool struct {

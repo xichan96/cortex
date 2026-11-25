@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/xichan96/cortex/agent/engine"
-	"github.com/xichan96/cortex/agent/llm"
+	llm "github.com/xichan96/cortex/agent/llm/langchain"
 	"github.com/xichan96/cortex/agent/providers"
 	"github.com/xichan96/cortex/agent/skills"
 	"github.com/xichan96/cortex/agent/tools/builtin/fs"

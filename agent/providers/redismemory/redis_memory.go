@@ -1,4 +1,4 @@
-package providers
+package redismemory
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/xichan96/cortex/agent/providers"
 	"github.com/xichan96/cortex/agent/types"
 	credis "github.com/xichan96/cortex/pkg/middle/redis"
 )
@@ -72,7 +73,7 @@ func (p *RedisMemoryProvider) AddMessage(ctx context.Context, message types.Mess
 	if partsJSON != "" {
 		msgData["parts"] = partsJSON
 	}
-	if x := encodeMessageToolExtras(message); x != "" {
+	if x := providers.EncodeMessageToolExtras(message); x != "" {
 		msgData["tool_extras"] = x
 	}
 
@@ -151,7 +152,7 @@ func (p *RedisMemoryProvider) GetMessages(ctx context.Context, limit int) ([]typ
 			msg.Parts = parts
 		}
 		if x, ok := msgData["tool_extras"].(string); ok {
-			applyStoredToolExtras(&msg, x)
+			providers.ApplyStoredToolExtras(&msg, x)
 		}
 
 		messages = append(messages, msg)
@@ -190,7 +191,7 @@ func (p *RedisMemoryProvider) SaveContext(ctx context.Context, input, output map
 			return err
 		}
 	}
-	if err := SaveOutputWithToolSteps(ctx, p, output); err != nil {
+	if err := providers.SaveOutputWithToolSteps(ctx, p, output); err != nil {
 		return err
 	}
 	return nil

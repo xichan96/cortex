@@ -494,25 +494,10 @@ func RegisterLLMProvider(name string, factory LLMProviderFactory) {
 }
 
 func init() {
-	RegisterLLMProvider("openai", func(cfg *Config) (types.LLMProvider, error) {
-		return llm.NewOpenAIClient(llm.OpenAIOptions{
-			APIKey:  cfg.Provider.APIKey,
-			BaseURL: cfg.Provider.BaseURL,
-			Model:   cfg.DefaultModel,
-		})
-	})
-	RegisterLLMProvider("deepseek", func(cfg *Config) (types.LLMProvider, error) {
-		return llm.NewDeepSeekClient(llm.DeepSeekOptions{
-			APIKey: cfg.Provider.APIKey,
-			Model:  cfg.DefaultModel,
-		})
-	})
-	RegisterLLMProvider("volce", func(cfg *Config) (types.LLMProvider, error) {
-		return llm.NewVolceClient(llm.VolceOptions{
-			APIKey: cfg.Provider.APIKey,
-			Model:  cfg.DefaultModel,
-		})
-	})
+	// Anthropic is native (no langchaingo). The OpenAI-compatible providers
+	// (openai/deepseek/volce) live in dino/llmcompat; hosts that need them
+	// blank-import that package. Dojo only uses Anthropic, so it does not link
+	// langchaingo, redis, or qmgo.
 	RegisterLLMProvider("anthropic", func(cfg *Config) (types.LLMProvider, error) {
 		return llm.NewAnthropicClient(llm.AnthropicOptions{
 			APIKey:  cfg.Provider.APIKey,
