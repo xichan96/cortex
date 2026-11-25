@@ -183,6 +183,9 @@ func metadataFS(sourceNodeName string) types.ToolMetadata {
 func metadataFSNoCache(sourceNodeName string) types.ToolMetadata {
 	m := metadataFS(sourceNodeName)
 	m.Extra = map[string]interface{}{"no_cache": true}
+	// Read-only filesystem calls may run concurrently with sibling calls.
+	m.ConcurrencySafe = true
+	m.ExecutionMode = types.ExecutionModeParallel
 	return m
 }
 
@@ -194,6 +197,9 @@ func metadataFSInvalidating(sourceNodeName string) types.ToolMetadata {
 		"no_cache":          true,
 		"invalidates_cache": true,
 	}
+	// Mutating calls are barriers: never run alongside siblings.
+	m.ConcurrencySafe = false
+	m.ExecutionMode = types.ExecutionModeSequential
 	return m
 }
 

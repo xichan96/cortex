@@ -135,6 +135,9 @@ func (t *CommandTool) Metadata() types.ToolMetadata {
 		ToolType:       "runtime",
 		// A shell command can write files, so a successful run must clear any
 		// cached tool observations (Bash is exposed under this metadata).
-		Extra: map[string]interface{}{"invalidates_cache": true},
+		// Shell commands are barriers: never run alongside sibling calls.
+		ConcurrencySafe: false,
+		ExecutionMode:   types.ExecutionModeSequential,
+		Extra:           map[string]interface{}{"invalidates_cache": true},
 	}
 }

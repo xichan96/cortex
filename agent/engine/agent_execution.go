@@ -457,6 +457,20 @@ func (ae *AgentEngine) runToolCallsByLayer(ctx context.Context, sortedToolCalls 
 
 // runToolCallsByLayerIter is runToolCallsByLayer with an iteration hint for
 // tracing (Iteration=-1 when the caller has no meaningful iteration).
+// toolConcurrencySafe reports whether a call may run alongside siblings in the
+// same batch. Tools opt in via ConcurrencySafeProvider or Metadata; the default
+// is a barrier (matching Claude Code's "custom tools run sequentially unless
+// marked read-only").
+func toolConcurrencySafe(tool types.Tool, args map[string]interface{}) bool {
+	if tool == nil {
+		return false
+	}
+	if p, ok := tool.(types.ConcurrencySafeProvider); ok {
+		return p.IsConcurrencySafe(args)
+	}
+	return tool.Metadata().ConcurrencySafe
+}
+
 func (ae *AgentEngine) runToolCallsByLayerIter(ctx context.Context, sortedToolCalls []types.ToolCall, timeout time.Duration, iteration int) (exists []bool, results []stepResult) {
 	n := len(sortedToolCalls)
 	tools := make([]types.Tool, n)
@@ -484,15 +498,25 @@ func (ae *AgentEngine) runToolCallsByLayerIter(ctx context.Context, sortedToolCa
 	// Get hooks
 	hookRunner := hooks.NewRunner(ae.getHooks(), "", "")
 
-	// Global concurrency cap across all layers: parallel Bash/MCP calls (same
-	// layer, no dependencies) are bounded, dependent calls in later layers wait
-	// for earlier layers to release their slots. This is a wall-time throttle
-	// only — correctness is unchanged (errgroup already waits for every call).
+	// Claude Code scheduling: read-only calls run concurrently, while mutating
+	// calls (Write/Edit/Bash and custom tools without a read-only hint) are
+	// barriers. Serialize a layer when it contains a barrier; otherwise run its
+	// read-only calls concurrently up to the parallelism limit.
 	limit := ae.getToolParallelismLimit()
 	for _, layer := range layers {
+		layerLimit := limit
+		for _, idx := range layer {
+			if !exists[idx] {
+				continue
+			}
+			if !toolConcurrencySafe(tools[idx], sortedToolCalls[idx].Function.Arguments) {
+				layerLimit = 1
+				break
+			}
+		}
 		g, gctx := errgroup.WithContext(ctx)
-		if limit > 0 {
-			g.SetLimit(limit)
+		if layerLimit > 0 {
+			g.SetLimit(layerLimit)
 		}
 		for _, idx := range layer {
 			if !exists[idx] {
@@ -530,11 +554,9 @@ func (ae *AgentEngine) runToolCallsByLayerIter(ctx context.Context, sortedToolCa
 				hookRunner.BeforeToolCall(tool.Name(), args)
 
 				if err := schema.ValidateInput(tool.Schema(), args, tool.Name()); err != nil {
-					// Input validation failure is fatal (F3): retrying the same
-					// arguments cannot succeed, and running the other parallel
-					// calls with the model's broken inputs is wasted work. Mark
-					// it fatal and cancel the same-layer siblings via the
-					// errgroup so this iteration unwinds quickly.
+					// Claude Code returns an error result for the failed call and
+					// still executes its siblings. Record the error and let the
+					// batch continue; only a cancelled turn unwinds the errgroup.
 					results[idx] = stepResult{err: &types.FatalToolError{Err: err, Reason: "tool input validation failed"}, cached: false, duration: 0}
 					ae.recordTrace(hooks.TraceEvent{
 						Type:      traceToolError,
@@ -550,7 +572,10 @@ func (ae *AgentEngine) runToolCallsByLayerIter(ctx context.Context, sortedToolCa
 						callback.OnToolInputEnd(tool.Name(), toolCallID, args)
 						callback.OnToolError(tool.Name(), toolCallID, err)
 					}
-					return err
+					if gctx.Err() != nil {
+						return gctx.Err()
+					}
+					return nil
 				}
 				canonicalName := tool.Name()
 				// Check for no_cache flag in metadata
@@ -592,7 +617,11 @@ func (ae *AgentEngine) runToolCallsByLayerIter(ctx context.Context, sortedToolCa
 							if callback != nil {
 								callback.OnToolError(tool.Name(), toolCallID, err)
 							}
-							return err
+							// A denied/fatal cached call must not cancel siblings.
+							if gctx.Err() != nil {
+								return gctx.Err()
+							}
+							return nil
 						}
 						// context-trace: cached hit is a normal tool_result path
 						// (B2 — cache is the common case, must not be missed).
@@ -654,11 +683,9 @@ func (ae *AgentEngine) runToolCallsByLayerIter(ctx context.Context, sortedToolCa
 						return nil
 					}
 					lastErr = err
-					// Fatal errors (schema, user veto, loop) are not retryable and
-					// must short-circuit the iteration: retrying the same input
-					// cannot succeed and running the remaining same-layer calls is
-					// wasted work. Cancelling the errgroup releases the sibling
-					// goroutines. (F3/P4.2)
+					// Fatal errors (schema, user veto, loop) are not retryable, but
+					// they do not cancel sibling calls: Claude Code returns each
+					// call's own result. Only a cancelled turn unwinds the batch.
 					if isFatalToolError(err) {
 						results[idx] = stepResult{err: err, cached: false, duration: time.Since(start)}
 						ae.recordTrace(hooks.TraceEvent{
@@ -675,7 +702,10 @@ func (ae *AgentEngine) runToolCallsByLayerIter(ctx context.Context, sortedToolCa
 							callback.OnToolError(tool.Name(), toolCallID, err)
 						}
 						hookRunner.AfterToolCall(tool.Name(), nil, err)
-						return err
+						if gctx.Err() != nil {
+							return gctx.Err()
+						}
+						return nil
 					}
 					if attempt < attempts-1 && errors.IsRetryable(err) {
 						timer := time.NewTimer(retryDelay)
@@ -1875,26 +1905,15 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 		logger.LogExecution("executeStreamIteration", iteration, "Processing tool calls",
 			slog.Int("tool_count", len(result.ToolCalls)))
 
-		// 单轮并发工具上限：模型一口气发十几个调用时，截断并把超出部分作为
-		// 错误结果回给模型。并发跑完再一次性看结果正是「一次查完所有接口」
-		// 的坏体验；上限强迫它「查一批 → 看结果 → 再决定」。
-		if cap := ae.maxToolCallsPerRound(); cap > 0 && len(result.ToolCalls) > cap {
-			dropped := result.ToolCalls[cap:]
-			result.ToolCalls = result.ToolCalls[:cap]
-			for _, tc := range dropped {
-				result.IntermediateSteps = append(result.IntermediateSteps, types.ToolCallData{
-					Action: types.ToolActionStep{
-						Tool:       tc.Tool,
-						ToolInput:  tc.ToolInput,
-						ToolCallID: tc.ToolCallID,
-						Log:        "skipped: too many tool calls in one round",
-					},
-					Observation: fmt.Sprintf(
-						`{"error":"单轮工具调用超过上限 %d，本次未执行。请一次只查少量接口，看到结果再决定下一步。"}`, cap),
-				})
-			}
-			logger.LogExecution("executeStreamIteration", iteration, "Truncated tool calls",
-				slog.Int("kept", cap), slog.Int("dropped", len(dropped)))
+		// Align with Claude Code: every tool_use block in the assistant message
+		// is executed. MaxToolCallsPerRound is a concurrency bound, not a drop
+		// policy — dropping calls makes the model re-request them next round and
+		// breaks tool_call/result pairing. The engine's parallelism limit is
+		// wired from this value in dino/factory.go.
+		if limit := ae.maxToolCallsPerRound(); limit > 0 && len(result.ToolCalls) > limit {
+			logger.LogExecution("executeStreamIteration", iteration,
+				"Tool calls exceed concurrency limit; executing all with bounded parallelism",
+				slog.Int("tool_count", len(result.ToolCalls)), slog.Int("parallelism", limit))
 		}
 
 		if iteration+1 >= maxIterations {

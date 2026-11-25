@@ -91,6 +91,9 @@ func (t *bashToolWrapper) Metadata() types.ToolMetadata {
 	md := t.tool.Metadata()
 	md.SourceNodeName = "Bash"
 	md.Extra = map[string]interface{}{"no_cache": true}
+	// Shell commands are barriers in Claude Code's scheduler.
+	md.ConcurrencySafe = false
+	md.ExecutionMode = types.ExecutionModeSequential
 	return md
 }
 

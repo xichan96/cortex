@@ -139,20 +139,23 @@ func (c *AgentConfig) EffectiveMaxCompletionTokens() int {
 
 func NewAgentConfig() *AgentConfig {
 	return &AgentConfig{
-		MaxIterations:            10,
-		SystemMessage:            "",
-		ChatMessageRole:          "",
-		Temperature:              0.7,
-		MaxCompletionTokens:      4096,
-		TopP:                     1.0,
-		FrequencyPenalty:         0.0,
-		PresencePenalty:          0.0,
-		StopSequences:            []string{},
-		Timeout:                  30 * time.Second,
-		ToolExecutionTimeout:     60 * time.Second,
-		RetryAttempts:            3,
-		RetryDelay:               1 * time.Second,
-		EnableToolRetry:          true,
+		MaxIterations:        10,
+		SystemMessage:        "",
+		ChatMessageRole:      "",
+		Temperature:          0.7,
+		MaxCompletionTokens:  4096,
+		TopP:                 1.0,
+		FrequencyPenalty:     0.0,
+		PresencePenalty:      0.0,
+		StopSequences:        []string{},
+		Timeout:              30 * time.Second,
+		ToolExecutionTimeout: 60 * time.Second,
+		RetryAttempts:        3,
+		RetryDelay:           1 * time.Second,
+		// Claude Code does not auto-retry tool calls: a failed tool returns its
+		// error to the model, which decides what to do next. Keep the retry
+		// machinery opt-in instead of retrying on the engine's own initiative.
+		EnableToolRetry:          false,
 		MaxHistoryMessages:       100,
 		EnableMemoryCompress:     false,
 		MemoryCompressThreshold:  50,

@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"fmt"
-	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -154,190 +153,117 @@ func (ae *AgentEngine) getToolTimeout(toolName string, args map[string]interface
 
 // ==================== Tool Dependency Management Methods ====================
 
-// sortToolCallsByDependencies sorts tool calls by priority and dependencies using topological sort
-// Returns sorted tool calls and error if circular dependency is detected
+// sortToolCallsByDependencies orders calls for execution while preserving the
+// model's original order. Claude Code returns tool results in the order the
+// model emitted the tool_use blocks; cortex previously sorted by tool-name
+// priority and keyed calls by tool name, which both reordered results and
+// collapsed repeated calls in one batch (two Read calls became one).
+//
+// New behavior: dependency metadata is still honored (a call that depends on
+// an earlier call runs after it); otherwise original order is kept, and calls
+// with the same tool name stay distinct because everything is index-keyed.
 func (ae *AgentEngine) sortToolCallsByDependencies(toolCalls []types.ToolCall) ([]types.ToolCall, error) {
-	if len(toolCalls) <= 1 {
+	n := len(toolCalls)
+	if n <= 1 {
 		return toolCalls, nil
 	}
 
-	// Build dependency graph and priority map
-	dependencyGraph := make(map[string][]string)   // tool -> dependencies
-	priorityMap := make(map[string]int)            // tool -> priority
-	toolCallMap := make(map[string]types.ToolCall) // tool name -> tool call
-
+	deps := make([][]int, n) // per-call dependency indices
 	ae.mu.RLock()
-	for _, tc := range toolCalls {
-		toolName := tc.Function.Name
-		toolCallMap[toolName] = tc
-
-		// Get tool metadata
-		if tool, exists := ae.toolsMap[toolName]; exists {
-			metadata := tool.Metadata()
-			priorityMap[toolName] = metadata.Priority
-			if len(metadata.Dependencies) > 0 {
-				// Copy dependencies to avoid race conditions
-				deps := make([]string, len(metadata.Dependencies))
-				copy(deps, metadata.Dependencies)
-				dependencyGraph[toolName] = deps
+	for i, tc := range toolCalls {
+		tool, ok := ae.toolsMap[tc.Function.Name]
+		if !ok {
+			continue
+		}
+		for _, depName := range tool.Metadata().Dependencies {
+			// Prefer the closest earlier call with that tool name; if the
+			// dependency appears later in the batch, the DFS moves it before
+			// this call (preserving the rest of the model's order).
+			dep := -1
+			for j := i - 1; j >= 0; j-- {
+				if toolCalls[j].Function.Name == depName {
+					dep = j
+					break
+				}
 			}
-		} else {
-			priorityMap[toolName] = 0
+			if dep < 0 {
+				for j := i + 1; j < n; j++ {
+					if toolCalls[j].Function.Name == depName {
+						dep = j
+						break
+					}
+				}
+			}
+			if dep >= 0 {
+				deps[i] = append(deps[i], dep)
+			}
 		}
 	}
 	ae.mu.RUnlock()
 
-	// Detect circular dependencies
-	if err := ae.detectCircularDependencies(dependencyGraph); err != nil {
-		return nil, err
-	}
-
-	// Topological sort with priority
-	sorted := make([]types.ToolCall, 0, len(toolCalls))
-	visited := make(map[string]bool)
-	inProgress := make(map[string]bool)
-
-	var visit func(string) error
-	visit = func(toolName string) error {
-		if inProgress[toolName] {
-			return fmt.Errorf("circular dependency detected involving tool: %s", toolName)
-		}
-		if visited[toolName] {
+	state := make([]uint8, n) // 0 unvisited, 1 in progress, 2 done
+	out := make([]types.ToolCall, 0, n)
+	var visit func(int) error
+	visit = func(i int) error {
+		switch state[i] {
+		case 1:
+			return fmt.Errorf("circular dependency detected involving tool: %s", toolCalls[i].Function.Name)
+		case 2:
 			return nil
 		}
-
-		inProgress[toolName] = true
-
-		// Visit dependencies first
-		if deps, hasDeps := dependencyGraph[toolName]; hasDeps {
-			for _, dep := range deps {
-				if _, exists := toolCallMap[dep]; exists {
-					if err := visit(dep); err != nil {
-						return err
-					}
-				}
+		state[i] = 1
+		for _, d := range deps[i] {
+			if err := visit(d); err != nil {
+				return err
 			}
 		}
-
-		inProgress[toolName] = false
-		visited[toolName] = true
-
-		// Add to sorted list
-		if tc, exists := toolCallMap[toolName]; exists {
-			sorted = append(sorted, tc)
-		}
-
+		state[i] = 2
+		out = append(out, toolCalls[i])
 		return nil
 	}
-
-	// Sort by priority first, then visit
-	type toolWithPriority struct {
-		toolCall types.ToolCall
-		priority int
-	}
-	toolsWithPriority := make([]toolWithPriority, 0, len(toolCalls))
-	for _, tc := range toolCalls {
-		toolsWithPriority = append(toolsWithPriority, toolWithPriority{
-			toolCall: tc,
-			priority: priorityMap[tc.Function.Name],
-		})
-	}
-
-	// Sort by priority (descending) using efficient sort.Slice
-	sort.Slice(toolsWithPriority, func(i, j int) bool {
-		return toolsWithPriority[i].priority > toolsWithPriority[j].priority
-	})
-
-	// Visit tools in priority order
-	for _, twp := range toolsWithPriority {
-		if err := visit(twp.toolCall.Function.Name); err != nil {
+	for i := 0; i < n; i++ {
+		if err := visit(i); err != nil {
 			return nil, err
 		}
 	}
-
-	return sorted, nil
+	return out, nil
 }
 
-// detectCircularDependencies detects circular dependencies in the dependency graph
-func (ae *AgentEngine) detectCircularDependencies(graph map[string][]string) error {
-	visited := make(map[string]bool)
-	recStack := make(map[string]bool)
-
-	var hasCycle func(string) bool
-	hasCycle = func(toolName string) bool {
-		visited[toolName] = true
-		recStack[toolName] = true
-
-		if deps, exists := graph[toolName]; exists {
-			for _, dep := range deps {
-				if !visited[dep] {
-					if hasCycle(dep) {
-						return true
-					}
-				} else if recStack[dep] {
-					return true
+// groupSortedToolCallsByLayer groups tool call indices by execution layer.
+// sorted is in dependency order; calls with no dependency edges share a layer
+// and may run concurrently. Index-keyed so duplicate tool names (e.g. two Read
+// calls in one batch) are not collapsed.
+func (ae *AgentEngine) groupSortedToolCallsByLayer(sorted []types.ToolCall) [][]int {
+	n := len(sorted)
+	if n == 0 {
+		return nil
+	}
+	deps := make([][]int, n)
+	ae.mu.RLock()
+	for i, tc := range sorted {
+		tool, ok := ae.toolsMap[tc.Function.Name]
+		if !ok {
+			continue
+		}
+		for _, depName := range tool.Metadata().Dependencies {
+			for j := i - 1; j >= 0; j-- {
+				if sorted[j].Function.Name == depName {
+					deps[i] = append(deps[i], j)
+					break
 				}
 			}
 		}
-
-		recStack[toolName] = false
-		return false
+		// sorted is already dependency-ordered, so every dependency is earlier.
 	}
+	ae.mu.RUnlock()
 
-	for toolName := range graph {
-		if !visited[toolName] {
-			if hasCycle(toolName) {
-				return fmt.Errorf("circular dependency detected in tool dependencies")
-			}
-		}
-	}
-
-	return nil
-}
-
-// groupSortedToolCallsByLayer groups tool call indices by execution layer. sorted must be in
-// dependency order (e.g. from sortToolCallsByDependencies) so that each tool's dependencies
-// appear earlier in the slice; tools in the same layer have no dependency on each other.
-func (ae *AgentEngine) groupSortedToolCallsByLayer(sorted []types.ToolCall) [][]int {
-	if len(sorted) == 0 {
-		return nil
-	}
-	nameToIdx := make(map[string]int)
-	toolRefs := make([]types.Tool, len(sorted))
-	for i, tc := range sorted {
-		name := tc.Function.Name
-		nameToIdx[name] = i
-		toolRefs[i], _ = ae.getToolByName(name)
-	}
-	depGraph := make(map[string][]string)
-	for i, tool := range toolRefs {
-		if tool == nil {
-			continue
-		}
-		meta := tool.Metadata()
-		if len(meta.Dependencies) == 0 {
-			continue
-		}
-		deps := make([]string, 0, len(meta.Dependencies))
-		for _, d := range meta.Dependencies {
-			if _, in := nameToIdx[d]; in {
-				deps = append(deps, d)
-			}
-		}
-		if len(deps) > 0 {
-			depGraph[sorted[i].Function.Name] = deps
-		}
-	}
-
-	layerOf := make([]int, len(sorted))
+	layerOf := make([]int, n)
 	maxL := 0
 	for i := range sorted {
-		name := sorted[i].Function.Name
-		deps := depGraph[name]
 		maxDepLayer := -1
-		for _, d := range deps {
-			if j, ok := nameToIdx[d]; ok && j < i && layerOf[j] > maxDepLayer {
-				maxDepLayer = layerOf[j]
+		for _, d := range deps[i] {
+			if layerOf[d] > maxDepLayer {
+				maxDepLayer = layerOf[d]
 			}
 		}
 		layerOf[i] = maxDepLayer + 1

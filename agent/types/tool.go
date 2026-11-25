@@ -157,6 +157,13 @@ type ExecutionModeProvider interface {
 	ExecutionMode() ExecutionMode
 }
 
+// ConcurrencySafeProvider lets a tool decide safety per invocation (e.g. a
+// read-only Bash command may run in parallel, a mutating one may not). It
+// takes precedence over ToolMetadata.ConcurrencySafe.
+type ConcurrencySafeProvider interface {
+	IsConcurrencySafe(input map[string]interface{}) bool
+}
+
 // RiskProvider is an optional tool interface consulted by the approval
 // authorizer. It takes precedence over ToolMetadata.Risk.
 type RiskProvider interface {
@@ -208,17 +215,22 @@ type Tool interface {
 
 // ToolMetadata tool metadata
 type ToolMetadata struct {
-	SourceNodeName      string                 `json:"sourceNodeName"`
-	IsFromToolkit       bool                   `json:"isFromToolkit"`
-	ToolType            string                 `json:"toolType"`                      // "mcp","http","builtin"
-	Priority            int                    `json:"priority,omitempty"`            // 优先级，数字越大优先级越高
-	Dependencies        []string               `json:"dependencies,omitempty"`        // 依赖的工具名称列表
-	MaxTruncationLength int                    `json:"maxTruncationLength,omitempty"` // 工具结果截断长度，0表示使用默认值
-	Exposure            ToolExposure           `json:"exposure,omitempty"`            // E1：模型可见性；空值=direct（向后兼容）
-	SearchKeywords      []string               `json:"searchKeywords,omitempty"`      // E2：tool_search 索引关键词；空则用 Name+Description 分词
-	ExecutionMode       ExecutionMode          `json:"executionMode,omitempty"`       // P0-2：批内调度模式；空值=parallel
-	Risk                RiskLevel              `json:"risk,omitempty"`                // P0-2：审批风险分级；空值=unknown
-	Extra               map[string]interface{} `json:"extra,omitempty"`
+	SourceNodeName      string        `json:"sourceNodeName"`
+	IsFromToolkit       bool          `json:"isFromToolkit"`
+	ToolType            string        `json:"toolType"`                      // "mcp","http","builtin"
+	Priority            int           `json:"priority,omitempty"`            // 优先级，数字越大优先级越高
+	Dependencies        []string      `json:"dependencies,omitempty"`        // 依赖的工具名称列表
+	MaxTruncationLength int           `json:"maxTruncationLength,omitempty"` // 工具结果截断长度，0表示使用默认值
+	Exposure            ToolExposure  `json:"exposure,omitempty"`            // E1：模型可见性；空值=direct（向后兼容）
+	SearchKeywords      []string      `json:"searchKeywords,omitempty"`      // E2：tool_search 索引关键词；空则用 Name+Description 分词
+	ExecutionMode       ExecutionMode `json:"executionMode,omitempty"`       // P0-2：批内调度模式；空值=parallel
+	// ConcurrencySafe mirrors Claude Code's readOnlyHint: true means this call
+	// may run concurrently with sibling calls from the same assistant message.
+	// Mutating tools (Write/Edit/Bash) and custom tools that do not opt in act
+	// as barriers and run alone.
+	ConcurrencySafe bool                   `json:"concurrencySafe,omitempty"`
+	Risk            RiskLevel              `json:"risk,omitempty"` // P0-2：审批风险分级；空值=unknown
+	Extra           map[string]interface{} `json:"extra,omitempty"`
 }
 
 // ToolCallRequest tool call request

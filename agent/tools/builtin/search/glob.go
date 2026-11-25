@@ -189,6 +189,9 @@ func (t *GlobTool) Metadata() types.ToolMetadata {
 		SourceNodeName: "Glob",
 		IsFromToolkit:  false,
 		ToolType:       "search",
+		// Read-only search: may run concurrently with sibling calls.
+		ConcurrencySafe: true,
+		ExecutionMode:   types.ExecutionModeParallel,
 		Extra: map[string]interface{}{
 			"no_cache": true,
 		},

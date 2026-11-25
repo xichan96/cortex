@@ -1070,6 +1070,11 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	agentConfig.CacheAnchorTokens = f.config.Memory.CacheAnchorTokens
 	agentConfig.PromptCaching = f.config.PromptCaching.Enabled
 	agentConfig.ToolParallelismLimit = f.config.Tools.MaxToolParallelism
+	if agentConfig.ToolParallelismLimit <= 0 && f.config.MaxToolCallsPerRound > 0 {
+		// MaxToolCallsPerRound is documented as a concurrency bound. Use it as
+		// the execute-parallelism limit when no explicit tool parallelism is set.
+		agentConfig.ToolParallelismLimit = f.config.MaxToolCallsPerRound
+	}
 	agentConfig.StreamBufferSize = f.config.Tools.StreamBufferSize
 	sid := sessionID
 	agentConfig.RemainPromptTokens = func() int {

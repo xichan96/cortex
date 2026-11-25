@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"runtime"
 	"time"
 
 	"github.com/xichan96/cortex/agent/types"
@@ -80,15 +79,10 @@ func (ae *AgentEngine) getToolParallelismLimit() int {
 	return defaultToolParallelismLimit()
 }
 
+// defaultToolParallelismLimit matches Claude Code's observed concurrency
+// throttle for a run of read-only calls (10; undocumented upstream).
 func defaultToolParallelismLimit() int {
-	n := runtime.GOMAXPROCS(0) * 2
-	if n < 4 {
-		n = 4
-	}
-	if n > 32 {
-		n = 32
-	}
-	return n
+	return 10
 }
 
 // getStreamBufferSize returns the size of the ExecuteStream result channel
