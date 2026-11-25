@@ -51,10 +51,24 @@ func NewLLMSummaryAdapter(llm agenttypes.LLMProvider) *LLMSummaryAdapter {
 }
 
 const summarySystemPrompt = `You are a conversation compactor for an AI agent.
-Produce a concise summary of the conversation below, in the same language as the conversation.
-Keep: the user's goals and constraints, decisions made, files touched, pending work, and unresolved issues.
-Preserve exact file paths, command names, tool names, and any code identifiers verbatim.
-Omit: tool output bodies, boilerplate, and incidental detail.
+Produce a concise, self-contained summary of the conversation below, in the same language as the conversation.
+Use exactly these Markdown sections (omit a section only when it has no content):
+## Goal
+## Constraints & Preferences
+## Progress
+### Done
+### In Progress
+### Blocked
+## Key Decisions
+## Next Steps
+## Critical Context
+## Files
+- read: <comma-separated paths>
+- modified: <comma-separated paths>
+
+Keep the user's goals, constraints, decisions, important facts, pending work and unresolved questions.
+Preserve exact file paths, command names, tool names and code identifiers verbatim.
+Omit tool output bodies, boilerplate and incidental detail.
 Output only the summary text, no preamble.
 The summary must not exceed %d tokens.`
 

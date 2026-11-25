@@ -14,11 +14,11 @@ import (
 
 // mockSummaryLLM 实现 chatstore.LLMProvider，可编程成功/失败/空。
 type mockSummaryLLM struct {
-	mu       sync.Mutex
-	summary  string
-	err      error
-	lastIn   []Message
-	calls    int
+	mu      sync.Mutex
+	summary string
+	err     error
+	lastIn  []Message
+	calls   int
 }
 
 func (m *mockSummaryLLM) GenerateSummary(ctx context.Context, messages []Message) (string, error) {
@@ -132,6 +132,11 @@ func TestLLMSummaryAdapter_GenerateSummary(t *testing.T) {
 	}
 	if llm.lastMsgs[0].Role != "system" || !strings.Contains(llm.lastMsgs[0].Content, "conversation compactor") {
 		t.Fatalf("first message should be summary system prompt, got %q", llm.lastMsgs[0].Content)
+	}
+	for _, section := range []string{"## Goal", "## Constraints & Preferences", "## Progress", "## Key Decisions", "## Next Steps", "## Critical Context", "## Files"} {
+		if !strings.Contains(llm.lastMsgs[0].Content, section) {
+			t.Fatalf("summary prompt missing structured section %q", section)
+		}
 	}
 	if llm.lastMsgs[1].Content != "你好" {
 		t.Fatalf("message content not passed through: %q", llm.lastMsgs[1].Content)
