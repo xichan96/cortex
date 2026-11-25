@@ -467,6 +467,10 @@ type DinoFactory interface {
 	GetToolPipeline() *pipeline.Pipeline
 	Shutdown(ctx context.Context) error
 	GetLLMProvider() types.LLMProvider
+	// LongTermMemory returns the long-term memory subsystem, or nil when LTM is
+	// disabled. Hosts use it for memory management (list/search/delete) without
+	// going through the model tool.
+	LongTermMemory() *dinoMem.LongTermMem
 	GetPlannerConfig() *PlannerModeConfig
 	Budget() Budget
 	RespondToolApproval(requestID string, approved bool)
@@ -605,6 +609,12 @@ func (f *dinoFactory) Budget() Budget {
 
 func (f *dinoFactory) GetLLMProvider() types.LLMProvider {
 	return f.llmProvider
+}
+
+// LongTermMemory exposes the LTM subsystem (nil when disabled) for host-side
+// memory management. The pointer is set once at construction and immutable.
+func (f *dinoFactory) LongTermMemory() *dinoMem.LongTermMem {
+	return f.longTermMem
 }
 
 func (f *dinoFactory) GetPlannerConfig() *PlannerModeConfig {

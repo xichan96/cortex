@@ -173,6 +173,9 @@ func TestDinoFactory_LongTermMemEnabled(t *testing.T) {
 	if df.longTermMem == nil {
 		t.Fatal("longTermMem should be constructed when LongTermMemory.Enabled")
 	}
+	if factory.LongTermMemory() == nil {
+		t.Fatal("LongTermMemory accessor should expose the subsystem")
+	}
 	if err := factory.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown with long-term memory: %v", err)
 	}
