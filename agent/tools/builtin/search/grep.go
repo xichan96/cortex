@@ -60,7 +60,7 @@ func (t *GrepTool) Name() string {
 	return "Grep"
 }
 
-//go:embed Grep.txt
+//go:embed grep.txt
 var grepDescription string
 
 func (t *GrepTool) Description() string {

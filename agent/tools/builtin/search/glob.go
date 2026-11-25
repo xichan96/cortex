@@ -28,7 +28,7 @@ func (t *GlobTool) Name() string {
 	return "Glob"
 }
 
-//go:embed Glob.txt
+//go:embed glob.txt
 var globDescription string
 
 func (t *GlobTool) Description() string {
