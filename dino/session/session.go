@@ -661,6 +661,15 @@ func (s *Session) CancelCurrentTurn() {
 	}
 }
 
+// resetTurnBudget clears a per-session budget before a new run when the
+// implementation supports Reset. Kept as an optional interface so old fake
+// budgets that only implement CanExecute keep compiling.
+func resetTurnBudget(budget interface{ CanExecute(sessionID string) bool }, sessionID string) {
+	if resetter, ok := budget.(interface{ Reset(string) }); ok {
+		resetter.Reset(sessionID)
+	}
+}
+
 func (s *Session) executeWithInput(ctx context.Context, agentInput types.AgentInput, displayContent string) *ExecuteResponse {
 	if err := s.ctx.Err(); err != nil {
 		return &ExecuteResponse{
@@ -685,6 +694,11 @@ func (s *Session) executeWithInput(ctx context.Context, agentInput types.AgentIn
 		cancelTurn()
 	}()
 
+	// Budget 是「一次运行」的预算，不是会话生命周期累计：cortex 的
+	// agentutils.Budget 按 session 累加 tokens/tool calls/time，若不在每轮
+	// 开始时清零，长会话迟早会永久停在 “Budget exceeded”。带 Reset 的实现
+	// 在这里清零；只实现 CanExecute 的旧 fake 保持原行为。
+	resetTurnBudget(s.budget, s.id)
 	if s.budget != nil && !s.budget.CanExecute(s.id) {
 		s.emit(&Event{Type: EventTypeError, Error: "Budget exceeded"})
 		return &ExecuteResponse{
