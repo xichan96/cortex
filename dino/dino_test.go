@@ -3655,6 +3655,11 @@ func TestDinoFactory_CompactionPrefixWiring(t *testing.T) {
 	if opts.SummaryGenerator == nil {
 		t.Fatal("SummaryGenerator must be injected (B1): engine never imports dino")
 	}
+	// EnableLLMCompress defaults to true: the prefix trim gets the LLM-backed
+	// middle summary too (deterministic fallback stays as SummaryGenerator).
+	if opts.LLMSummaryGenerator == nil {
+		t.Fatal("LLMSummaryGenerator should be injected when EnableLLMCompress=true")
+	}
 	// The closure must produce deterministic compaction output.
 	out := opts.SummaryGenerator("", []types.Message{
 		{Role: "user", Content: "hello"},
@@ -3665,6 +3670,41 @@ func TestDinoFactory_CompactionPrefixWiring(t *testing.T) {
 	}
 	if !strings.Contains(out, "scope") {
 		t.Fatalf("SummaryGenerator output should be a DeterministicCompact-style summary, got %q", out)
+	}
+}
+
+// TestDinoFactory_CompactionPrefixDeterministicOnly verifies that disabling
+// EnableLLMCompress leaves the prefix trim on the deterministic summary (the
+// pre-P3.4 behavior) while keeping CompactionPrefix enabled.
+func TestDinoFactory_CompactionPrefixDeterministicOnly(t *testing.T) {
+	cfg := getTestConfig()
+	cfg.Memory.CompactionPrefix = true
+	cfg.Memory.EnableLLMCompress = false
+	factory, err := NewDinoFactory(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create factory: %v", err)
+	}
+	defer factory.Shutdown(context.Background())
+
+	sess, err := factory.CreateSession(context.Background(), "compaction-deterministic-session")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	defer sess.Close()
+
+	ag := sess.GetAgent()
+	if ag == nil {
+		t.Fatal("session agent is nil")
+	}
+	opts := ag.GetCompactionOptions()
+	if opts == nil {
+		t.Fatal("CompactionOptions not injected when CompactionPrefix=true")
+	}
+	if opts.SummaryGenerator == nil {
+		t.Fatal("deterministic SummaryGenerator must still be injected")
+	}
+	if opts.LLMSummaryGenerator != nil {
+		t.Fatal("LLMSummaryGenerator must be nil when EnableLLMCompress=false")
 	}
 }
 

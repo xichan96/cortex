@@ -1,7 +1,12 @@
 package engine
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"strings"
+	"sync"
 
 	"github.com/xichan96/cortex/agent/types"
 )
@@ -22,11 +27,110 @@ import (
 // budget from config.CacheAnchorTokens.
 type CompactionOptions struct {
 	SummaryGenerator func(existingSummary string, mid []types.Message) string
+
+	// LLMSummaryGenerator is the optional LLM-backed counterpart. When set the
+	// three-phase trim prefers it over SummaryGenerator: it receives the turn
+	// context and the middle that is about to be replaced. A non-nil error or a
+	// blank result degrades to SummaryGenerator, so the strict budget and
+	// message-shape contract never depends on the model succeeding.
+	//
+	// It is injected by the host (dino/factory wraps chatstore.LLMSummaryAdapter)
+	// so agent/engine still never imports dino. The engine caches the generated
+	// summary together with the history prefix it covers: repeated
+	// prepareMessages calls reuse it while the uncovered tail still fits, which
+	// keeps the prompt-cache prefix stable and bounds LLM cost to one call per
+	// "middle outgrew the tail budget" event.
+	LLMSummaryGenerator func(ctx context.Context, existingSummary string, mid []types.Message) (string, error)
+}
+
+// compactionSummaryCache remembers the last LLM-generated middle summary and
+// the history prefix it covers. The zero value is ready to use. It is held by
+// the engine (one engine per session), so summaries never leak across sessions.
+type compactionSummaryCache struct {
+	mu          sync.Mutex
+	summary     string
+	existingKey string // hash of the existingSummary folded into summary
+	prefixHash  string // hash of history[:coveredEnd]
+	coveredEnd  int    // absolute index into history
+}
+
+// compactionHash returns a short stable digest for cache keys.
+func compactionHash(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:16])
+}
+
+// compactionHistoryHash digests history[:n]. Hashing the whole prefix (instead
+// of matching one message) is duplicate-proof: repeated "ok" messages cannot
+// make a rewritten history look like a covered prefix.
+func compactionHistoryHash(history []types.Message) string {
+	h := sha256.New()
+	for _, m := range history {
+		args, _ := json.Marshal(m.ToolCalls)
+		parts, _ := json.Marshal(m.Parts)
+		h.Write([]byte(m.Role))
+		h.Write([]byte{0})
+		h.Write([]byte(m.Name))
+		h.Write([]byte{0})
+		h.Write([]byte(m.ToolCallID))
+		h.Write([]byte{0})
+		h.Write([]byte(m.Content))
+		h.Write([]byte{0})
+		h.Write(args)
+		h.Write([]byte{0})
+		h.Write(parts)
+		h.Write([]byte{1})
+	}
+	return hex.EncodeToString(h.Sum(nil)[:16])
+}
+
+// lookup returns the cached summary when it is still valid for this history and
+// existing summary. coveredEnd is the absolute index one past the summarized
+// history prefix.
+func (c *compactionSummaryCache) lookup(history []types.Message, existingSummary string) (summary string, coveredEnd int, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.summary == "" || c.coveredEnd <= 0 || c.coveredEnd > len(history) {
+		return "", 0, false
+	}
+	if c.existingKey != compactionHash(existingSummary) {
+		return "", 0, false
+	}
+	if c.prefixHash != compactionHistoryHash(history[:c.coveredEnd]) {
+		return "", 0, false
+	}
+	return c.summary, c.coveredEnd, true
+}
+
+// store records an LLM summary that covers history[:coveredEnd].
+func (c *compactionSummaryCache) store(existingSummary string, history []types.Message, coveredEnd int, summary string) {
+	if coveredEnd <= 0 || coveredEnd > len(history) {
+		return
+	}
+	prefixHash := compactionHistoryHash(history[:coveredEnd])
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.summary = summary
+	c.coveredEnd = coveredEnd
+	c.prefixHash = prefixHash
+	c.existingKey = compactionHash(existingSummary)
 }
 
 // summaryMarker prefixes the tail summary message so the model can tell the
 // compressed block from real history (Codex SUMMARY_PREFIX model).
 const summaryMarker = "[CONVERSATION COMPACTED - prior context follows]\n"
+
+const (
+	// compactionLLMSummaryReserveTokens is the tail budget held back for the
+	// LLM middle summary. It matches the adapter's ~2000-token output cap; on
+	// small budgets it shrinks to half the non-head budget. Reserving before
+	// generation keeps the tail start (and therefore the summary coverage)
+	// independent of the model's exact output size.
+	compactionLLMSummaryReserveTokens = 2048
+	// compactionMinTailTokens is the smallest non-head budget worth running
+	// the LLM path for; below it the deterministic/head+tail fallback is used.
+	compactionMinTailTokens = 2
+)
 
 // buildTailSummary renders the middle of the history into a single summary
 // string. It never imports dino: when no generator is injected the caller
@@ -85,7 +189,18 @@ func trimHistoryToTokenBudget(history []types.Message, maxBudgetTokens int, conf
 // be nil; existingSummary is the GetSummary string (may be ""), folded into
 // the tail summary so cumulative summaries survive. The returned bool reports
 // whether existingSummary was folded into an inserted summary message.
+//
+// It is the context-free entry point (no cache, no LLM reuse across calls)
+// used by tests and callers that have no turn context. The engine's
+// prepareMessages uses trimHistoryToTokenBudgetCompactionCtx instead.
 func trimHistoryToTokenBudgetCompaction(history []types.Message, maxBudgetTokens int, config *types.AgentConfig, compaction *CompactionOptions, existingSummary string, previousRequests []types.ToolCallData, input types.AgentInput) ([]types.Message, bool) {
+	return trimHistoryToTokenBudgetCompactionCtx(context.Background(), history, maxBudgetTokens, config, compaction, existingSummary, previousRequests, input, nil)
+}
+
+// trimHistoryToTokenBudgetCompactionCtx is trimHistoryToTokenBudgetCompaction
+// with the turn context and the per-engine summary cache. cache may be nil
+// (no reuse; each call that needs an LLM summary asks for a fresh one).
+func trimHistoryToTokenBudgetCompactionCtx(ctx context.Context, history []types.Message, maxBudgetTokens int, config *types.AgentConfig, compaction *CompactionOptions, existingSummary string, previousRequests []types.ToolCallData, input types.AgentInput, cache *compactionSummaryCache) ([]types.Message, bool) {
 	if len(history) == 0 {
 		return history, false
 	}
@@ -105,7 +220,7 @@ func trimHistoryToTokenBudgetCompaction(history []types.Message, maxBudgetTokens
 	if config != nil {
 		anchorTokens = config.CacheAnchorTokens
 	}
-	return trimHistoryThreePhase(history, rem, anchorTokens, compaction, existingSummary)
+	return trimHistoryThreePhase(ctx, history, rem, anchorTokens, compaction, existingSummary, cache)
 }
 
 // trimHistoryTailOnly keeps today's "keep recent tail, drop head" behavior.
@@ -163,9 +278,14 @@ func safeTailBoundary(history []types.Message, start int) int {
 //     "keep one recent message even over budget" degenerate), the function
 //     falls back to trimHistoryTailOnly — never worse than today's behavior.
 //
+// With LLMSummaryGenerator set the middle is summarized by the model instead,
+// in a single generation (the deterministic path's second generation would
+// double LLM cost), and a validated summary is reused across calls from the
+// per-engine cache while the uncovered tail still fits.
+//
 // The returned bool reports whether a summary message was inserted (the
 // existingSummary content was folded into it).
-func trimHistoryThreePhase(history []types.Message, rem int, anchorTokens int, compaction *CompactionOptions, existingSummary string) ([]types.Message, bool) {
+func trimHistoryThreePhase(ctx context.Context, history []types.Message, rem int, anchorTokens int, compaction *CompactionOptions, existingSummary string, cache *compactionSummaryCache) ([]types.Message, bool) {
 	if anchorTokens < 0 {
 		anchorTokens = 0
 	}
@@ -205,6 +325,15 @@ func trimHistoryThreePhase(history []types.Message, rem int, anchorTokens int, c
 		return base, false
 	}
 
+	// LLM summary path: one model call replaces the deterministic two-pass
+	// generation; on failure/empty output the deterministic path below still
+	// runs (or the caller degrades to head+tail).
+	if compaction != nil && compaction.LLMSummaryGenerator != nil {
+		if out, ok := trimHistoryPhaseLLM(ctx, history, anchorIdx, headTokens, rem, compaction, existingSummary, cache); ok {
+			return out, true
+		}
+	}
+
 	// Summary replaces the middle and reserves its budget from the tail.
 	summaryText, ok := buildTailSummary(compaction, existingSummary, history[anchorIdx:tailStart])
 	if !ok {
@@ -232,6 +361,101 @@ func trimHistoryThreePhase(history []types.Message, rem int, anchorTokens int, c
 	if msgSumTokens(final) > rem {
 		// Verification failed: drop the summary, keep head + tail.
 		return headPlusTail(head, history[tailStart2:]), false
+	}
+	return final, true
+}
+
+// trimHistoryPhaseLLM performs the LLM variant of the three-phase trim:
+//
+//  1. If the cache holds a summary that still covers the head anchor and the
+//     uncovered messages fit in the tail, emit head + cached summary + tail
+//     verbatim. This is the prompt-cache-stable steady state: the summary does
+//     not change between calls, so only the appended tail is new.
+//  2. Otherwise ask the model for a summary. When a valid cached summary
+//     exists, only the uncovered delta is summarized and the cached summary is
+//     folded in as existingSummary (cumulative, no re-sending). The result is
+//     cached with the history prefix it covers.
+//
+// A failure at any point returns ok=false so trimHistoryThreePhase can fall
+// back to the deterministic generator (or head+tail).
+//
+// Coverage is chosen before generation: up to compactionLLMSummaryReserveTokens
+// is held back for the summary (half the non-head budget on small budgets).
+// Reserving up-front avoids a circular "summary size determines the tail
+// start, which determines what to summarize" loop and one wasted extra call.
+func trimHistoryPhaseLLM(ctx context.Context, history []types.Message, anchorIdx, headTokens, rem int, compaction *CompactionOptions, existingSummary string, cache *compactionSummaryCache) ([]types.Message, bool) {
+	available := rem - headTokens
+	if available <= compactionMinTailTokens {
+		return nil, false
+	}
+	reserve := min(compactionLLMSummaryReserveTokens, available/2)
+	if reserve < 1 {
+		return nil, false
+	}
+	coverage, _ := tailScan(history, anchorIdx, available-reserve)
+	coverage = safeTailBoundary(history, coverage)
+	if coverage <= anchorIdx {
+		return nil, false
+	}
+	head := history[:anchorIdx]
+
+	// Reuse a valid cached summary (steady state, no LLM call); otherwise
+	// summarize only the uncovered delta, folding the cached summary in.
+	start := anchorIdx
+	existing := existingSummary
+	if cache != nil {
+		if summary, coveredEnd, ok := cache.lookup(history, existingSummary); ok && coveredEnd >= anchorIdx {
+			if out, ok := llmPhaseOutput(head, history, coveredEnd, rem, headTokens, summary); ok {
+				return out, true
+			}
+			if coveredEnd >= coverage {
+				// The cached summary covers the whole window but does not fit
+				// the reserved slot: let the deterministic path handle it.
+				return nil, false
+			}
+			start = coveredEnd
+			existing = summary
+		}
+	}
+	mid := history[start:coverage]
+	if len(mid) == 0 {
+		return nil, false
+	}
+	summary, err := compaction.LLMSummaryGenerator(ctx, existing, mid)
+	if err != nil || strings.TrimSpace(summary) == "" {
+		return nil, false
+	}
+	summary = strings.TrimSpace(summary)
+	if cache != nil {
+		// The cache keys on the caller's existingSummary (not the folded
+		// cumulative text) so a changed GetSummary invalidates it.
+		cache.store(existingSummary, history, coverage, summary)
+	}
+	return llmPhaseOutput(head, history, coverage, rem, headTokens, summary)
+}
+
+// llmPhaseOutput composes head + summary + tail, shrinking the tail so the
+// aggregate stays within rem. coveredEnd is the index one past the summarized
+// prefix; the tail must start at or before it, otherwise the messages in
+// between would be dropped without being summarized (returns ok=false).
+func llmPhaseOutput(head, history []types.Message, coveredEnd, rem, headTokens int, summary string) ([]types.Message, bool) {
+	sTokens := types.RoughTokensForMessage(summaryMessage(summary))
+	tailBudget := rem - headTokens - sTokens
+	if tailBudget < 0 {
+		return nil, false
+	}
+	// Scan from the anchor (not from coveredEnd): the summary may be smaller
+	// than the reserved slot, so the tail can keep more than the coverage
+	// boundary. The only forbidden outcome is a tail that starts *after*
+	// coveredEnd — that would drop unsummarized messages.
+	tailStart, _ := tailScan(history, len(head), tailBudget)
+	tailStart = safeTailBoundary(history, tailStart)
+	if tailStart > coveredEnd || tailStart >= len(history) {
+		return nil, false
+	}
+	final := headPlusTail(head, append([]types.Message{summaryMessage(summary)}, history[tailStart:]...))
+	if msgSumTokens(final) > rem {
+		return nil, false
 	}
 	return final, true
 }

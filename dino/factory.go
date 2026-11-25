@@ -33,6 +33,13 @@ import (
 	dinoTrace "github.com/xichan96/cortex/dino/trace"
 )
 
+// compactionSummaryTimeout bounds the synchronous LLM summary used by the
+// prefix-preserving trim (Memory.CompactionPrefix + EnableLLMCompress). The
+// engine runs it inside prepareMessages, so a slow model must not stall the
+// turn indefinitely; on timeout the engine falls back to the deterministic
+// summary. The turn context may impose a shorter deadline.
+const compactionSummaryTimeout = 60 * time.Second
+
 func parseShellCommand(cmd string) []string {
 	var args []string
 	var current strings.Builder
@@ -1118,12 +1125,34 @@ func (f *dinoFactory) CreateSession(ctx context.Context, sessionID string, opts 
 	// 三段式前缀保留（P3.1）：SummaryGenerator 由构造方注入确定性压缩闭包，
 	// engine 自身不 import dino/chatstore（评审 BLOCKER B1）。P3.4 换 LLM 摘要
 	// 时只需替换此闭包，engine 侧接口（func(existingSummary, mid)) 不变（R3）。
+	//
+	// EnableLLMCompress 打开时再注入 LLMSummaryGenerator：三段式中间段改由
+	// LLM 生成结构化摘要，engine 侧缓存复用（同一前缀不重复调用），失败/超时
+	// 自动回退确定性 SummaryGenerator。摘要调用复用会话同一个 llmProvider，
+	// 独立 60s 上限，避免拖死本轮（不过期时以轮次 ctx 为准）。
 	if agentConfig.CompactionPrefix {
-		agent.SetCompactionOptions(&engine.CompactionOptions{
+		opts := &engine.CompactionOptions{
 			SummaryGenerator: func(existingSummary string, mid []types.Message) string {
 				return chatstore.DeterministicCompact(existingSummary, mid, chatstore.DefaultCompactConfig())
 			},
-		})
+		}
+		if f.config.Memory.EnableLLMCompress && f.llmProvider != nil {
+			adapter := chatstore.NewLLMSummaryAdapter(f.llmProvider)
+			opts.LLMSummaryGenerator = func(ctx context.Context, existingSummary string, mid []types.Message) (string, error) {
+				msgs := make([]chatstore.Message, 0, len(mid)+1)
+				if strings.TrimSpace(existingSummary) != "" {
+					msgs = append(msgs, chatstore.Message{
+						Role:    "system",
+						Content: "Previous Summary:\n" + existingSummary,
+					})
+				}
+				msgs = append(msgs, mid...)
+				sumCtx, cancel := context.WithTimeout(ctx, compactionSummaryTimeout)
+				defer cancel()
+				return adapter.GenerateSummary(sumCtx, msgs)
+			}
+		}
+		agent.SetCompactionOptions(opts)
 	}
 	if f.hooks != nil {
 		agent.SetHooks(ctx, f.hooks)

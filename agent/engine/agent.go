@@ -102,6 +102,12 @@ type AgentEngine struct {
 	// (dino/factory.go) so agent/engine never imports dino (B1).
 	compaction *CompactionOptions
 
+	// compactionCache holds the last LLM-generated middle summary and the
+	// history prefix it covers (per engine = per session). It lets repeated
+	// prepareMessages calls reuse one summary instead of calling the model
+	// every round, keeping the prompt-cache prefix stable.
+	compactionCache compactionSummaryCache
+
 	// tracer is the trace handle (context-trace). nil = disabled (zero
 	// overhead: recording points are nil-guarded pointer compares). Injected by
 	// dino/factory via SetTracer; the interface lives in agent/hooks so

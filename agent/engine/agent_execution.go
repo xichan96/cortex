@@ -1294,8 +1294,8 @@ func (ae *AgentEngine) prepareMessages(ctx context.Context, input types.AgentInp
 	if compactionEnabled && budgetTrim {
 		// 三段式 trim：保头（缓存锚）+ 压缩中间（SummaryGenerator）+ 保尾。
 		// existingSummary 折进摘要，避免跨多次压缩的累积摘要丢失（R3）。
-		history, summaryFolded = trimHistoryToTokenBudgetCompaction(
-			history, budgetCap, config, ae.getCompactionOptions(), summaryStr, previousRequests, input)
+		history, summaryFolded = trimHistoryToTokenBudgetCompactionCtx(
+			ctx, history, budgetCap, config, ae.getCompactionOptions(), summaryStr, previousRequests, input, &ae.compactionCache)
 		trimmed = true
 	} else if budgetTrim {
 		history = trimHistoryToTokenBudget(history, budgetCap, config, previousRequests, input)
