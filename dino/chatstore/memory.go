@@ -408,6 +408,7 @@ func (m *Hybrid) Compress(ctx context.Context) error {
 		tailBudget = MaxRecentTailTokens
 	}
 	tailUser, older := splitTailUserMessages(messages, m.config.KeepRecentCount, tailBudget)
+	tailUser = trimTailToolResults(tailUser, maxKeptToolResults)
 
 	// B) 前次摘要前置到 older，送 LLM 生成新摘要。
 	m.summaryMu.RLock()

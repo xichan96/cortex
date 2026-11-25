@@ -42,6 +42,36 @@ func EstimateTokens(text string) int {
 // MaxRecentTailTokens 尾部 user 原文 token 预算（对齐 Codex COMPACT_USER_MESSAGE_MAX_TOKENS = 20_000）。
 const MaxRecentTailTokens = 20_000
 
+const (
+	// maxKeptToolResults 压缩后尾部保留原文的工具结果条数；更早的只保留
+	// tool_call_id 与占位符，避免大输出挤占上下文。
+	maxKeptToolResults = 6
+	// omittedToolResult 替换占位符（模型仍能看到“这里有个工具结果，已省略”）。
+	omittedToolResult = "[old tool result omitted to save context]"
+)
+
+// trimTailToolResults 从尾部向前保留最近 keep 条工具结果，较旧的 Content
+// 替换为占位符；Role/ToolCallID/Parts 结构不动，保持 tool 配对。
+func trimTailToolResults(messages []Message, keep int) []Message {
+	if keep < 0 {
+		keep = 0
+	}
+	seen := 0
+	for i := len(messages) - 1; i >= 0; i-- {
+		if !strings.EqualFold(messages[i].Role, "tool") {
+			continue
+		}
+		seen++
+		if seen <= keep {
+			continue
+		}
+		if messages[i].Content != "" {
+			messages[i].Content = omittedToolResult
+		}
+	}
+	return messages
+}
+
 // splitTailUserMessages 从 messages 尾部回溯，把对话切成 (tail, older)：
 //   - tail：最近 KeepRecentCount 条消息（所有 role，原文）+ 往前继续吸收 user 消息原文，
 //     直到累积 token 预算 maxTailTokens 或消息耗尽（取并集的尾部）；

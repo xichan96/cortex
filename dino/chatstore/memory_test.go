@@ -573,3 +573,38 @@ func TestLLMSummaryAdapter_FocusInstructions(t *testing.T) {
 		t.Fatalf("focus instructions missing from system prompt: %q", llm.lastMsgs[0].Content)
 	}
 }
+
+func TestHybrid_Compress_TrimsOldToolResults(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.EnableMemoryCompress = false
+	cfg.KeepRecentCount = 10
+	base := NewInMemory("s1", cfg)
+	h := NewHybrid("s1", base, nil, cfg)
+
+	msgs := make([]Message, 0, 12)
+	for i := 0; i < 12; i++ {
+		msgs = append(msgs, Message{Role: "tool", ToolCallID: "c" + string(rune('a'+i)), Content: "result-" + string(rune('a'+i))})
+	}
+	addMsgs(t, h, msgs)
+	if err := h.Compress(context.Background()); err != nil {
+		t.Fatalf("Compress: %v", err)
+	}
+	got, err := base.GetMessages(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(got) != 10 {
+		t.Fatalf("kept = %d, want 10", len(got))
+	}
+	omitted := 0
+	for i, m := range got {
+		if m.Content == omittedToolResult {
+			omitted++
+		} else if !strings.HasPrefix(m.Content, "result-") {
+			t.Fatalf("message %d content = %q", i, m.Content)
+		}
+	}
+	if omitted != 4 {
+		t.Fatalf("omitted = %d, want 4 (10 kept, newest 6 intact)", omitted)
+	}
+}
