@@ -10,7 +10,7 @@ import (
 	"github.com/xichan96/cortex/pkg/logger"
 )
 
-const llmRetryAttempts = 3
+const llmRetryAttempts = 4
 
 // isRetryableLLMError classifies transient provider/gateway failures. These are
 // safe to retry because the model call did not produce a usable turn.
@@ -34,6 +34,49 @@ func isRetryableLLMError(err error) bool {
 
 func retryDelay(attempt int) time.Duration {
 	return time.Duration(1<<attempt) * 500 * time.Millisecond
+}
+
+// retryDelayForError prefers the provider/gateway's Retry-After hint. Dojo's
+// LLM gateway returns e.g. "all upstream targets failed: network, retry after
+// 4s" on 503; retrying after 0.5s/1s only burns the attempts before the
+// upstream recovers. Fall back to bounded exponential backoff.
+func retryDelayForError(err error, attempt int) time.Duration {
+	if d := parseRetryAfter(err); d > 0 {
+		if d > 30*time.Second {
+			return 30 * time.Second
+		}
+		return d
+	}
+	return retryDelay(attempt)
+}
+
+// parseRetryAfter extracts "retry after 4s" / "retry-after: 4" style hints.
+// Returns 0 when absent or unparsable.
+func parseRetryAfter(err error) time.Duration {
+	if err == nil {
+		return 0
+	}
+	s := strings.ToLower(err.Error())
+	for _, marker := range []string{"retry after ", "retry-after: ", "retry-after=", "retry_after="} {
+		idx := strings.Index(s, marker)
+		if idx < 0 {
+			continue
+		}
+		rest := strings.TrimSpace(s[idx+len(marker):])
+		token := strings.Fields(rest)
+		if len(token) == 0 {
+			continue
+		}
+		v := strings.TrimRight(token[0], "),.;]")
+		if d, parseErr := time.ParseDuration(v); parseErr == nil && d > 0 {
+			return d
+		}
+		// Bare seconds, e.g. "retry-after: 4".
+		if n, parseErr := time.ParseDuration(v + "s"); parseErr == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
 }
 
 // isContextOverflowError recognizes provider errors that mean "prompt too
@@ -97,7 +140,7 @@ func (ae *AgentEngine) chatWithToolsRetry(ctx context.Context, messages []types.
 		}
 		loggerRetry("chatWithTools", attempt, err)
 		select {
-		case <-time.After(retryDelay(attempt)):
+		case <-time.After(retryDelayForError(err, attempt)):
 		case <-ctx.Done():
 			return types.Message{}, ctx.Err()
 		}
@@ -121,7 +164,7 @@ func (ae *AgentEngine) openToolStreamRetry(ctx context.Context, messages []types
 		}
 		loggerRetry("chatWithToolsStream", attempt, err)
 		select {
-		case <-time.After(retryDelay(attempt)):
+		case <-time.After(retryDelayForError(err, attempt)):
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}

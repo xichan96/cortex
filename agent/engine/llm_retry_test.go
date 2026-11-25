@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/xichan96/cortex/agent/types"
 )
@@ -91,5 +92,28 @@ func TestSafeTailBoundarySkipsOrphanToolResults(t *testing.T) {
 	}
 	if got := safeTailBoundary(msgs, 1); got != 2 {
 		t.Fatalf("boundary = %d, want 2", got)
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	cases := []struct {
+		msg  string
+		want time.Duration
+	}{
+		{"anthropic API error 503: all upstream targets failed: network, retry after 4s", 4 * time.Second},
+		{"429 too many requests; retry-after: 2", 2 * time.Second},
+		{"retry_after=1500ms", 1500 * time.Millisecond},
+		{"no hint here", 0},
+	}
+	for _, tc := range cases {
+		if got := parseRetryAfter(errors.New(tc.msg)); got != tc.want {
+			t.Errorf("parseRetryAfter(%q) = %s, want %s", tc.msg, got, tc.want)
+		}
+	}
+	if got := retryDelayForError(errors.New("503 retry after 4s"), 0); got != 4*time.Second {
+		t.Fatalf("retryDelayForError = %s, want 4s", got)
+	}
+	if got := retryDelayForError(errors.New("429"), 0); got != 500*time.Millisecond {
+		t.Fatalf("fallback delay = %s, want 500ms", got)
 	}
 }
