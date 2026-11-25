@@ -323,7 +323,7 @@ github.com/stretchr/objx
 github.com/stretchr/testify/assert
 github.com/stretchr/testify/assert/yaml
 github.com/stretchr/testify/mock
-# github.com/tmc/langchaingo v0.1.14
+# github.com/tmc/langchaingo v0.1.15
 ## explicit; go 1.24.4
 github.com/tmc/langchaingo/callbacks
 github.com/tmc/langchaingo/httputil

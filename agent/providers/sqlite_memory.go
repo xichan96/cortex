@@ -108,7 +108,7 @@ func (p *SQLiteMemoryProvider) AddMessage(ctx context.Context, message types.Mes
 	p.mu.RUnlock()
 
 	partsJSON, _ := types.SerializeMessageParts(message.Parts)
-	extras := encodeMessageToolExtras(message)
+	extras := EncodeMessageToolExtras(message)
 
 	doc := SQLiteMessageDocument{
 		SessionID:  sessionID,
@@ -167,7 +167,7 @@ func (p *SQLiteMemoryProvider) GetMessages(ctx context.Context, limit int) ([]ty
 			Name:    docs[i].Name,
 			Parts:   parts,
 		}
-		applyStoredToolExtras(&m, docs[i].ToolExtras)
+		ApplyStoredToolExtras(&m, docs[i].ToolExtras)
 		messages = append(messages, m)
 	}
 

@@ -7,6 +7,17 @@ import (
 	"github.com/xichan96/cortex/agent/types"
 )
 
+// The OpenAI-compatible providers moved to dino/llmcompat (optional import).
+// ValidateConfig only cares that they are registered, so use a stub here
+// instead of pulling langchaingo into the core test binary.
+func init() {
+	for _, name := range []string{"openai", "deepseek", "volce"} {
+		RegisterLLMProvider(name, func(*Config) (types.LLMProvider, error) {
+			return newMockLLMProvider(nil), nil
+		})
+	}
+}
+
 // registerCustomProvider registers a throwaway custom provider under a unique
 // name and returns it. Unique names keep these tests independent of the shared
 // registry, which other tests mutate (e.g. TestClearProviderRegistry).

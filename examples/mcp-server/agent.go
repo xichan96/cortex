@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/xichan96/cortex/agent/engine"
-	"github.com/xichan96/cortex/agent/llm"
+	llm "github.com/xichan96/cortex/agent/llm/langchain"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/mcp"
 )

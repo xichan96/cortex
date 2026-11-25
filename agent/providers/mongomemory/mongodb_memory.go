@@ -1,4 +1,4 @@
-package providers
+package mongomemory
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xichan96/cortex/agent/providers"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/middle/mongodb"
 	"go.mongodb.org/mongo-driver/bson"
@@ -87,7 +88,7 @@ func (p *MongoDBMemoryProvider) AddMessage(ctx context.Context, message types.Me
 	p.mu.RUnlock()
 
 	partsJSON, _ := types.SerializeMessageParts(message.Parts)
-	extras := encodeMessageToolExtras(message)
+	extras := providers.EncodeMessageToolExtras(message)
 
 	doc := MessageDocument{
 		SessionID:  sessionID,
@@ -157,7 +158,7 @@ func (p *MongoDBMemoryProvider) GetMessages(ctx context.Context, limit int) ([]t
 			Name:    doc.Name,
 			Parts:   parts,
 		}
-		applyStoredToolExtras(&m, doc.ToolExtras)
+		providers.ApplyStoredToolExtras(&m, doc.ToolExtras)
 		messages = append(messages, m)
 	}
 
@@ -194,7 +195,7 @@ func (p *MongoDBMemoryProvider) SaveContext(ctx context.Context, input, output m
 			return err
 		}
 	}
-	if err := SaveOutputWithToolSteps(ctx, p, output); err != nil {
+	if err := providers.SaveOutputWithToolSteps(ctx, p, output); err != nil {
 		return err
 	}
 	return nil

@@ -9,8 +9,9 @@ import (
 	"time"
 
 	"github.com/xichan96/cortex/agent/engine"
-	"github.com/xichan96/cortex/agent/llm"
+	llm "github.com/xichan96/cortex/agent/llm/langchain"
 	"github.com/xichan96/cortex/agent/providers"
+	"github.com/xichan96/cortex/agent/providers/redismemory"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/middle/redis"
 	// "github.com/xichan96/cortex/pkg/mongodb"
@@ -53,7 +54,7 @@ func initRedisMemory(sessionID string) (types.MemoryProvider, error) {
 	fmt.Printf("Successfully connected to Redis, Session ID: %s\n", sessionID)
 
 	// Create Redis memory provider with limit
-	memory := providers.NewRedisMemoryProviderWithLimit(redisClient, sessionID, 100)
+	memory := redismemory.NewRedisMemoryProviderWithLimit(redisClient, sessionID, 100)
 	return memory, nil
 }
 

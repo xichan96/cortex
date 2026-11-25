@@ -1,4 +1,4 @@
-package llm
+package langchain
 
 import (
 	"bufio"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/tmc/langchaingo/llms/openai"
 	"github.com/xichan96/cortex/agent/providers"
+	"github.com/xichan96/cortex/agent/providers/langchainllm"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
 )
@@ -250,7 +251,7 @@ func NewOpenAIClient(opts OpenAIOptions) (types.LLMProvider, error) {
 	}
 
 	// Directly return LLMProvider
-	return providers.NewLangChainLLMProvider(client, opts.Model), nil
+	return langchainllm.NewLangChainLLMProvider(client, opts.Model), nil
 }
 
 // OpenAIModel OpenAI model constants

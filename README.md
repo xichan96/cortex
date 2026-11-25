@@ -155,9 +155,20 @@ Without Dino, `agent` is the full baseline: LLM, engine, tools, and memory for o
 
 ### LLM Integration
 
-Unified interface for major LLM providers:
+Unified interface for major LLM providers. Anthropic is built into `agent/llm`
+(native protocol, no langchaingo); the OpenAI-compatible clients live in
+`agent/llm/langchain`:
 
 ```go
+import (
+	llm "github.com/xichan96/cortex/agent/llm/langchain"
+
+	// Required once when using dino.Config.Provider.Type = "openai" /
+	// "deepseek" / "volce": these providers are optional to keep langchaingo
+	// out of Anthropic-only binaries.
+	_ "github.com/xichan96/cortex/dino/llmcompat"
+)
+
 // OpenAI
 llmProvider, _ := llm.OpenAIClient("sk-...", "gpt-4o")
 
@@ -353,8 +364,10 @@ Switch storage with a single line of config:
 
 ```go
 // Example: Redis Memory
+import redismemory "github.com/xichan96/cortex/agent/providers/redismemory"
+
 redisClient := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
-memory := providers.NewRedisMemoryProvider(redisClient, "session-id")
+memory := redismemory.NewRedisMemoryProvider(redisClient, "session-id")
 agentEngine.SetMemory(context.Background(), memory)
 ```
 

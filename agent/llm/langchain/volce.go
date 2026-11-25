@@ -1,8 +1,9 @@
-package llm
+package langchain
 
 import (
 	"github.com/tmc/langchaingo/llms/openai"
 	"github.com/xichan96/cortex/agent/providers"
+	"github.com/xichan96/cortex/agent/providers/langchainllm"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/errors"
 )
@@ -41,7 +42,7 @@ func NewVolceClient(opts VolceOptions) (types.LLMProvider, error) {
 		return nil, errors.NewError(errors.EC_LLM_CLIENT_CREATE_FAILED.Code, errors.EC_LLM_CLIENT_CREATE_FAILED.Message).Wrap(err)
 	}
 
-	return providers.NewLangChainLLMProvider(client, opts.Model), nil
+	return langchainllm.NewLangChainLLMProvider(client, opts.Model), nil
 }
 
 // VolceModel Volce model constants

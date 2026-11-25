@@ -1,4 +1,4 @@
-package providers
+package langchainllm
 
 import (
 	"context"

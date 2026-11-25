@@ -5,6 +5,8 @@ import (
 	"log/slog"
 
 	"github.com/xichan96/cortex/agent/providers"
+	"github.com/xichan96/cortex/agent/providers/mongomemory"
+	"github.com/xichan96/cortex/agent/providers/redismemory"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/pkg/middle/mongodb"
 	"github.com/xichan96/cortex/pkg/middle/redis"
@@ -53,7 +55,7 @@ func (a *agent) initRedisMemory(ctx context.Context, sessionID string, maxHistor
 		return providers.NewSimpleMemoryProviderWithLimit(maxHistory)
 	}
 
-	provider := providers.NewRedisMemoryProviderWithLimit(client, sessionID, maxHistory)
+	provider := redismemory.NewRedisMemoryProviderWithLimit(client, sessionID, maxHistory)
 	if cfg.KeyPrefix != "" {
 		provider.SetKeyPrefix(cfg.KeyPrefix)
 	}
@@ -87,7 +89,7 @@ func (a *agent) initMongoDBMemory(ctx context.Context, sessionID string, maxHist
 		return providers.NewSimpleMemoryProviderWithLimit(maxHistory)
 	}
 
-	provider := providers.NewMongoDBMemoryProviderWithLimit(client, sessionID, maxHistory)
+	provider := mongomemory.NewMongoDBMemoryProviderWithLimit(client, sessionID, maxHistory)
 	if cfg.Collection != "" {
 		provider.SetCollectionName(cfg.Collection)
 	}
