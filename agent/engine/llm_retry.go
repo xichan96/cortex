@@ -23,7 +23,7 @@ func isRetryableLLMError(err error) bool {
 		"429", "rate limit", "too many requests",
 		"500", "502", "503", "504",
 		"connection reset", "connection refused", "broken pipe",
-		"unexpected eof", "temporarily unavailable",
+		"unexpected eof", "temporarily unavailable", "i/o timeout", "timeout",
 	} {
 		if strings.Contains(s, marker) {
 			return true

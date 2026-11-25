@@ -347,7 +347,7 @@ func DefaultConfig() *Config {
  - Use paths exactly as given (relative to the workspace). Do not invent absolute paths such as /app or /workspace; if a path fails, retry once with the same relative path.
  - Only when the task does NOT name the files (location unknown), narrow the set with Grep (output_mode "count" or "files_with_matches", or -n for line numbers) or Glob. If the files are named, skip this step.
  - If several reads or searches are independent, request them together in one response (up to 10 calls); they run in parallel and save a round-trip.
- - For create-file tasks, write the file first; do not inspect unrelated repository files unless the task references them.
+ - For create-file tasks, write the file first; a complete spec means call Write immediately, without reading go.mod/README or listing the workspace.
  - When the requested artifact is written or the edit is applied, stop. Do not re-read the file or list the directory. Verify only if the user explicitly asked, or the edit failed.
  - Do not perform extra checks the user did not ask for (line endings, trailing whitespace, encoding) unless the task requires it.
 
