@@ -235,3 +235,51 @@ func TestEditReplaceAll(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestEditAfterReadSucceeds(t *testing.T) {
+	ws, _ := writeEditFile(t, "a\n")
+	read := NewReadTool(ws)
+	if _, err := read.Execute(context.Background(), map[string]interface{}{"file_path": "f.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	edit := NewEditTool(ws)
+	if _, err := edit.Execute(context.Background(), map[string]interface{}{
+		"file_path": "f.txt", "old_string": "a", "new_string": "b",
+	}); err != nil {
+		t.Fatalf("edit after read failed: %v", err)
+	}
+}
+
+func TestEditRejectsFileChangedSinceRead(t *testing.T) {
+	ws, p := writeEditFile(t, "a\n")
+	read := NewReadTool(ws)
+	if _, err := read.Execute(context.Background(), map[string]interface{}{"file_path": "f.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("external\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	edit := NewEditTool(ws)
+	_, err := edit.Execute(context.Background(), map[string]interface{}{
+		"file_path": "f.txt", "old_string": "external", "new_string": "x",
+	})
+	if err == nil || !strings.Contains(err.Error(), "changed since it was read") {
+		t.Fatalf("error = %v, want stale-read rejection", err)
+	}
+}
+
+func TestEditToleratesLineNumberPrefixes(t *testing.T) {
+	ws, p := writeEditFile(t, "foo\nbar\n")
+	edit := NewEditTool(ws)
+	_, err := edit.Execute(context.Background(), map[string]interface{}{
+		"file_path":  "f.txt",
+		"old_string": "1\tfoo\n2\tbar",
+		"new_string": "baz",
+	})
+	if err != nil {
+		t.Fatalf("line-numbered old_string rejected: %v", err)
+	}
+	if got := readEditFile(t, p); got != "baz" {
+		t.Fatalf("got %q, want baz", got)
+	}
+}

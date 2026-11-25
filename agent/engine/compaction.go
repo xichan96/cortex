@@ -120,10 +120,33 @@ func trimHistoryTailOnly(history []types.Message, rem int) []types.Message {
 		used += c
 		start = i
 	}
+	start = safeTailBoundary(history, start)
 	if start >= len(history) {
 		return history[len(history)-1:]
 	}
 	return history[start:]
+}
+
+// safeTailBoundary moves a slice boundary past tool results that would
+// otherwise become the first message of the kept tail (a tool_result without
+// its tool_use is invalid for both Anthropic and OpenAI). It never moves the
+// boundary backwards, so the token budget is preserved.
+func safeTailBoundary(history []types.Message, start int) int {
+	if start <= 0 || start >= len(history) {
+		return start
+	}
+	for start < len(history) && history[start].Role == "tool" {
+		start++
+	}
+	if start >= len(history) {
+		for i := len(history) - 1; i >= 0; i-- {
+			if history[i].Role != "tool" {
+				return i
+			}
+		}
+		return len(history) - 1
+	}
+	return start
 }
 
 // trimHistoryThreePhase keeps headMsgs (a verbatim prefix within the anchor
@@ -167,6 +190,7 @@ func trimHistoryThreePhase(history []types.Message, rem int, anchorTokens int, c
 
 	// Tail with the full remaining budget (no summary reserved yet).
 	tailStart, _ := tailScan(history, anchorIdx, rem-headTokens)
+	tailStart = safeTailBoundary(history, tailStart)
 	tail := history[tailStart:]
 
 	// Base candidate: head + tail (no summary). Aggregate-measured so the
@@ -194,6 +218,7 @@ func trimHistoryThreePhase(history []types.Message, rem int, anchorTokens int, c
 		return base, false
 	}
 	tailStart2, _ := tailScan(history, anchorIdx, tailBudget)
+	tailStart2 = safeTailBoundary(history, tailStart2)
 	if tailStart2 <= anchorIdx {
 		// No room for both the summary and any tail: prefer head + tail.
 		return base, false

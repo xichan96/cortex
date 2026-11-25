@@ -97,6 +97,15 @@ func (t *bashToolWrapper) Metadata() types.ToolMetadata {
 	return md
 }
 
+// IsConcurrencySafe delegates to the wrapped tool: read-only commands can run
+// in parallel, mutating ones stay barriers.
+func (t *bashToolWrapper) IsConcurrencySafe(input map[string]interface{}) bool {
+	if p, ok := t.tool.(types.ConcurrencySafeProvider); ok {
+		return p.IsConcurrencySafe(input)
+	}
+	return false
+}
+
 // deferredMCPTool wraps an MCP tool so its Exposure reports Deferred without
 // mutating the shared *pkg/mcp.MCPTool instance (E1, MCPDeferred config). All
 // other fields and execution forward to the wrapped tool.

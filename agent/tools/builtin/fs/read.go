@@ -98,6 +98,7 @@ func (t *ReadTool) Execute(ctx context.Context, input map[string]interface{}) (i
 	if looksBinary(content) {
 		return nil, fmt.Errorf("%s appears to be a binary file (contains NUL bytes); use Bash or an image-capable tool.", path)
 	}
+	recordFileRead(safePath, content)
 
 	offset, hasOffset := intArg(input, "offset")
 	limit, hasLimit := intArg(input, "limit")

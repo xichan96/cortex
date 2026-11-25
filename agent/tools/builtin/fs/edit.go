@@ -142,6 +142,9 @@ func (t *EditTool) Execute(ctx context.Context, input map[string]interface{}) (i
 	if err != nil {
 		return nil, err
 	}
+	if err := checkFileUnchanged(safePath, raw); err != nil {
+		return nil, err
+	}
 	bom := bytes.HasPrefix(raw, []byte{0xEF, 0xBB, 0xBF})
 	content := string(raw)
 	if bom {
@@ -170,6 +173,7 @@ func (t *EditTool) Execute(ctx context.Context, input map[string]interface{}) (i
 	if err := atomicWriteFile(safePath, []byte(out), info.Mode().Perm()); err != nil {
 		return nil, err
 	}
+	recordFileWrite(safePath, []byte(out))
 	return fmt.Sprintf("The file %s has been updated successfully.", path), nil
 }
 
@@ -198,7 +202,7 @@ func applyEdit(content, old, new string, replaceAll bool, path string) (string, 
 	if len(oldLines) == 0 {
 		return "", fmt.Errorf("old_string must not be empty")
 	}
-	for level := 1; level <= 3; level++ {
+	for level := 1; level <= 4; level++ {
 		starts := findLineRanges(lines, oldLines, level)
 		if len(starts) == 0 {
 			continue
@@ -228,9 +232,31 @@ func lineEqual(a, b string, level int) bool {
 		return strings.TrimRight(a, " \t") == strings.TrimRight(b, " \t")
 	case 2:
 		return strings.TrimSpace(a) == strings.TrimSpace(b)
-	default:
+	case 3:
 		return strings.TrimSpace(normalizeTypography(a)) == strings.TrimSpace(normalizeTypography(b))
+	default:
+		// Last resort: the model may copy Read's "<n>\t" line-number prefixes
+		// into old_string. Compare after stripping them and normalizing.
+		return strings.TrimSpace(normalizeTypography(stripLineNumber(a))) ==
+			strings.TrimSpace(normalizeTypography(stripLineNumber(b)))
 	}
+}
+
+// stripLineNumber removes a leading "<spaces><digits><tab|:>" prefix produced
+// by line-numbered Read output. Non-numbered lines are returned unchanged.
+func stripLineNumber(s string) string {
+	i := 0
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
+		i++
+	}
+	j := i
+	for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+		j++
+	}
+	if j > i && j < len(s) && (s[j] == '\t' || s[j] == ':') {
+		return s[j+1:]
+	}
+	return s
 }
 
 func findLineRanges(lines, oldLines []string, level int) []int {

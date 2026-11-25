@@ -270,3 +270,17 @@ func TestCommandTool_Execute_Stderr(t *testing.T) {
 		t.Error("stderr should not be empty")
 	}
 }
+
+func TestIsReadOnlyCommand(t *testing.T) {
+	cases := map[string]bool{
+		"ls -la": true, "cat a.txt": true, "grep -n foo a.txt": true,
+		"git status": true, "git diff --stat": true, "wc -l a.txt": true,
+		"ls > out.txt": false, "cat a | grep x": false, "rm -rf x": false,
+		"echo hi && rm x": false, "git push": false, "": false,
+	}
+	for cmd, want := range cases {
+		if got := isReadOnlyCommand(cmd); got != want {
+			t.Errorf("isReadOnlyCommand(%q) = %v, want %v", cmd, got, want)
+		}
+	}
+}

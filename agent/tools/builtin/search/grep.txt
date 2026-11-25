@@ -13,3 +13,4 @@ Usage notes:
   - `head_limit` caps the number of output entries.
   - `multiline` allows patterns to span line boundaries.
   - No matches is a successful empty result, not an error.
+  - Use `output_mode=count` when you only need totals; do not read every matching file.

@@ -6,3 +6,5 @@ Usage notes:
   - `old_string` must match the file exactly, including indentation.
   - By default `old_string` must be unique in the file: 0 or multiple matches are errors. Set `replace_all` to true to replace every occurrence.
   - The optional `hunks` array applies several replacements atomically in one call.
+  - After a successful edit, do not read the file back to verify; the success message is authoritative.
+  - `old_string` copied from line-numbered Read output may include "<line>\t" prefixes; they are tolerated.

@@ -6,3 +6,4 @@
 Usage notes:
   - `pattern` is required.
   - `path` optionally sets the directory to search in (defaults to the workspace root).
+  - Use Glob to list directory entries; Read only reads files.

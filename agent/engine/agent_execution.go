@@ -1428,6 +1428,7 @@ func repairLLMMessageToolOrdering(history []types.Message) []types.Message {
 //   - whether to continue iteration
 //   - error information
 func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Message, iteration int) (*types.AgentResult, bool, error) {
+	messages = repairToolPairing(messages)
 	ae.mu.RLock()
 	tools := ae.tools
 	toolExecutionTimeout := time.Duration(0)
@@ -1466,7 +1467,7 @@ func (ae *AgentEngine) executeIteration(ctx context.Context, messages []types.Me
 	})
 
 	llmStart := time.Now()
-	response, err := ae.model.ChatWithTools(ctx, messages, tools)
+	response, err := ae.chatWithToolsRetry(ctx, messages, tools)
 	if err != nil {
 		ae.recordTrace(hooks.TraceEvent{
 			Type:      traceLLMCallEnd,
@@ -1569,6 +1570,7 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 	var iteration int
 	var hitDoom bool
 	var lastHasMore bool
+	overflowRetried := false
 
 	// Get hooks
 	hookRunner := hooks.NewRunner(ae.getHooks(), "", "")
@@ -1596,6 +1598,19 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 			fmt.Sprintf("Starting streaming iteration %d/%d", iteration+1, maxIterations))
 
 		iterationResult, hasMore, err := ae.executeStreamIteration(ctx, messages, resultChan, iteration)
+		if err != nil && !overflowRetried && isContextOverflowError(err) {
+			overflowRetried = true
+			logger.LogExecution("executeStreamWithIterations", iteration,
+				"Context overflow; compacting memory and retrying once")
+			if _, cerr := ae.CompactMemory(ctx); cerr != nil {
+				logger.LogError("executeStreamWithIterations", cerr, slog.String("phase", "compact_after_overflow"))
+			}
+			if trimmed := trimMessagesForOverflow(messages, 10); len(trimmed) < len(messages) {
+				messages = trimmed
+				iteration-- // retry the same iteration
+				continue
+			}
+		}
 		if err != nil {
 			logger.LogError("executeStreamWithIterations", err, slog.Int("iteration", iteration+1))
 			hookRunner.OnError(err)
@@ -1717,6 +1732,7 @@ func (ae *AgentEngine) executeStreamWithIterations(ctx context.Context, initialM
 //   - whether to continue iteration
 //   - error information
 func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []types.Message, resultChan chan<- types.StreamResult, iteration int) (*types.AgentResult, bool, error) {
+	messages = repairToolPairing(messages)
 	result := &types.AgentResult{}
 	ae.mu.RLock()
 	tools := ae.tools
@@ -1759,7 +1775,7 @@ func (ae *AgentEngine) executeStreamIteration(ctx context.Context, messages []ty
 	})
 
 	llmStart := time.Now()
-	stream, err := ae.model.ChatWithToolsStream(ctx, messages, tools)
+	stream, err := ae.openToolStreamRetry(ctx, messages, tools)
 	if err != nil {
 		ae.recordTrace(hooks.TraceEvent{
 			Type:      traceLLMCallEnd,

@@ -77,6 +77,7 @@ func (t *WriteTool) Execute(ctx context.Context, input map[string]interface{}) (
 	if err := atomicWriteFile(safePath, []byte(content), perm); err != nil {
 		return nil, err
 	}
+	recordFileWrite(safePath, []byte(content))
 	if existed {
 		return fmt.Sprintf("The file %s has been updated successfully.", path), nil
 	}

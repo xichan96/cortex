@@ -2,6 +2,8 @@ package fs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -182,6 +184,35 @@ func lockPathMutation(absPath string) func() {
 	mu := v.(*sync.Mutex)
 	mu.Lock()
 	return mu.Unlock
+}
+
+// fileReadHashes records the content a path had when it was last read or
+// written in this process. Edit refuses to apply onto content that changed
+// since that snapshot, mirroring Claude's "file modified since read" guard.
+var fileReadHashes sync.Map // abs path -> sha256 hex
+
+func contentHash(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+func recordFileRead(absPath string, content []byte) {
+	fileReadHashes.Store(absPath, contentHash(content))
+}
+
+func recordFileWrite(absPath string, content []byte) {
+	recordFileRead(absPath, content)
+}
+
+func checkFileUnchanged(absPath string, current []byte) error {
+	v, ok := fileReadHashes.Load(absPath)
+	if !ok {
+		return nil
+	}
+	if v.(string) != contentHash(current) {
+		return fmt.Errorf("file changed since it was read; read it again before editing: %s", absPath)
+	}
+	return nil
 }
 
 func metadataFS(sourceNodeName string) types.ToolMetadata {

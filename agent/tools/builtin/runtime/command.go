@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/xichan96/cortex/agent/tools/builtin/fs"
@@ -126,6 +127,45 @@ func (t *CommandTool) Execute(ctx context.Context, input map[string]interface{})
 		"stdout":    stdout,
 		"stderr":    stderr,
 	}, nil
+}
+
+// IsConcurrencySafe implements types.ConcurrencySafeProvider: a simple
+// read-only shell command can run alongside other read-only calls, while a
+// command containing redirection/control operators stays a barrier. This
+// mirrors Claude Code's read-only Bash classification.
+func (t *CommandTool) IsConcurrencySafe(input map[string]interface{}) bool {
+	cmd, _ := input["command"].(string)
+	return isReadOnlyCommand(cmd)
+}
+
+var readOnlyCommandHeads = map[string]struct{}{
+	"ls": {}, "cat": {}, "head": {}, "tail": {}, "grep": {}, "egrep": {}, "rg": {},
+	"find": {}, "wc": {}, "which": {}, "diff": {}, "stat": {}, "du": {}, "pwd": {},
+	"echo": {}, "printf": {}, "cd": {}, "true": {}, "date": {}, "uname": {},
+	"id": {}, "file": {}, "tree": {},
+}
+
+func isReadOnlyCommand(cmd string) bool {
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" || strings.ContainsAny(cmd, ">|<`&;$\n") {
+		return false
+	}
+	fields := strings.Fields(cmd)
+	if len(fields) == 0 {
+		return false
+	}
+	if fields[0] == "git" {
+		if len(fields) < 2 {
+			return false
+		}
+		switch fields[1] {
+		case "status", "diff", "log", "show", "branch", "rev-parse", "ls-files", "grep":
+			return true
+		}
+		return false
+	}
+	_, ok := readOnlyCommandHeads[fields[0]]
+	return ok
 }
 
 func (t *CommandTool) Metadata() types.ToolMetadata {
