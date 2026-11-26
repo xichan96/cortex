@@ -28,13 +28,14 @@ func anthropicTextSSE(text string) string {
 		anthropicSSE("message_stop", `{"type":"message_stop"}`)
 }
 
-// TestAnthropicModelProviderChat drives the registered "anthropic-model"
-// provider through a DinoFactory against a fake Messages API. It verifies the
-// request carries the Anthropic auth headers and that text/usage come back
-// through the types.LLMProvider adapter without touching the real API.
+// TestAnthropicModelProviderChat drives the registered "anthropic" provider
+// through a DinoFactory against a fake Messages API. It verifies the request
+// carries the Anthropic auth headers, that prompt caching is applied by
+// default, and that text/usage come back through the types.LLMProvider
+// adapter without touching the real API.
 func TestAnthropicModelProviderChat(t *testing.T) {
 	// Other package tests clear the global registry, so re-register here.
-	RegisterLLMProvider(AnthropicModelProviderType, newAnthropicModelProvider)
+	RegisterLLMProvider(AnthropicProviderType, newAnthropicModelProvider)
 
 	var (
 		gotAPIKey  string
@@ -66,7 +67,7 @@ func TestAnthropicModelProviderChat(t *testing.T) {
 	defer srv.Close()
 
 	cfg := DefaultConfig()
-	cfg.Provider.Type = AnthropicModelProviderType
+	cfg.Provider.Type = AnthropicProviderType
 	cfg.Provider.BaseURL = srv.URL
 	cfg.Provider.APIKey = "test-key"
 	cfg.Provider.Headers = map[string]string{"x-cortex-test": "present"}
@@ -126,12 +127,31 @@ func TestAnthropicModelProviderChat(t *testing.T) {
 	if want := float64(float32(0.3)); gotBody["temperature"] != want {
 		t.Errorf("body temperature = %v, want %v", gotBody["temperature"], want)
 	}
+	if !lastContentCacheControl(gotBody) {
+		t.Error("expected a prompt-cache breakpoint on the last message")
+	}
 }
 
-// TestAnthropicModelProviderTemperatureUnset verifies that dino's zero-value
-// temperature is omitted rather than sent as an explicit 0.
-func TestAnthropicModelProviderTemperatureUnset(t *testing.T) {
-	RegisterLLMProvider(AnthropicModelProviderType, newAnthropicModelProvider)
+// lastContentCacheControl reports whether the final content block of the last
+// wire message carries a cache_control marker.
+func lastContentCacheControl(body map[string]any) bool {
+	messages, _ := body["messages"].([]any)
+	if len(messages) == 0 {
+		return false
+	}
+	last, _ := messages[len(messages)-1].(map[string]any)
+	content, _ := last["content"].([]any)
+	if len(content) == 0 {
+		return false
+	}
+	block, _ := content[len(content)-1].(map[string]any)
+	return block["cache_control"] != nil
+}
+
+// TestAnthropicProviderPromptCachingDisabled verifies the escape hatch:
+// enabled=false sends no cache_control marker.
+func TestAnthropicProviderPromptCachingDisabled(t *testing.T) {
+	RegisterLLMProvider(AnthropicProviderType, newAnthropicModelProvider)
 
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -145,7 +165,44 @@ func TestAnthropicModelProviderTemperatureUnset(t *testing.T) {
 	defer srv.Close()
 
 	cfg := DefaultConfig()
-	cfg.Provider.Type = AnthropicModelProviderType
+	cfg.Provider.Type = AnthropicProviderType
+	cfg.Provider.BaseURL = srv.URL
+	cfg.Provider.APIKey = "test-key"
+	cfg.DefaultModel = "claude-sonnet-4-5"
+	cfg.PromptCaching.Enabled = false
+
+	factory, err := NewDinoFactory(cfg)
+	if err != nil {
+		t.Fatalf("NewDinoFactory: %v", err)
+	}
+	defer factory.Shutdown(context.Background())
+
+	if _, err := factory.GetLLMProvider().Chat(context.Background(), []types.Message{{Role: "user", Content: "hi"}}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if lastContentCacheControl(gotBody) {
+		t.Error("cache_control present while prompt caching is disabled")
+	}
+}
+
+// TestAnthropicModelProviderTemperatureUnset verifies that dino's zero-value
+// temperature is omitted rather than sent as an explicit 0.
+func TestAnthropicModelProviderTemperatureUnset(t *testing.T) {
+	RegisterLLMProvider(AnthropicProviderType, newAnthropicModelProvider)
+
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &gotBody); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, anthropicTextSSE("ok"))
+	}))
+	defer srv.Close()
+
+	cfg := DefaultConfig()
+	cfg.Provider.Type = AnthropicProviderType
 	cfg.Provider.BaseURL = srv.URL
 	cfg.Provider.APIKey = "test-key"
 	cfg.DefaultModel = "claude-sonnet-4-5"

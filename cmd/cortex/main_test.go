@@ -11,14 +11,24 @@ import (
 	"testing"
 
 	"github.com/xichan96/cortex/agent/runtime"
+	"github.com/xichan96/cortex/dino"
 )
+
+// The CLI must link the OpenAI-compatible provider: DefaultConfig uses
+// provider type "openai", and ValidateConfig rejects unregistered types.
+func TestDefaultProviderRegistered(t *testing.T) {
+	cfg := dino.DefaultConfig()
+	if err := dino.ValidateConfig(cfg); err != nil {
+		t.Fatalf("default provider %q is not usable: %v", cfg.Provider.Type, err)
+	}
+}
 
 func TestBuildConfigOverlayAndOverrides(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cortex.yaml")
 	if err := os.WriteFile(path, []byte(`
 default_model: yaml-model
 provider:
-  type: deepseek
+  type: openai
   base_url: https://yaml.example
 `), 0o644); err != nil {
 		t.Fatal(err)

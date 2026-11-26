@@ -8,7 +8,6 @@ import (
 
 	"github.com/xichan96/cortex/agent/approval"
 	"github.com/xichan96/cortex/agent/home"
-	"github.com/xichan96/cortex/agent/llm"
 	"github.com/xichan96/cortex/agent/types"
 	"github.com/xichan96/cortex/dino/agent"
 	"github.com/xichan96/cortex/dino/mem"
@@ -199,6 +198,11 @@ type MemoryConfig struct {
 // "use the provider default" (see types.DefaultPromptCacheOptions). This lets
 // a partial YAML block (e.g. only `enabled: false`) override just that field
 // instead of silently zeroing the other toggles.
+//
+// The agent/model Anthropic provider currently honors Enabled by mapping it to
+// a fixed short-TTL, three-breakpoint layout (system / last tool / last
+// message). The breakpoint sub-fields below are kept for config compatibility
+// and are not consulted by that provider yet.
 type PromptCachingConfig struct {
 	Enabled          bool  `yaml:"enabled"` // default true (pure cost optimization)
 	SystemBreakpoint *bool `yaml:"system_breakpoint,omitempty"`
@@ -223,6 +227,14 @@ type ProviderConfig struct {
 	BaseURL string            `yaml:"base_url"`
 	Models  map[string]string `yaml:"models"`
 	Headers map[string]string `yaml:"headers"`
+	// PreferMaxCompletionTokens maps max_tokens to max_completion_tokens for
+	// OpenAI-compatible endpoints that reject max_tokens.
+	PreferMaxCompletionTokens bool `yaml:"prefer_max_completion_tokens"`
+	// RetryMaxRetries is the number of transport retries a provider performs
+	// before the response stream starts. nil uses the framework default (1).
+	// Set 0 to disable retries, for example when BaseURL points at a gateway
+	// that already retries upstream calls.
+	RetryMaxRetries *int `yaml:"retry_max_retries,omitempty"`
 }
 
 // SkillsConfig configures skill roots.
@@ -494,28 +506,12 @@ func RegisterLLMProvider(name string, factory LLMProviderFactory) {
 	providerRegistry[name] = factory
 }
 
-func init() {
-	// Anthropic is native (no langchaingo). The OpenAI-compatible providers
-	// (openai/deepseek/volce) live in dino/llmcompat; hosts that need them
-	// blank-import that package. Dojo only uses Anthropic, so it does not link
-	// langchaingo, redis, or qmgo.
-	RegisterLLMProvider("anthropic", func(cfg *Config) (types.LLMProvider, error) {
-		return llm.NewAnthropicClient(llm.AnthropicOptions{
-			APIKey:  cfg.Provider.APIKey,
-			BaseURL: cfg.Provider.BaseURL,
-			Model:   cfg.DefaultModel,
-		})
-	})
-}
-
 // builtinProviders 是框架内置、已知需要显式 model 的 provider。
 // 自定义/通过 RegisterLLMProvider 注册的 provider 自行决定是否需要 model，
 // 校验不强制（代理/网关可能用 header/baseURL 路由，不依赖 DefaultModel）。
 var builtinProviders = map[string]struct{}{
 	"openai":    {},
 	"anthropic": {},
-	"deepseek":  {},
-	"volce":     {},
 }
 
 // ValidateConfig 在构造 DinoFactory 前做配置校验，让配置错误尽早、清晰暴露
@@ -583,7 +579,7 @@ func (c *Config) PromptCacheOptions() types.PromptCacheOptions {
 
 // ConfigurePromptCache applies prompt caching to a provider that supports it.
 // It is a no-op for providers that don't implement types.PromptCacheConfigurer
-// (OpenAI/DeepSeek/Volce — no cache_control protocol).
+// (the OpenAI-compatible protocol has no cache_control extension).
 func ConfigurePromptCache(provider types.LLMProvider, opts types.PromptCacheOptions) {
 	if pc, ok := provider.(types.PromptCacheConfigurer); ok {
 		pc.SetPromptCacheOptions(opts)

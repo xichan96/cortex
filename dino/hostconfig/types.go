@@ -23,9 +23,9 @@ type MemoryIngestConfig struct {
 }
 
 type MemorySettings struct {
-	MaxBudgetTokens   int    `mapstructure:"max_budget_tokens"`
-	CompactAfterTurns int    `mapstructure:"compact_after_turns"`
-	CompressThreshold int    `mapstructure:"compress_threshold"`
+	MaxBudgetTokens   int `mapstructure:"max_budget_tokens"`
+	CompactAfterTurns int `mapstructure:"compact_after_turns"`
+	CompressThreshold int `mapstructure:"compress_threshold"`
 	// EnableLLMCompress 显式开关：nil=未设置（沿用 dino 默认 true）；true/false=覆盖。
 	// 用指针区分「未设置」与「显式 false」（默认是 true，零值 bool 无法表达）。
 	EnableLLMCompress *bool `mapstructure:"enable_llm_compress"`
@@ -49,15 +49,15 @@ type ProviderConfig struct {
 	Models  []string `mapstructure:"models"`
 	OrgID   string   `mapstructure:"org_id"`
 	APIType string   `mapstructure:"api_type"`
+	// PreferMaxCompletionTokens maps max_tokens to max_completion_tokens for
+	// OpenAI-compatible endpoints that reject max_tokens.
+	PreferMaxCompletionTokens bool `mapstructure:"prefer_max_completion_tokens"`
 }
 
 type LLMConfig struct {
 	Provider  string                    `mapstructure:"provider"`
 	Providers map[string]ProviderConfig `mapstructure:"providers"`
 	OpenAI    ProviderConfig            `mapstructure:"openai"`
-	DeepSeek  ProviderConfig            `mapstructure:"deepseek"`
-	Volce     ProviderConfig            `mapstructure:"volce"`
-	Gemini    ProviderConfig            `mapstructure:"gemini"`
 	Anthropic ProviderConfig            `mapstructure:"anthropic"`
 }
 

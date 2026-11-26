@@ -17,7 +17,7 @@
   · <a href="#agent-skills">Agent Skills</a>
   · <a href="#memory-system">Memory System</a>
   · <a href="#examples">Examples</a>
-  · <a href="#triggers">Triggers</a>
+  · <a href="#runtime-transports">Runtime Transports</a>
   · <a href="#license">License</a>
 </p>
 
@@ -38,7 +38,7 @@ Designed for production environments, CORTEX prioritizes reliability, configurab
 ## Features
 
 - **Intelligent Agent Engine**: A robust core for building agents with advanced reasoning and tool-calling capabilities.
-- **Broad LLM Support**: Seamless integration with OpenAI, DeepSeek, Volce, and custom providers.
+- **Broad LLM Support**: Two wire protocols — OpenAI-compatible chat completions (OpenAI, DeepSeek, Volcengine, local gateways: configure `BaseURL` + `Model`) and native Anthropic Messages.
 - **Multi-Modal Native**: Effortlessly process and generate text, images, and other media formats.
 - **Dynamic Skills**: File-system-based skills with lazy loading; YAML frontmatter supports `paths`, `when_to_use`, and `allowed_tools`, with path-Glob filtering (`doublestar`) and optional symlink resolve / real-path dedupe in the loader.
 - **Extensible Tooling**: `agent/tools/builtin` spans fs, search, shell/background jobs, net/web, Docker, email, math, and `mcp_client`; register custom `types.Tool` as needed.
@@ -53,7 +53,7 @@ Designed for production environments, CORTEX prioritizes reliability, configurab
 
 Cortex follows a modular architecture with the following key components:
 
-> **Note**: The `agent` package is built on top of [LangChain](https://github.com/tmc/langchaingo), leveraging its powerful LLM interaction and tool-calling capabilities to build intelligent agent systems.
+> **Note**: The `agent` package speaks two native wire protocols — OpenAI chat completions and Anthropic Messages — and does not depend on LangChain.
 
 ```
 cortex/
@@ -65,6 +65,7 @@ cortex/
 │   ├── types/        # Core type definitions
 │   ├── providers/    # External service providers (memory, LLM adapters)
 │   ├── hooks/        # Lifecycle hooks
+│   ├── runtime/      # Transport-neutral runtime (stdio RPC, HTTP/WS gateway)
 │   └── utils/        # Ratelimit, loop detection, permission, budget
 ├── dino/             # Advanced orchestration (Client/Factory, budget, approval, queue, bus)
 │   ├── agent/        # Subagent and prompts
@@ -73,9 +74,6 @@ cortex/
 │   ├── queue/        # Priority task queue
 │   ├── tools/        # Registry, builtins, MCP, skill tool
 │   └── permission/   # Tool permission and approval
-├── trigger/          # Trigger modules
-│   ├── http/         # HTTP trigger (REST API)
-│   └── mcp/          # MCP trigger (MCP server)
 └── examples/         # Example applications
 ```
 
@@ -100,13 +98,18 @@ import (
 	"time"
 
 	"github.com/xichan96/cortex/agent/engine"
-	"github.com/xichan96/cortex/agent/llm"
+	"github.com/xichan96/cortex/agent/model"
+	"github.com/xichan96/cortex/agent/model/providers/openai"
 	"github.com/xichan96/cortex/agent/types"
 )
 
 func main() {
-	// 1. Initialize LLM Provider
-	llmProvider, err := llm.OpenAIClient("your-api-key", "gpt-4o-mini")
+	// 1. Initialize LLM Provider (OpenAI-compatible protocol)
+	provider := openai.New(openai.Config{APIKey: "your-api-key"})
+	m := model.ModelFor(provider, "gpt-4o-mini", model.APIOpenAICompletions, []model.Modality{
+		model.ModalityText, model.ModalityImage,
+	})
+	llmProvider, err := model.NewEngineProvider(provider, m, model.EngineOptions{})
 	if err != nil {
 		panic(err)
 	}
@@ -130,22 +133,22 @@ func main() {
 }
 ```
 
-### Run the Service
+### Run the CLI
 
-Cortex ships with a ready-to-deploy HTTP server:
+Cortex ships a CLI over a Dino session:
 
 ```Bash
-# Run with default config
-go run cortex.go
+# One turn; runtime events are printed as JSONL
+go run ./cmd/cortex -prompt "What is the weather in New York?" -provider openai -model gpt-4.1
 
-# Run with custom config
-go run cortex.go -config /path/to/cortex.yaml
+# JSONL RPC on stdin/stdout
+go run ./cmd/cortex -mode rpc
 ```
 
-Default endpoints (port `:5678`):
-- `POST /chat`: Standard chat
-- `POST /chat/stream`: Streaming chat (SSE)
-- `ANY /mcp`: MCP Protocol endpoint
+The API key is read from `CORTEX_API_KEY`, or from the provider-specific
+`OPENAI_API_KEY` (the OpenAI-compatible protocol, including DeepSeek/Volcengine)
+/ `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`. A YAML file passed with
+`-config` is overlaid on `dino.DefaultConfig()`.
 
 ## Core Components
 
@@ -155,28 +158,40 @@ Without Dino, `agent` is the full baseline: LLM, engine, tools, and memory for o
 
 ### LLM Integration
 
-Unified interface for major LLM providers. Anthropic is built into `agent/llm`
-(native protocol, no langchaingo); the OpenAI-compatible clients live in
-`agent/llm/langchain`:
+Two wire protocols cover every supported provider:
+
+- **OpenAI-compatible** (`agent/model/providers/openai`): OpenAI, DeepSeek,
+  Volcengine, local gateways — choose the endpoint with `BaseURL` and the model
+  ID with `ModelFor`.
+- **Anthropic Messages** (`agent/model/providers/anthropic`).
 
 ```go
 import (
-	llm "github.com/xichan96/cortex/agent/llm/langchain"
-
-	// Required once when using dino.Config.Provider.Type = "openai" /
-	// "deepseek" / "volce": these providers are optional to keep langchaingo
-	// out of Anthropic-only binaries.
-	_ "github.com/xichan96/cortex/dino/llmcompat"
+	"github.com/xichan96/cortex/agent/model"
+	"github.com/xichan96/cortex/agent/model/providers/anthropic"
+	"github.com/xichan96/cortex/agent/model/providers/openai"
 )
 
-// OpenAI
-llmProvider, _ := llm.OpenAIClient("sk-...", "gpt-4o")
+modalities := []model.Modality{model.ModalityText, model.ModalityImage}
 
-// DeepSeek
-llmProvider, _ := llm.QuickDeepSeekProvider("sk-...", "deepseek-chat")
+// OpenAI-compatible: OpenAI
+p := openai.New(openai.Config{APIKey: "sk-..."})
+m := model.ModelFor(p, "gpt-4o", model.APIOpenAICompletions, modalities)
+llmProvider, _ := model.NewEngineProvider(p, m, model.EngineOptions{})
 
-// Volcengine
-llmProvider, _ := llm.VolceClient("ak-...", "doubao-pro-32k")
+// OpenAI-compatible: DeepSeek / Volcengine / any gateway
+p = openai.New(openai.Config{
+	APIKey:                    "sk-...",
+	BaseURL:                   "https://api.deepseek.com",
+	PreferMaxCompletionTokens: true,
+})
+m = model.ModelFor(p, "deepseek-chat", model.APIOpenAICompletions, modalities)
+llmProvider, _ = model.NewEngineProvider(p, m, model.EngineOptions{})
+
+// Anthropic (native Messages API)
+ap := anthropic.New(anthropic.Config{APIKey: "sk-ant-..."})
+am := model.ModelFor(ap, "claude-sonnet-4-20250514", model.APIAnthropicMessages, modalities)
+llmProvider, _ = model.NewEngineProvider(ap, am, model.EngineOptions{})
 ```
 
 ## Dino
@@ -376,20 +391,20 @@ agentEngine.SetMemory(context.Background(), memory)
 - [Release summary](docs/RELEASE_SUMMARY.md): English notes on recent memory, skills, tools, and Dino changes.
 - [Basic Example](examples/basic): Fundamental usage patterns.
 - [Dino Example](examples/dino): Dino orchestration (sessions, budget, tool approval).
-- [Chat Web](examples/chat-web): Full-stack chat application (Gin + React).
-- [MCP Server](examples/mcp-server): Expose Agent as an MCP service.
 - [Agent Skills](examples/skills): Dynamic skill loading and usage.
 - [Task Scheduling](examples/xcron): Task scheduling with xcron.
 
-## Triggers
+## Runtime Transports
 
-`trigger/` exposes the agent over different protocols for external integration.
+`agent/runtime` defines the transport-neutral session protocol: commands
+(`prompt`, `steer`, `follow_up`, `abort`, `get_state`, `get_entries`, `settled`,
+`clear_queue`), runtime events, and settled state. Two adapters ship with it:
 
-#### HTTP Trigger
-Standard RESTful API for chat and streaming.
-
-#### MCP Trigger
-Compliant with the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), so the agent can be used as a tool from clients such as Claude Desktop.
+- `agent/runtime.Server`: JSONL RPC over stdin/stdout, used by
+  `cmd/cortex -mode rpc`.
+- `agent/runtime/gateway`: HTTP/SSE + WebSocket (`/rpc`, `/events`, `/ws`,
+  `/health`) plus optional `/ui/*` approval relay, for any `runtime.Runtime`
+  implementation such as `dino.SessionRuntime`.
 
 ## Contributing
 

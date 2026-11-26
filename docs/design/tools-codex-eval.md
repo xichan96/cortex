@@ -4,6 +4,7 @@
 > 前置设计：[`docs/design/tool-pipeline.md`](../../design/tool-pipeline.md)（F1–F7，已落地，见其 §13 实现备注）。
 > 范围：**只设计，不改业务代码**。落地时改动文件清单见各节与 §10，全部集中在 `agent/` 与 `dino/` 源码。
 > 分支：`tools-codex-eval`。
+> 备注（2026-11-26）：文中 `agent/llm/anthropic_native.go` 的引用为评估时点路径；当前 Anthropic 实现在 `agent/model/providers/anthropic`。
 
 ---
 

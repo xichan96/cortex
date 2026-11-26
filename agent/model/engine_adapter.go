@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/xichan96/cortex/agent/types"
 )
@@ -26,6 +27,10 @@ type EngineProvider struct {
 	provider Provider
 	model    *Model
 	opts     EngineOptions
+
+	cacheMu   sync.RWMutex
+	cacheOpts types.PromptCacheOptions
+	cacheSet  bool
 }
 
 // NewEngineProvider builds an engine-facing provider. model may be nil, in
@@ -37,8 +42,45 @@ func NewEngineProvider(p Provider, m *Model, opts EngineOptions) (*EngineProvide
 	return &EngineProvider{provider: p, model: m, opts: opts}, nil
 }
 
-// Compile-time check.
-var _ types.LLMProvider = (*EngineProvider)(nil)
+// Compile-time checks.
+var (
+	_ types.LLMProvider           = (*EngineProvider)(nil)
+	_ types.PromptCacheConfigurer = (*EngineProvider)(nil)
+)
+
+// SetPromptCacheOptions implements types.PromptCacheConfigurer. It maps the
+// engine's on/off switch onto the provider-neutral retention level: enabled
+// requests the short (5m) ephemeral cache; disabled sends no cache_control.
+// Providers that have no prompt-cache protocol ignore the retention level.
+func (e *EngineProvider) SetPromptCacheOptions(opts types.PromptCacheOptions) {
+	e.cacheMu.Lock()
+	e.cacheOpts = opts
+	e.cacheSet = true
+	e.cacheMu.Unlock()
+}
+
+// PromptCacheOptions implements types.PromptCacheConfigurer. The engine merges
+// its Enabled flag onto the returned options before calling the setter.
+func (e *EngineProvider) PromptCacheOptions() types.PromptCacheOptions {
+	e.cacheMu.RLock()
+	defer e.cacheMu.RUnlock()
+	return e.cacheOpts
+}
+
+func (e *EngineProvider) cacheRetention() CacheRetention {
+	e.cacheMu.RLock()
+	defer e.cacheMu.RUnlock()
+	if !e.cacheSet {
+		if e.opts.CacheRetention == "" {
+			return CacheRetentionNone
+		}
+		return e.opts.CacheRetention
+	}
+	if e.cacheOpts.Enabled {
+		return CacheRetentionShort
+	}
+	return CacheRetentionNone
+}
 
 func (e *EngineProvider) modelFor() (*Model, error) {
 	if e.model != nil {
@@ -255,7 +297,7 @@ func (e *EngineProvider) buildRequest(m *Model, messages []types.Message, tools 
 		Thinking:       e.opts.Thinking,
 		MaxTokens:      e.opts.MaxTokens,
 		Temperature:    e.opts.Temperature,
-		CacheRetention: e.opts.CacheRetention,
+		CacheRetention: e.cacheRetention(),
 	}, nil
 }
 

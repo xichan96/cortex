@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/xichan96/cortex/agent/model"
 )
@@ -24,6 +26,9 @@ func testProvider(t *testing.T, handler http.HandlerFunc) (*Provider, *httptest.
 	return New(Config{
 		APIKey:  "test-key",
 		BaseURL: server.URL,
+		// Keep existing tests single-attempt and fast; retry behavior has its
+		// own tests below.
+		Retry: &model.TransportRetryPolicy{MaxRetries: 0},
 	}), server
 }
 
@@ -622,4 +627,158 @@ func TestStreamCancellation(t *testing.T) {
 		t.Fatalf("aborted result = %+v", message)
 	}
 	_ = stream.Close()
+}
+
+func TestPreferMaxCompletionTokens(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &gotBody); err != nil {
+			t.Errorf("request body is not JSON: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, sseData(`{"id":"c","model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`)+sseData(`[DONE]`))
+	}))
+	t.Cleanup(server.Close)
+
+	provider := New(Config{
+		APIKey:                    "k",
+		BaseURL:                   server.URL,
+		PreferMaxCompletionTokens: true,
+	})
+	stream, err := provider.Stream(context.Background(), &model.Request{
+		Model:     catalogModel(t, "gpt-4o"),
+		MaxTokens: 1234,
+		Messages:  []model.Message{{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.ContentText, Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	collectEvents(t, stream)
+
+	if _, ok := gotBody["max_tokens"]; ok {
+		t.Fatalf("must not send max_tokens: %+v", gotBody)
+	}
+	if got := gotBody["max_completion_tokens"]; got != float64(1234) {
+		t.Fatalf("max_completion_tokens = %v", got)
+	}
+}
+
+func TestDefaultRetryPolicy(t *testing.T) {
+	if got := New(Config{}).retry.MaxRetries; got != model.DefaultProviderRetryMaxRetries {
+		t.Fatalf("default retry = %d, want %d", got, model.DefaultProviderRetryMaxRetries)
+	}
+	if got := New(Config{Retry: &model.TransportRetryPolicy{MaxRetries: 0}}).retry.MaxRetries; got != 0 {
+		t.Fatalf("explicit retry = %d, want 0", got)
+	}
+}
+
+func TestStreamRetriesTransientErrorBeforeStreaming(t *testing.T) {
+	var attempts int32
+	sse := sseData(`{"id":"chatcmpl-1","model":"gpt-4o","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":"stop"}]}`) +
+		sseData(`[DONE]`)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&attempts, 1) == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"error":{"message":"upstream hiccup","type":"server_error","code":"server_error"}}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, sse)
+	}))
+	t.Cleanup(server.Close)
+
+	provider := New(Config{
+		APIKey:  "test-key",
+		BaseURL: server.URL,
+		Retry: &model.TransportRetryPolicy{
+			MaxRetries: 1,
+			BaseDelay:  time.Millisecond,
+			MaxDelay:   time.Millisecond,
+		},
+	})
+	stream, err := provider.Stream(context.Background(), &model.Request{
+		Model:    catalogModel(t, "gpt-4o"),
+		Messages: []model.Message{{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.ContentText, Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := collectEvents(t, stream)
+	if got := atomic.LoadInt32(&attempts); got != 2 {
+		t.Fatalf("attempts = %d, want 2", got)
+	}
+	if err := model.ValidateSequence(events); err != nil {
+		t.Fatalf("invalid event sequence: %v", err)
+	}
+	if last := events[len(events)-1]; last.Type != model.StreamDone {
+		t.Fatalf("last event = %+v, want done", last)
+	}
+}
+
+func TestStreamDoesNotRetryClientError(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":{"message":"bad request","type":"invalid_request_error","code":"invalid_request_error"}}`)
+	}))
+	t.Cleanup(server.Close)
+
+	provider := New(Config{
+		APIKey:  "test-key",
+		BaseURL: server.URL,
+		Retry: &model.TransportRetryPolicy{
+			MaxRetries: 3,
+			BaseDelay:  time.Millisecond,
+		},
+	})
+	stream, err := provider.Stream(context.Background(), &model.Request{
+		Model:    catalogModel(t, "gpt-4o"),
+		Messages: []model.Message{{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.ContentText, Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := collectEvents(t, stream)
+	if got := atomic.LoadInt32(&attempts); got != 1 {
+		t.Fatalf("attempts = %d, want 1", got)
+	}
+	if len(events) != 2 || events[1].Type != model.StreamError || events[1].Err.StatusCode != http.StatusBadRequest {
+		t.Fatalf("events = %+v", events)
+	}
+}
+
+func TestStreamRetryDisabled(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, `{"error":{"message":"down","type":"server_error","code":"server_error"}}`)
+	}))
+	t.Cleanup(server.Close)
+
+	provider := New(Config{
+		APIKey:  "test-key",
+		BaseURL: server.URL,
+		Retry:   &model.TransportRetryPolicy{MaxRetries: 0},
+	})
+	stream, err := provider.Stream(context.Background(), &model.Request{
+		Model:    catalogModel(t, "gpt-4o"),
+		Messages: []model.Message{{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.ContentText, Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := collectEvents(t, stream)
+	if got := atomic.LoadInt32(&attempts); got != 1 {
+		t.Fatalf("attempts = %d, want 1", got)
+	}
+	if len(events) != 2 || events[1].Type != model.StreamError {
+		t.Fatalf("events = %+v", events)
+	}
 }

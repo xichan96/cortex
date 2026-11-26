@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/xichan96/cortex/agent/model"
 )
@@ -24,6 +26,9 @@ func testProvider(t *testing.T, handler http.HandlerFunc) (*Provider, *httptest.
 	return New(Config{
 		APIKey:  "test-key",
 		BaseURL: server.URL,
+		// Keep existing tests single-attempt and fast; retry behavior has its
+		// own tests below.
+		Retry: &model.TransportRetryPolicy{MaxRetries: 0},
 	}), server
 }
 
@@ -589,4 +594,127 @@ func TestStreamCancellation(t *testing.T) {
 		t.Fatalf("aborted result = %+v", message)
 	}
 	_ = stream.Close()
+}
+
+func TestDefaultRetryPolicy(t *testing.T) {
+	if got := New(Config{}).retry.MaxRetries; got != model.DefaultProviderRetryMaxRetries {
+		t.Fatalf("default retry = %d, want %d", got, model.DefaultProviderRetryMaxRetries)
+	}
+	if got := New(Config{Retry: &model.TransportRetryPolicy{MaxRetries: 0}}).retry.MaxRetries; got != 0 {
+		t.Fatalf("explicit retry = %d, want 0", got)
+	}
+}
+
+func TestStreamRetriesTransientErrorBeforeStreaming(t *testing.T) {
+	var attempts int32
+	sse := sseEvent("message_start", `{"type":"message_start","message":{"id":"msg_1","model":"claude-sonnet-4-5","usage":{"input_tokens":10}}}`) +
+		sseEvent("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`) +
+		sseEvent("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`) +
+		sseEvent("content_block_stop", `{"type":"content_block_stop","index":0}`) +
+		sseEvent("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`) +
+		sseEvent("message_stop", `{"type":"message_stop"}`)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&attempts, 1) == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"type":"error","error":{"type":"api_error","message":"upstream hiccup"}}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, sse)
+	}))
+	t.Cleanup(server.Close)
+
+	provider := New(Config{
+		APIKey:  "test-key",
+		BaseURL: server.URL,
+		Retry: &model.TransportRetryPolicy{
+			MaxRetries: 1,
+			BaseDelay:  time.Millisecond,
+			MaxDelay:   time.Millisecond,
+		},
+	})
+	stream, err := provider.Stream(context.Background(), &model.Request{
+		Model:    sonnetModel(t),
+		Messages: []model.Message{{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.ContentText, Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := collectEvents(t, stream)
+	if got := atomic.LoadInt32(&attempts); got != 2 {
+		t.Fatalf("attempts = %d, want 2", got)
+	}
+	if err := model.ValidateSequence(events); err != nil {
+		t.Fatalf("invalid event sequence: %v", err)
+	}
+	if last := events[len(events)-1]; last.Type != model.StreamDone {
+		t.Fatalf("last event = %+v, want done", last)
+	}
+}
+
+func TestStreamDoesNotRetryClientError(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"type":"error","error":{"type":"invalid_request_error","message":"bad request"}}`)
+	}))
+	t.Cleanup(server.Close)
+
+	provider := New(Config{
+		APIKey:  "test-key",
+		BaseURL: server.URL,
+		Retry: &model.TransportRetryPolicy{
+			MaxRetries: 3,
+			BaseDelay:  time.Millisecond,
+		},
+	})
+	stream, err := provider.Stream(context.Background(), &model.Request{
+		Model:    sonnetModel(t),
+		Messages: []model.Message{{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.ContentText, Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := collectEvents(t, stream)
+	if got := atomic.LoadInt32(&attempts); got != 1 {
+		t.Fatalf("attempts = %d, want 1", got)
+	}
+	if len(events) != 2 || events[1].Type != model.StreamError || events[1].Err.StatusCode != http.StatusBadRequest {
+		t.Fatalf("events = %+v", events)
+	}
+}
+
+func TestStreamRetryDisabled(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, `{"type":"error","error":{"type":"api_error","message":"down"}}`)
+	}))
+	t.Cleanup(server.Close)
+
+	provider := New(Config{
+		APIKey:  "test-key",
+		BaseURL: server.URL,
+		Retry:   &model.TransportRetryPolicy{MaxRetries: 0},
+	})
+	stream, err := provider.Stream(context.Background(), &model.Request{
+		Model:    sonnetModel(t),
+		Messages: []model.Message{{Role: model.RoleUser, Content: []model.ContentBlock{{Type: model.ContentText, Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := collectEvents(t, stream)
+	if got := atomic.LoadInt32(&attempts); got != 1 {
+		t.Fatalf("attempts = %d, want 1", got)
+	}
+	if len(events) != 2 || events[1].Type != model.StreamError {
+		t.Fatalf("events = %+v", events)
+	}
 }

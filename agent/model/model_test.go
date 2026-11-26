@@ -294,3 +294,35 @@ func TestPromptCacheSpecSupports(t *testing.T) {
 		t.Fatal("nil spec reported as supported")
 	}
 }
+
+func TestModelForCatalogAndPassthrough(t *testing.T) {
+	known := Model{
+		ID:       "known",
+		Name:     "Known Model",
+		Provider: "p",
+		API:      APIOpenAICompletions,
+		BaseURL:  "https://example.test",
+	}
+	p := &fakeProvider{id: "p", models: []Model{known}}
+
+	if got := ModelFor(p, "known", APIAnthropicMessages, nil); got == nil ||
+		got.Name != "Known Model" || got.API != APIOpenAICompletions {
+		t.Fatalf("catalog hit = %+v", got)
+	}
+	if got := ModelFor(p, "", APIAnthropicMessages, nil); got == nil || got.ID != "known" {
+		t.Fatalf("empty id should fall back to first model, got %+v", got)
+	}
+
+	got := ModelFor(p, "brand-new", APIAnthropicMessages, []Modality{ModalityText})
+	if got == nil {
+		t.Fatal("passthrough model is nil")
+	}
+	if got.ID != "brand-new" || got.Provider != "p" ||
+		got.API != APIAnthropicMessages || got.BaseURL != "https://example.test" ||
+		len(got.Input) != 1 || got.Input[0] != ModalityText {
+		t.Fatalf("passthrough = %+v", got)
+	}
+	if ModelFor(nil, "x", APIAnthropicMessages, nil) != nil {
+		t.Fatal("nil provider should return nil")
+	}
+}

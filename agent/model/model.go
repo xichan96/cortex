@@ -202,6 +202,46 @@ func (m Model) Key() string {
 	return m.Provider + "/" + m.ID
 }
 
+// ModelFor resolves id against the provider's catalog. When the catalog has no
+// entry, it returns a minimal pass-through descriptor so gateways and newly
+// released model IDs work without a cortex update. BaseURL is copied from the
+// first catalog entry as metadata only; dispatch still goes through p.
+//
+// api and input describe the pass-through case's wire protocol and modalities;
+// catalog hits are returned unchanged.
+func ModelFor(p Provider, id string, api API, input []Modality) *Model {
+	if p == nil {
+		return nil
+	}
+	name := strings.TrimSpace(id)
+	models := p.Models()
+	if name == "" {
+		if len(models) == 0 {
+			return nil
+		}
+		m := models[0]
+		return &m
+	}
+	for i := range models {
+		if models[i].ID == name {
+			m := models[i]
+			return &m
+		}
+	}
+	baseURL := ""
+	if len(models) > 0 {
+		baseURL = models[0].BaseURL
+	}
+	return &Model{
+		ID:       name,
+		Name:     name,
+		Provider: p.ID(),
+		API:      api,
+		BaseURL:  baseURL,
+		Input:    append([]Modality(nil), input...),
+	}
+}
+
 // Validate checks the fields every dispatchable model needs. Unknown API and
 // modality values are allowed so provider packages can extend the catalog.
 func (m Model) Validate() error {

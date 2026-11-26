@@ -2,6 +2,7 @@
 
 > 评估日期：2026-08-28
 > 范围：仅评估，不涉及代码改动
+> 备注（2026-11-26）：文中引用的 `internal/app`、`agent/llm` 等 legacy 路径已在后续清理中删除；当前 provider 实现为 `agent/model/providers/{openai,anthropic}`，相关行号仅代表评估时点。
 > 对比对象：[OpenAI Codex CLI](https://github.com/openai/codex)（`codex-rs/`，Rust，生产级编码 agent）
 
 ## 背景与方法

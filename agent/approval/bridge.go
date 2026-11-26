@@ -79,8 +79,8 @@ type Bridge interface {
 
 // InteractiveBridge is a Bridge that also exposes its inbound request stream
 // and accepts responses out of band. Gateways (for example the HTTP/SSE
-// transport in trigger/gateway) need both halves to relay requests to a UI and
-// hand the UI's answers back to the waiting caller.
+// transport in agent/runtime/gateway) need both halves to relay requests to a
+// UI and hand the UI's answers back to the waiting caller.
 //
 // Requests must be safe for a single consumer to read; a stream is not
 // broadcast to multiple readers. Respond reports ErrUnknownRequest when no

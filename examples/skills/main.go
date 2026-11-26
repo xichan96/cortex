@@ -12,7 +12,8 @@ import (
 	"time"
 
 	"github.com/xichan96/cortex/agent/engine"
-	llm "github.com/xichan96/cortex/agent/llm/langchain"
+	"github.com/xichan96/cortex/agent/model"
+	"github.com/xichan96/cortex/agent/model/providers/openai"
 	"github.com/xichan96/cortex/agent/providers"
 	"github.com/xichan96/cortex/agent/skills"
 	"github.com/xichan96/cortex/agent/tools/builtin/fs"
@@ -21,19 +22,24 @@ import (
 	"github.com/xichan96/cortex/pkg/logger"
 )
 
-// getLLMProvider creates an LLM provider (using Volcengine configuration)
+// getLLMProvider creates an OpenAI-compatible LLM provider. Any endpoint that
+// speaks the OpenAI chat-completions protocol works; only BaseURL and Model
+// change (this example points at Volcengine).
 func getLLMProvider() (types.LLMProvider, error) {
-	// Use Volcengine client
-	// If model is empty, llm.NewVolceClient will use the default (DoubaoSeed1)
-	// If baseURL is empty, llm.NewVolceClient will use the default
-	opts := llm.VolceOptions{
-		APIKey: "",
-		Model:  "deepseek-v3-1-250821",
+	provider := openai.New(openai.Config{
+		APIKey:                    os.Getenv("ARK_API_KEY"),
+		BaseURL:                   "https://ark.cn-beijing.volces.com/api/v3",
+		PreferMaxCompletionTokens: true,
+	})
+	m := model.ModelFor(provider, "deepseek-v3-1-250821", model.APIOpenAICompletions, []model.Modality{
+		model.ModalityText, model.ModalityImage,
+	})
+	if m == nil {
+		return nil, fmt.Errorf("failed to resolve model")
 	}
-
-	llmProvider, err := llm.NewVolceClient(opts)
+	llmProvider, err := model.NewEngineProvider(provider, m, model.EngineOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create Volcengine client: %w", err)
+		return nil, fmt.Errorf("failed to create LLM provider: %w", err)
 	}
 	return llmProvider, nil
 }

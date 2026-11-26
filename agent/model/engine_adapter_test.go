@@ -149,6 +149,50 @@ func TestEngineProviderMetadata(t *testing.T) {
 	}
 }
 
+func TestEngineProviderPromptCacheRetention(t *testing.T) {
+	m := testModel()
+	provider := &fakeProvider{
+		id:     "fake",
+		models: []Model{m},
+		stream: &fakeStream{events: []StreamEvent{{Type: StreamDone}}},
+	}
+	ep, err := NewEngineProvider(provider, &m, EngineOptions{})
+	if err != nil {
+		t.Fatalf("NewEngineProvider: %v", err)
+	}
+
+	drain := func() {
+		t.Helper()
+		ch, err := ep.ChatWithToolsStream(context.Background(), []types.Message{{Role: "user", Content: "hi"}}, nil)
+		if err != nil {
+			t.Fatalf("ChatWithToolsStream: %v", err)
+		}
+		for range ch {
+		}
+	}
+
+	// Without SetPromptCacheOptions the explicit EngineOptions value wins.
+	drain()
+	if provider.req.CacheRetention != CacheRetentionNone {
+		t.Fatalf("default retention = %q, want none", provider.req.CacheRetention)
+	}
+
+	ep.SetPromptCacheOptions(types.PromptCacheOptions{Enabled: true})
+	drain()
+	if provider.req.CacheRetention != CacheRetentionShort {
+		t.Fatalf("enabled retention = %q, want short", provider.req.CacheRetention)
+	}
+	if !ep.PromptCacheOptions().Enabled {
+		t.Fatal("PromptCacheOptions should report enabled")
+	}
+
+	ep.SetPromptCacheOptions(types.PromptCacheOptions{Enabled: false})
+	drain()
+	if provider.req.CacheRetention != CacheRetentionNone {
+		t.Fatalf("disabled retention = %q, want none", provider.req.CacheRetention)
+	}
+}
+
 func TestEngineProviderErrorEvent(t *testing.T) {
 	m := testModel()
 	provider := &fakeProvider{

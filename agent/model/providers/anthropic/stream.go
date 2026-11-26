@@ -121,6 +121,7 @@ type stream struct {
 	body   []byte
 	header map[string]string
 	req    *model.Request
+	retry  model.TransportRetryPolicy
 
 	events chan model.StreamEvent
 	done   chan struct{}
@@ -155,6 +156,7 @@ func newStream(ctx context.Context, cancel context.CancelFunc, p *Provider, req 
 		body:    body,
 		header:  p.requestHeaders(req),
 		req:     req,
+		retry:   p.retry,
 		events:  make(chan model.StreamEvent, 64),
 		done:    make(chan struct{}),
 		content: make([]model.ContentBlock, 0, 4),
@@ -202,28 +204,57 @@ func (s *stream) run() {
 		return
 	}
 
-	req, err := http.NewRequestWithContext(s.ctx, http.MethodPost, s.url, bytes.NewReader(s.body))
+	baseReq, err := http.NewRequestWithContext(s.ctx, http.MethodPost, s.url, nil)
 	if err != nil {
 		s.fail(&model.StreamErrorInfo{Code: "request_error", Message: err.Error(), Cause: err})
 		return
 	}
 	for name, value := range s.header {
-		req.Header.Set(name, value)
+		baseReq.Header.Set(name, value)
 	}
 
-	resp, err := s.client.Do(req)
+	// Retry only until a response body is available. Once readSSE starts,
+	// content may already have reached the caller, so the request is no longer
+	// replayable.
+	var resp *http.Response
+	err = model.TransportRetry(s.ctx, func(ctx context.Context) error {
+		req := baseReq.Clone(ctx)
+		req.Body = io.NopCloser(bytes.NewReader(s.body))
+		req.ContentLength = int64(len(s.body))
+		req.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(s.body)), nil
+		}
+		r, err := s.client.Do(req)
+		if err != nil {
+			return s.transportError(err)
+		}
+		if r.StatusCode < 200 || r.StatusCode >= 300 {
+			info := parseHTTPError(r)
+			_ = r.Body.Close()
+			return info
+		}
+		resp = r
+		return nil
+	}, s.retry)
 	if err != nil {
-		s.fail(s.transportError(err))
+		s.failStreamError(err)
 		return
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		s.fail(parseHTTPError(resp))
+	s.readSSE(resp.Body)
+}
+
+// failStreamError turns an error from the retry loop into a terminal stream
+// error. The loop returns the same *StreamErrorInfo values as the old
+// single-attempt path, so the event shape is unchanged.
+func (s *stream) failStreamError(err error) {
+	var info *model.StreamErrorInfo
+	if errors.As(err, &info) {
+		s.fail(info)
 		return
 	}
-
-	s.readSSE(resp.Body)
+	s.fail(s.transportError(err))
 }
 
 // readSSE consumes the event stream and emits mapped events. It always leaves
@@ -771,6 +802,7 @@ func parseHTTPError(resp *http.Response) *model.StreamErrorInfo {
 		Message:    message,
 		StatusCode: resp.StatusCode,
 		Retryable:  model.IsRetryableTransportError(transport),
+		Cause:      transport,
 	}
 }
 

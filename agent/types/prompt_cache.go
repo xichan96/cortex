@@ -45,8 +45,9 @@ func DefaultPromptCacheOptions() PromptCacheOptions {
 }
 
 // PromptCacheConfigurer is implemented by LLM providers that support prompt
-// cache breakpoint injection (e.g. NativeAnthropicProvider). Defined here in
-// agent/types (B3) so the engine can assert it without importing agent/llm.
+// cache breakpoint injection (e.g. the Anthropic model provider). Defined here
+// in agent/types (B3) so the engine can assert it without importing a provider
+// package.
 //
 // The getter lets the engine merge AgentConfig.PromptCaching (Enabled) onto
 // whatever sub-field options the provider was already configured with (e.g.

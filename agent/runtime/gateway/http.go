@@ -1,10 +1,9 @@
-package http
+package gateway
 
 import (
 	"net/http"
 
 	"github.com/xichan96/cortex/agent/runtime"
-	"github.com/xichan96/cortex/trigger/gateway"
 )
 
 // RuntimeHandler exposes an agent/runtime.Runtime over plain net/http:
@@ -14,16 +13,14 @@ import (
 //	GET  /ws      bidirectional WebSocket runtime transport
 //	GET  /health  liveness probe
 //
-// It is the transport-neutral counterpart of the existing engine-based HTTP
-// trigger and does not depend on dino or the agent engine. Mount it on a mux
-// or StripPrefix router; the existing ChatAPI/StreamChatAPI handlers are
-// unaffected.
+// It depends only on runtime.Runtime, not on dino or the agent engine. Mount it
+// on a mux or StripPrefix router; other transport handlers are unaffected.
 func RuntimeHandler(rt runtime.Runtime) http.Handler {
-	return &runtimeHandler{server: gateway.NewRuntimeServer(rt), ws: gateway.WebSocketHandler(rt)}
+	return &runtimeHandler{server: NewRuntimeServer(rt), ws: WebSocketHandler(rt)}
 }
 
 type runtimeHandler struct {
-	server *gateway.RuntimeServer
+	server *RuntimeServer
 	ws     http.Handler
 }
 

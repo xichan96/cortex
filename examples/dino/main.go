@@ -65,14 +65,14 @@ Always provide clear and concise responses.`
 	cfg.Tools.Denied = []string{}
 
 	cfg.ToolTimeouts = map[string]time.Duration{
-		"Bash":       120 * time.Second,
-		"WebFetch":   30 * time.Second,
-		"WebSearch":  45 * time.Second,
-		"Glob":       10 * time.Second,
-		"Grep":       30 * time.Second,
-		"Read":  15 * time.Second,
-		"Write": 30 * time.Second,
-		"Edit":  15 * time.Second,
+		"Bash":      120 * time.Second,
+		"WebFetch":  30 * time.Second,
+		"WebSearch": 45 * time.Second,
+		"Glob":      10 * time.Second,
+		"Grep":      30 * time.Second,
+		"Read":      15 * time.Second,
+		"Write":     30 * time.Second,
+		"Edit":      15 * time.Second,
 	}
 
 	cfg.ToolTimeoutCalculator = func(toolName string, input map[string]interface{}) time.Duration {

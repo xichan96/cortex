@@ -4,6 +4,7 @@
 > 评估报告出处：主仓 `docs/optimization-review-vs-codex.md`（第二/四/十一章）
 > 评审依据：worktree HEAD 实际代码（`agent/`、`dino/`、`pkg/`、`trigger/`）+ Codex 参照实现（`~/rust/codex/codex-rs`）
 > 评审日期：2026-08-28
+> 备注（2026-11-26）：文中引用的 `trigger/http`、`trigger/gateway/protocol.go` 已在后续清理中删除，相关行号仅代表评审时点。
 
 ---
 

@@ -15,9 +15,17 @@ import (
 // SleepFunc waits for d or until ctx is canceled. Tests inject a recorder.
 type SleepFunc func(ctx context.Context, d time.Duration) error
 
-// DefaultTransportMaxRetries is the retry budget a provider should pass when
-// it does not have an explicit setting. The initial attempt is not counted.
+// DefaultTransportMaxRetries is a suggested retry budget for callers that want
+// the library's general-purpose transport policy. Providers use
+// DefaultProviderRetryMaxRetries unless their Config overrides it. The initial
+// attempt is not counted in either value.
 const DefaultTransportMaxRetries = 2
+
+// DefaultProviderRetryMaxRetries is the number of pre-stream transport retries
+// a provider performs when its Config.Retry is nil. One retry keeps latency
+// bounded when the endpoint is a gateway that already retries upstream calls;
+// hosts can set MaxRetries to 0 to disable provider-level retries entirely.
+const DefaultProviderRetryMaxRetries = 1
 
 const (
 	defaultTransportBaseDelay = 500 * time.Millisecond

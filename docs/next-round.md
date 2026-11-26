@@ -26,7 +26,7 @@
 
 ### P1.1 `ReasoningTokens` 回填（prompt caching O1）—— ✅ 已完成（`ee0c51f`）
 - **背景**：`agent/types/llm.go:46` 的 `Usage.ReasoningTokens` 仍为 0。Anthropic 的 `usage.output_tokens` 不含 reasoning tokens（`usage.reasoning_tokens` 单独给，如 Claude thinking）。
-- **改动**：`agent/llm/anthropic_native.go` 的 usage 解析处，把 `reasoning_tokens` 映射到 `Usage.ReasoningTokens`。同时 `dino/session/turn_observe.go` 的 token 复制处顺带带上。
+- **改动**：Anthropic usage 解析处（原 `agent/llm/anthropic_native.go`，现 `agent/model/providers/anthropic/stream.go`）把 `reasoning_tokens` 映射到 `Usage.ReasoningTokens`。同时 `dino/session/turn_observe.go` 的 token 复制处顺带带上。
 - **工作量**：极小（~10 行）。**收益**：token 观测完整，thinking 成本可追踪。
 - **依赖**：无。
 

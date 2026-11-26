@@ -4,11 +4,12 @@
 // The provider is transport-neutral: it converts model.Request values into the
 // JSON body OpenAI expects, performs one streaming HTTP call, and maps the SSE
 // chunk sequence onto model.StreamEvent values. It deliberately does no
-// semantic retry; callers layer model.TransportRetry / model.SemanticRetry on
-// top when they want it.
+// semantic retry. It does perform bounded transport retries for failures that
+// happen before the response stream starts (see Config.Retry); callers can
+// layer model.SemanticRetry on top when they want semantic retries too.
 //
-// The same wire implementation is reused by OpenAI-compatible providers (see
-// the deepseek package and NewCompatible).
+// The same wire implementation is reused by OpenAI-compatible endpoints through
+// NewCompatible.
 package openai
 
 import (
@@ -48,11 +49,23 @@ type Config struct {
 	// HTTPClient is optional; nil means http.DefaultClient. A custom client can
 	// set a proxy or transport, but should not set a total Timeout for streaming.
 	HTTPClient *http.Client
+	// PreferMaxCompletionTokens maps max_tokens to max_completion_tokens for
+	// OpenAI-compatible endpoints that reject max_tokens. Reasoning models
+	// already do this regardless of the setting.
+	PreferMaxCompletionTokens bool
+	// Retry configures retries for failures that happen before the response
+	// stream starts. Nil uses the default policy: one retry after the initial
+	// attempt. Set MaxRetries to 0 to disable retries, for example when
+	// BaseURL points at a gateway that already retries upstream calls.
+	//
+	// Once the response stream has started, failures are never retried: the
+	// request is not replayable.
+	Retry *model.TransportRetryPolicy
 }
 
 // CompatibleOptions identifies an OpenAI-compatible endpoint that reuses this
-// package's wire implementation. It is how sibling provider packages (for
-// example deepseek) share the chat-completions stream decoder.
+// package's wire implementation, so a named provider can share the
+// chat-completions request encoder and stream decoder.
 type CompatibleOptions struct {
 	// ID is the provider identity returned by ID() and recorded on messages.
 	// Empty means "openai".
@@ -72,13 +85,15 @@ type CompatibleOptions struct {
 // Provider is the Chat Completions implementation of model.Provider. It is
 // immutable after construction and safe for concurrent use.
 type Provider struct {
-	id              string
-	apiKey          string
-	baseURL         string
-	headers         map[string]string
-	client          *http.Client
-	models          []model.Model
-	reasoningEffort bool
+	id                        string
+	apiKey                    string
+	baseURL                   string
+	headers                   map[string]string
+	client                    *http.Client
+	models                    []model.Model
+	reasoningEffort           bool
+	preferMaxCompletionTokens bool
+	retry                     model.TransportRetryPolicy
 }
 
 // Compile-time contract check.
@@ -123,14 +138,20 @@ func NewCompatible(opts CompatibleOptions, cfg Config) *Provider {
 	if models == nil {
 		models = builtinModels()
 	}
+	retry := model.TransportRetryPolicy{MaxRetries: model.DefaultProviderRetryMaxRetries}
+	if cfg.Retry != nil {
+		retry = *cfg.Retry
+	}
 	return &Provider{
-		id:              id,
-		apiKey:          cfg.APIKey,
-		baseURL:         baseURL,
-		headers:         headers,
-		client:          client,
-		models:          models,
-		reasoningEffort: opts.SupportsReasoningEffort,
+		id:                        id,
+		apiKey:                    cfg.APIKey,
+		baseURL:                   baseURL,
+		headers:                   headers,
+		client:                    client,
+		models:                    models,
+		reasoningEffort:           opts.SupportsReasoningEffort,
+		preferMaxCompletionTokens: cfg.PreferMaxCompletionTokens,
+		retry:                     retry,
 	}
 }
 

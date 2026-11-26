@@ -2,6 +2,7 @@
 
 > 设计文档 · 分支 `opt-prompt-caching` · 2026-08-28
 > 对应评估报告第三章《一、差距最大：Prompt Caching（成本影响最大）》（`docs/optimization-review-vs-codex.md:29-47`）。
+> 备注（2026-11-26）：legacy `agent/llm/anthropic_native.go` 已删除；当前 Anthropic 实现为 `agent/model/providers/anthropic`，`cache_control` 注入在 `request.go` 中按 `model.CacheRetention` 采用固定 3 断点布局（system / last tool / last message）。本文中的旧路径与 breakpoint 预算细节是历史实现记录。
 
 ## 0. 目标与结论摘要
 
@@ -428,7 +429,7 @@ if v, ok := choice.GenerationInfo["prompt_tokens_details"]; ok {
 
 以及 `token_usage` map 分支同样处理 `cached_tokens` / `prompt_tokens_details`。OpenAI 侧只做**回填观测**，不注入任何 cache 标记（`cached_tokens` 由 OpenAI 服务端自动判定）。
 
-DeepSeek / Volce（`agent/llm/deepseek.go`、`volce.go`）走 langchain 路径或各自实现；DeepSeek 兼容 OpenAI usage 格式，可复用 `extractUsage` 的 `prompt_tokens_details` 处理。各文件改动点由实现时逐一确认。
+DeepSeek / Volce 现在统一走 OpenAI-compatible 入口（`agent/llm/langchain`），通过 `BaseURL` + `Model` 选择；它们兼容 OpenAI usage 格式，可复用 `extractUsage` 的 `prompt_tokens_details` 处理。各文件改动点由实现时逐一确认。
 
 ---
 

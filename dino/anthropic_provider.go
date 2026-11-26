@@ -10,25 +10,23 @@ import (
 	"github.com/xichan96/cortex/pkg/errors"
 )
 
-// AnthropicModelProviderType is the dino provider type that serves Anthropic
-// through the new agent/model layer (model.Provider + EngineProvider) instead
-// of the legacy agent/llm client. It is deliberately distinct from the
-// existing "anthropic" type so hosts can opt in without changing behavior.
-const AnthropicModelProviderType = "anthropic-model"
+// AnthropicProviderType is the dino provider type that serves the Anthropic
+// Messages protocol through the agent/model layer.
+const AnthropicProviderType = "anthropic"
 
 func init() {
-	RegisterLLMProvider(AnthropicModelProviderType, newAnthropicModelProvider)
+	RegisterLLMProvider(AnthropicProviderType, newAnthropicModelProvider)
 }
 
 // newAnthropicModelProvider adapts anthropic.Provider to types.LLMProvider.
 //
-// It mirrors the legacy "anthropic" factory's credential contract: an empty
-// API key is rejected with errors.EC_LLM_API_KEY_REQUIRED (environment lookup
-// stays in the host/CLI layer). BaseURL and Headers come straight from
-// cfg.Provider so gateways and custom auth headers keep working.
+// It mirrors the OpenAI-compatible factory's credential contract: an empty API
+// key is rejected with errors.EC_LLM_API_KEY_REQUIRED (environment lookup stays
+// in the host/CLI layer). BaseURL and Headers come straight from cfg.Provider so
+// gateways and custom auth headers keep working.
 func newAnthropicModelProvider(cfg *Config) (types.LLMProvider, error) {
 	if cfg == nil {
-		return nil, fmt.Errorf("anthropic-model: config is required")
+		return nil, fmt.Errorf("anthropic: config is required")
 	}
 	apiKey := strings.TrimSpace(cfg.Provider.APIKey)
 	if apiKey == "" {
@@ -39,11 +37,14 @@ func newAnthropicModelProvider(cfg *Config) (types.LLMProvider, error) {
 		APIKey:  apiKey,
 		BaseURL: cfg.Provider.BaseURL,
 		Headers: cfg.Provider.Headers,
+		Retry:   providerRetry(cfg),
 	})
 
-	m, err := anthropicModelFor(provider, cfg.DefaultModel)
-	if err != nil {
-		return nil, err
+	m := model.ModelFor(provider, cfg.DefaultModel, model.APIAnthropicMessages, []model.Modality{
+		model.ModalityText, model.ModalityImage,
+	})
+	if m == nil {
+		return nil, fmt.Errorf("anthropic: no model configured")
 	}
 
 	opts := model.EngineOptions{MaxTokens: cfg.MaxTokens}
@@ -55,42 +56,4 @@ func newAnthropicModelProvider(cfg *Config) (types.LLMProvider, error) {
 	}
 
 	return model.NewEngineProvider(provider, m, opts)
-}
-
-// anthropicModelFor picks the catalog entry named by defaultModel. An empty
-// name falls back to the first catalog model. An unknown name is passed
-// through as a minimal model descriptor so newly released model IDs work
-// without a cortex update; the Messages API only needs the ID.
-func anthropicModelFor(provider *anthropic.Provider, defaultModel string) (*model.Model, error) {
-	models := provider.Models()
-	name := strings.TrimSpace(defaultModel)
-	if name == "" {
-		if len(models) == 0 {
-			return nil, fmt.Errorf("anthropic-model: provider %q has no models", provider.ID())
-		}
-		m := models[0]
-		return &m, nil
-	}
-	for i := range models {
-		if models[i].ID == name {
-			m := models[i]
-			return &m, nil
-		}
-	}
-
-	// Models() reports the provider's effective base URL; reuse it for the
-	// pass-through descriptor. It is metadata only — dispatch still goes
-	// through the provider.
-	baseURL := ""
-	if len(models) > 0 {
-		baseURL = models[0].BaseURL
-	}
-	return &model.Model{
-		ID:       name,
-		Name:     name,
-		Provider: provider.ID(),
-		API:      model.APIAnthropicMessages,
-		BaseURL:  baseURL,
-		Input:    []model.Modality{model.ModalityText, model.ModalityImage},
-	}, nil
 }

@@ -17,7 +17,7 @@
   · <a href="#技能系统-agent-skills">技能系统</a>
   · <a href="#记忆系统">记忆系统</a>
   · <a href="#示例">示例</a>
-  · <a href="#触发器-triggers">触发器</a>
+  · <a href="#运行时传输">运行时传输</a>
   · <a href="#许可证">许可证</a>
 </p>
 
@@ -38,7 +38,7 @@ CORTEX 旨在融合轻量级框架的易用性与 Go 语言的稳健性能。它
 ## 特性
 
 - **智能代理引擎**：核心引擎支持复杂的工具调用与逻辑推理，轻松构建智能 Agent。
-- **广泛的 LLM 支持**：深度集成 OpenAI、DeepSeek、火山引擎 (Volce) 等主流模型，并支持自定义 Provider。
+- **广泛的 LLM 支持**：只保留两种协议——OpenAI-compatible chat completions（OpenAI、DeepSeek、火山引擎、本地网关等通过 `BaseURL` + `Model` 配置）与原生 Anthropic Messages。
 - **多模态交互**：原生支持文本、图像等多模态数据的处理与交互。
 - **动态技能 (Skills)**：基于文件系统的技能与懒加载；YAML 头可配置 `paths`、`when_to_use`、`allowed_tools`，支持路径 Glob（`doublestar`）过滤，加载器可选解析符号链接与按真实路径去重。
 - **开放工具生态**：`agent/tools/builtin` 覆盖文件、搜索、Shell/后台任务、网络与 Web、Docker、邮件、数学及 `mcp_client`；可自注册工具扩展。
@@ -53,7 +53,7 @@ CORTEX 旨在融合轻量级框架的易用性与 Go 语言的稳健性能。它
 
 Cortex 采用模块化架构设计，核心组件如下：
 
-> **注**：`agent` 包底层复用了 [LangChain](https://github.com/tmc/langchaingo) 的核心能力，通过其强大的 LLM 交互接口与工具调用机制，构建出灵活且强大的智能代理系统。
+> **注**：`agent` 包原生支持两种线路协议——OpenAI chat completions 与 Anthropic Messages，不依赖 LangChain。
 
 ```
 cortex/
@@ -65,6 +65,7 @@ cortex/
 │   ├── types/        # 核心类型定义
 │   ├── providers/    # 外部服务提供商（记忆、LLM 适配等）
 │   ├── hooks/        # 生命周期钩子
+│   ├── runtime/      # 传输中性的运行时（stdio RPC、HTTP/WS gateway）
 │   └── utils/        # 限流、循环检测、权限、预算等工具
 ├── dino/             # 高级编排（Client/Factory、预算、审批、队列、事件总线）
 │   ├── agent/        # 子代理与提示模板
@@ -73,9 +74,6 @@ cortex/
 │   ├── queue/        # 优先任务队列
 │   ├── tools/        # 工具注册、内置工具、MCP、技能工具
 │   └── permission/   # 工具权限与审批
-├── trigger/          # 触发器模块
-│   ├── http/         # HTTP 触发器（REST API）
-│   └── mcp/          # MCP 触发器（MCP 服务器）
 └── examples/         # 示例应用程序
 ```
 
@@ -100,13 +98,18 @@ import (
 	"time"
 
 	"github.com/xichan96/cortex/agent/engine"
-	"github.com/xichan96/cortex/agent/llm"
+	"github.com/xichan96/cortex/agent/model"
+	"github.com/xichan96/cortex/agent/model/providers/openai"
 	"github.com/xichan96/cortex/agent/types"
 )
 
 func main() {
-	// 1. 初始化 LLM Provider
-	llmProvider, err := llm.OpenAIClient("your-api-key", "gpt-4o-mini")
+	// 1. 初始化 LLM Provider（OpenAI-compatible 协议）
+	provider := openai.New(openai.Config{APIKey: "your-api-key"})
+	m := model.ModelFor(provider, "gpt-4o-mini", model.APIOpenAICompletions, []model.Modality{
+		model.ModalityText, model.ModalityImage,
+	})
+	llmProvider, err := model.NewEngineProvider(provider, m, model.EngineOptions{})
 	if err != nil {
 		panic(err)
 	}
@@ -130,22 +133,22 @@ func main() {
 }
 ```
 
-### 启动服务
+### 运行 CLI
 
-Cortex 提供了开箱即用的 HTTP 服务，支持通过配置文件快速启动：
+Cortex 提供了一个基于 Dino 会话的 CLI：
 
 ```Bash
-# 使用默认配置 cortex.yaml 启动
-go run cortex.go
+# 单轮对话；运行时事件以 JSONL 输出
+go run ./cmd/cortex -prompt "纽约天气怎么样？" -provider openai -model gpt-4.1
 
-# 指定配置文件路径
-go run cortex.go -config /path/to/cortex.yaml
+# 在 stdin/stdout 上使用 JSONL RPC
+go run ./cmd/cortex -mode rpc
 ```
 
-服务默认监听 `:5678` 端口，提供以下核心接口：
-- `POST /chat`: 标准对话接口
-- `POST /chat/stream`: 流式对话接口 (SSE)
-- `ANY /mcp`: MCP 协议接口
+API Key 会从 `CORTEX_API_KEY`，或按 provider 从 `OPENAI_API_KEY`
+（OpenAI-compatible 协议，含 DeepSeek / 火山引擎）/ `ANTHROPIC_API_KEY` /
+`ANTHROPIC_AUTH_TOKEN` 读取。通过 `-config` 传入的 YAML 会叠加在
+`dino.DefaultConfig()` 之上。
 
 ## 核心组件
 
@@ -155,20 +158,39 @@ go run cortex.go -config /path/to/cortex.yaml
 
 ### LLM 集成
 
-Cortex 提供了统一的接口适配多种 LLM Provider，支持灵活的参数配置：
+Cortex 只保留两种线路协议：
+
+- **OpenAI-compatible**（`agent/model/providers/openai`）：OpenAI、DeepSeek、
+  火山引擎、本地网关等，通过 `BaseURL` 选择端点，通过 `ModelFor` 选择模型 ID。
+- **Anthropic Messages**（`agent/model/providers/anthropic`）。
 
 ```go
-// OpenAI
-import llm "github.com/xichan96/cortex/agent/llm/langchain"
-import _ "github.com/xichan96/cortex/dino/llmcompat"
+import (
+	"github.com/xichan96/cortex/agent/model"
+	"github.com/xichan96/cortex/agent/model/providers/anthropic"
+	"github.com/xichan96/cortex/agent/model/providers/openai"
+)
 
-llmProvider, _ := llm.OpenAIClient("sk-...", "gpt-4o")
+modalities := []model.Modality{model.ModalityText, model.ModalityImage}
 
-// DeepSeek
-llmProvider, _ := llm.QuickDeepSeekProvider("sk-...", "deepseek-chat")
+// OpenAI-compatible：OpenAI
+p := openai.New(openai.Config{APIKey: "sk-..."})
+m := model.ModelFor(p, "gpt-4o", model.APIOpenAICompletions, modalities)
+llmProvider, _ := model.NewEngineProvider(p, m, model.EngineOptions{})
 
-// 火山引擎 (Volcengine)
-llmProvider, _ := llm.VolceClient("ak-...", "doubao-pro-32k")
+// OpenAI-compatible：DeepSeek / 火山引擎 / 任意网关
+p = openai.New(openai.Config{
+	APIKey:                    "sk-...",
+	BaseURL:                   "https://api.deepseek.com",
+	PreferMaxCompletionTokens: true,
+})
+m = model.ModelFor(p, "deepseek-chat", model.APIOpenAICompletions, modalities)
+llmProvider, _ = model.NewEngineProvider(p, m, model.EngineOptions{})
+
+// Anthropic 原生 Messages API
+ap := anthropic.New(anthropic.Config{APIKey: "sk-ant-..."})
+am := model.ModelFor(ap, "claude-sonnet-4-20250514", model.APIAnthropicMessages, modalities)
+llmProvider, _ = model.NewEngineProvider(ap, am, model.EngineOptions{})
 ```
 
 ## Dino 高级编排
@@ -368,20 +390,20 @@ agentEngine.SetMemory(context.Background(), memory)
 - [版本摘要（英文）](docs/RELEASE_SUMMARY.md)：近期记忆、技能、工具与 Dino 变更说明。
 - [Basic Example](examples/basic): 基础用法演示。
 - [Dino Example](examples/dino): Dino 高级编排（会话、预算、工具审批）。
-- [Chat Web](examples/chat-web): 基于 Gin + React 的完整聊天应用。
-- [MCP Server](examples/mcp-server): 将 Agent 暴露为 MCP 服务。
 - [Agent Skills](examples/skills): 动态加载和使用 Agent 技能。
 - [Task Scheduling](examples/xcron): 使用 xcron 进行任务调度。
 
-## 触发器 (Triggers)
+## 运行时传输
 
-`trigger/` 将 Agent 暴露为不同协议入口，便于外部系统集成。
+`agent/runtime` 定义了传输中性的会话协议：命令（`prompt`、`steer`、
+`follow_up`、`abort`、`get_state`、`get_entries`、`settled`、`clear_queue`）、
+运行时事件与 settled 状态。随它提供两个适配器：
 
-#### HTTP 触发器
-标准 RESTful API，支持普通对话与流式对话。
-
-#### MCP 触发器
-遵循 [Model Context Protocol (MCP)](https://modelcontextprotocol.io/)，可将 Cortex Agent 作为工具供 Claude Desktop 等客户端调用。
+- `agent/runtime.Server`：stdin/stdout 上的 JSONL RPC，供
+  `cmd/cortex -mode rpc` 使用。
+- `agent/runtime/gateway`：HTTP/SSE + WebSocket（`/rpc`、`/events`、`/ws`、
+  `/health`），以及可选的 `/ui/*` 审批转接，可挂载任意 `runtime.Runtime`
+  实现（例如 `dino.SessionRuntime`）。
 
 ## 贡献
 

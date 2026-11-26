@@ -136,9 +136,9 @@ func (p *Provider) buildRequestBody(req *model.Request) ([]byte, error) {
 	}
 	if maxTokens > 0 {
 		// Reasoning models reject max_tokens on the official OpenAI endpoint;
-		// they take max_completion_tokens instead. Compatible endpoints keep
-		// using max_tokens.
-		if usesMaxCompletionTokens(modelID) {
+		// they take max_completion_tokens instead. Some compatible endpoints
+		// require the same mapping, selected via PreferMaxCompletionTokens.
+		if usesMaxCompletionTokens(modelID) || p.preferMaxCompletionTokens {
 			body.MaxCompletionTokens = maxTokens
 		} else {
 			body.MaxTokens = maxTokens

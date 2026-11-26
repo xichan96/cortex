@@ -58,7 +58,7 @@ func parseFlags() cliOptions {
 	flag.StringVar(&opts.mode, "mode", "json", "json | rpc")
 	flag.StringVar(&opts.prompt, "prompt", "", "prompt for json mode (reads stdin when empty)")
 	flag.StringVar(&opts.workspace, "workspace", "", "workspace root override")
-	flag.StringVar(&opts.provider, "provider", "", "provider type override (openai|anthropic|deepseek|volce)")
+	flag.StringVar(&opts.provider, "provider", "", "provider type override (openai|anthropic)")
 	flag.StringVar(&opts.model, "model", "", "default model override")
 	flag.StringVar(&opts.baseURL, "base-url", "", "provider base URL override")
 	flag.StringVar(&opts.apiKey, "api-key", "", "provider API key override")
@@ -151,8 +151,6 @@ func providerKeyFromEnv(provider string) string {
 	switch strings.ToLower(provider) {
 	case "anthropic":
 		names = append(names, "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
-	case "deepseek":
-		names = append(names, "DEEPSEEK_API_KEY")
 	default:
 		names = append(names, "OPENAI_API_KEY")
 	}

@@ -4,6 +4,7 @@
 > 评审依据：worktree 内真实代码 + Anthropic 官方缓存规则（claude-api skill `shared/prompt-caching.md` 为权威）
 > 评审日期：2026-08-28
 > 范围：只产评审报告，不改任何代码。
+> 备注（2026-11-26）：DeepSeek/Volce 独立 provider 与整个 `agent/llm` legacy 层已删除，统一走 `agent/model/providers/{openai,anthropic}`；文中 `agent/llm/*` 路径为评审时点记录。
 
 ---
 

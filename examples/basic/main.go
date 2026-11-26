@@ -9,7 +9,8 @@ import (
 	"time"
 
 	"github.com/xichan96/cortex/agent/engine"
-	llm "github.com/xichan96/cortex/agent/llm/langchain"
+	"github.com/xichan96/cortex/agent/model"
+	"github.com/xichan96/cortex/agent/model/providers/openai"
 	"github.com/xichan96/cortex/agent/providers"
 	"github.com/xichan96/cortex/agent/providers/redismemory"
 	"github.com/xichan96/cortex/agent/types"
@@ -22,12 +23,19 @@ func getLLMProvider() (types.LLMProvider, error) {
 	// Hardcoded configuration
 	apiKey := ""
 	baseURL := ""
-	model := "gpt-5.2"
+	modelID := "gpt-5.2"
 
-	fmt.Printf("Using custom API: %s, Model: %s\n", baseURL, model)
-	llmProvider, err := llm.OpenAIClientWithBaseURL(apiKey, baseURL, model)
+	fmt.Printf("Using custom API: %s, Model: %s\n", baseURL, modelID)
+	provider := openai.New(openai.Config{APIKey: apiKey, BaseURL: baseURL})
+	m := model.ModelFor(provider, modelID, model.APIOpenAICompletions, []model.Modality{
+		model.ModalityText, model.ModalityImage,
+	})
+	if m == nil {
+		return nil, fmt.Errorf("failed to resolve model %s", modelID)
+	}
+	llmProvider, err := model.NewEngineProvider(provider, m, model.EngineOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("Failed to create OpenAI client: %w", err)
+		return nil, fmt.Errorf("failed to create LLM provider: %w", err)
 	}
 	return llmProvider, nil
 }

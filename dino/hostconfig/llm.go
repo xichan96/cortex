@@ -24,12 +24,6 @@ func LLMProvider(llm *LLMConfig, provider string) *ProviderConfig {
 	switch provider {
 	case "openai":
 		return &llm.OpenAI
-	case "deepseek":
-		return &llm.DeepSeek
-	case "volce":
-		return &llm.Volce
-	case "gemini":
-		return &llm.Gemini
 	case "anthropic":
 		return &llm.Anthropic
 	default:

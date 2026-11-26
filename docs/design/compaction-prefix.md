@@ -3,6 +3,7 @@
 > 设计文档 · 分支 `p3-design-compaction` · 2026-08-29
 > 对应 `docs/next-round.md` P3.1 与 `docs/design/prompt-caching.md` §12.4 遗留项（Step 4）。
 > 参考：评估报告第三章 Codex 做法（`docs/optimization-review-vs-codex.md:66-84`，`core/src/compact.rs`）。
+> 备注（2026-11-26）：文中 `agent/llm/anthropic_native.go` 的引用为历史路径；当前 Anthropic 实现在 `agent/model/providers/anthropic`。
 
 ## 0. 结论摘要
 

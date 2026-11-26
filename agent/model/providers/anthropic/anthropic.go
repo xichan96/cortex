@@ -4,8 +4,9 @@
 // The provider is transport-neutral: it converts model.Request values into the
 // JSON body Anthropic expects, performs one streaming HTTP call, and maps the
 // SSE event sequence onto model.StreamEvent values. It deliberately does no
-// semantic retry; callers layer model.TransportRetry / model.SemanticRetry on
-// top when they want it.
+// semantic retry. It does perform bounded transport retries for failures that
+// happen before the response stream starts (see Config.Retry); callers can
+// layer model.SemanticRetry on top when they want semantic retries too.
 package anthropic
 
 import (
@@ -52,6 +53,14 @@ type Config struct {
 	// HTTPClient is optional; nil means http.DefaultClient. A custom client can
 	// set a proxy or transport, but should not set a total Timeout for streaming.
 	HTTPClient *http.Client
+	// Retry configures retries for failures that happen before the response
+	// stream starts. Nil uses the default policy: one retry after the initial
+	// attempt. Set MaxRetries to 0 to disable retries, for example when
+	// BaseURL points at a gateway that already retries upstream calls.
+	//
+	// Once the response stream has started, failures are never retried: the
+	// request is not replayable.
+	Retry *model.TransportRetryPolicy
 }
 
 // Provider is the Anthropic Messages implementation of model.Provider. It is
@@ -63,6 +72,7 @@ type Provider struct {
 	headers    map[string]string
 	client     *http.Client
 	models     []model.Model
+	retry      model.TransportRetryPolicy
 }
 
 // Compile-time contract check.
@@ -86,6 +96,10 @@ func New(cfg Config) *Provider {
 	for name, value := range cfg.Headers {
 		headers[name] = value
 	}
+	retry := model.TransportRetryPolicy{MaxRetries: model.DefaultProviderRetryMaxRetries}
+	if cfg.Retry != nil {
+		retry = *cfg.Retry
+	}
 	return &Provider{
 		apiKey:     cfg.APIKey,
 		baseURL:    baseURL,
@@ -93,6 +107,7 @@ func New(cfg Config) *Provider {
 		headers:    headers,
 		client:     client,
 		models:     builtinModels(),
+		retry:      retry,
 	}
 }
 

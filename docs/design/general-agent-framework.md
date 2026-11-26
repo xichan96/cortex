@@ -37,7 +37,7 @@
 - `agent/types`：多模态 `Message`、`Usage`、`ToolExposure`（direct/deferred/hidden）、`FatalToolError`、`TruncateMiddle` + spill。
 - `dino/permission`：allow/deny/ask ruleset + AgentMode；`dino/defined_tool.go` 的 `ApprovalStore` 已支持 request id、流式事件、无限等待。
 - `agent/skills`：SKILL.md + YAML frontmatter，按需返回正文。
-- `agent/llm/anthropic_native.go`：`cache_control` 断点（≤4）、usage 回填。
+- `agent/model/providers/anthropic`：`cache_control` 断点、usage 回填。
 - `dino/chatstore`：SQLite 持久化、Hybrid LLM 压缩、确定性兜底。
 - `dino/mem` + `pkg/memkit`：长期记忆 ingest/合并/分层 prompt。
 - `dino/session`：事件输出、queue、planner、question、subagent wake。
@@ -249,7 +249,7 @@ func ResolveTrust(ctx context.Context, req TrustRequest, store TrustStore, opts 
 ### 2.6 与现有配置的兼容
 
 - `dino.Config` 继续作为**程序化宿主配置**，新增 `home.FromResolved(resolved) (*dino.Config, error)` 由 settings 生成；不删除任何字段。
-- `cortex.yaml` 保留给现有 `cortex.go` 和 `internal/app` 路径，标记 legacy；新 CLI 默认读 `settings.json`。
+- 根 `cortex.go` / `internal/app` / `cortex.yaml` 的 legacy 路径已删除；`dino.Config` 仍可由 `cmd/cortex -config` 的 YAML 覆盖，新 CLI 默认读 `settings.json`。
 - `dino.SkillsConfig.Paths` 继续可用；未显式配置时由 home 的 skill 根填充。
 - `MemoryConfig.PersistDirectory` 继续指向 SQLite；home 只决定默认位置 `~/.cortex/cache/`。
 
@@ -1245,8 +1245,8 @@ type VirtualModel struct {
 
 | 现有 | 新位置 |
 |---|---|
-| `agent/llm/anthropic_native.go` | `agent/model/providers/anthropic`，保留缓存逻辑 |
-| `agent/llm/{openai,deepseek,volce}.go` / LangChain | 适配为 `Provider`，逐步替换 |
+| `agent/llm/anthropic_native.go` | `agent/model/providers/anthropic`（已迁移，缓存改为 retention 断点） |
+| `agent/llm/langchain`（OpenAI-compatible） | `agent/model/providers/openai`（已迁移；DeepSeek/Volce 走同一 `BaseURL` 配置） |
 | `agent/types.LLMProvider` | 保留兼容接口；engine 内部改用 `model.Runtime` |
 | `ModelMetadata` | 扩展为 `Model`（保留旧字段） |
 | `dino.ProviderConfig` | 转为 `models.json` 的一层 |
@@ -1262,12 +1262,11 @@ type VirtualModel struct {
 SDK (in-process) │ transcript + engine + pipeline +     │
 HTTP/SSE ────────┤ approval broker + extension host     │
 WS/RPC ──────────┤ + event bus                          │
-MCP server ──────┤                                      │
 CLI (json/rpc) ──┘                                      │
                  └──────────────────────────────────────┘
 ```
 
-所有 transport 只做 I/O 适配，不复制 agent 逻辑。现有 `trigger/http` 与 `trigger/mcp` 绕过 dino 的路径要迁移到 session core。
+所有 transport 只做 I/O 适配，不复制 agent 逻辑。原 `trigger/http` 与 `trigger/mcp` 已删除；对外入口统一走 `agent/runtime/gateway`（HTTP/SSE + WS）和 `cmd/cortex`（stdio/JSONL）。
 
 ### 9.2 事件 schema
 
@@ -1424,13 +1423,10 @@ agent/
     runtime.go
     event.go
     rpc.go
+    gateway/       # HTTP/SSE + WebSocket 传输（RuntimeHandler）
 dino/
   approval/        # ChannelBroker、UI bridge 适配（从 defined_tool 抽离）
   sandbox/         # Host/Docker/SSH backend
-trigger/
-  gateway/         # 真正的 RPC server（替换现有 types-only）
-  http/            # 迁移到 session core
-  mcp/             # 迁移到 session core
 cmd/
   cortex/          # CLI：interactive/json/rpc 模式（P1/P2）
 ```
@@ -1448,7 +1444,6 @@ cmd/
 | `dino/defined_tool.go` | `ApprovalStore` 改为 `ChannelBroker`；保留兼容方法 |
 | `dino/session/session.go` | 事件映射到 runtime Event；transcript 双写 |
 | `dino/chatstore/*` | 保持读取兼容；新增 transcript 镜像；压缩写入 `CompactionEntry` |
-| `trigger/http` / `trigger/mcp` | 不再直接 new engine，改为创建 runtime/session |
 
 ### 10.3 依赖方向（防循环）
 
@@ -1465,7 +1460,7 @@ agent/resources             → types, skills, extensions(只读 manifest)
 agent/engine                → types, pipeline, model, skills；通过 Recorder 接口写 transcript
 agent/runtime               → engine, transcript, pipeline, extensions, resources
 dino/*                      → agent/*；不把 dino 类型塞回 agent
-trigger/*                   → agent/runtime；不直接引用 dino
+agent/runtime/gateway       → agent/runtime, approval；不直接引用 dino
 cmd/*                       → agent/runtime 或 dino
 ```
 
@@ -1485,7 +1480,7 @@ cmd/*                       → agent/runtime 或 dino
 1. **home 目录与配置**
    - 新增 `agent/home`；实现根目录解析、settings 分层、全局键校验、context 文件加载、trust store。
    - `dino.NewDinoFactory` 增加可选 `WithHome(paths)`；未启用时行为与现在完全一致。
-   - 验收：优先级矩阵测试；trust 拦截项目资源；context 文件顺序/覆盖/包裹正确；`cortex.yaml` 继续可用。
+   - 验收：优先级矩阵测试；trust 拦截项目资源；context 文件顺序/覆盖/包裹正确；`cmd/cortex -config` 的 YAML 覆盖继续可用（原 `cortex.yaml` legacy 路径已删除）。
 
 2. **工具管线收口**
    - 新增 `agent/pipeline`；把 resolve/prepare/validate/authorize/execute/after/sanitize/record 串起来。
@@ -1518,13 +1513,13 @@ cmd/*                       → agent/runtime 或 dino
    - 验收：回放确定性、压缩后上下文一致、fork/import 往返、损坏文件可诊断。
 
 7. **runtime + RPC**
-   - 抽出 `SessionRuntime`；`dino.Client` 适配；`trigger/gateway` 实现 RPC server；`trigger/http`/`mcp` 迁移。
+   - 抽出 `SessionRuntime`；`dino.Client` 适配；`agent/runtime/gateway` 实现 RPC server；原 `trigger/http`/`mcp` 已删除。
    - 事件 schema 落地；`agent_settled`；steering/follow-up/abort。
    - 验收：同一会话通过进程内/HTTP/WS 得到一致事件序列；RPC 并发命令按 id 关联；abort 后消息完整。
 
 8. **LLM 层**
    - `agent/model`：Catalog（内置 + models.json）、Provider 接口、统一 StreamEvent、增量 JSON、两级重试、auth store。
-   - Anthropic 适配器先迁移；OpenAI/DeepSeek 通过 adapter 保持 LangChain 实现作为过渡。
+   - Anthropic 与 OpenAI-compatible 适配器已完成迁移；`agent/llm` legacy 实现已删除。
    - 验收：同一请求在 anthropic/openai 适配器产生可比较的 StreamEvent；工具参数增量可渲染；重试不重复计费；缓存断点数量正确。
 
 ### P2（能力扩展）
@@ -1560,7 +1555,7 @@ cmd/*                       → agent/runtime 或 dino
 | 工具管线重构改变行为 | `EnableToolPipeline` 开关 + 新旧路径差分测试；先只读场景，再写场景 |
 | 双写期间数据不一致 | JSONL 写入成功后才更新索引；启动时对比/告警；保留 SQLite 读取回退 |
 | prompt cache 回退 | 工具集变更必须增量；压缩保 head anchor；用 cache 命中率指标监控 |
-| 配置迁移破坏现有部署 | `cortex.yaml` 继续可用；`dino.Config` 字段不减；home 默认关闭直到 P0 完成 |
+| 配置迁移破坏现有部署 | `dino.Config` 字段不减；`cmd/cortex -config` 的 YAML 覆盖继续可用；原 `cortex.yaml` legacy 路径已删除；home 默认关闭直到 P0 完成 |
 | 插件安全 | 进程外默认、环境白名单、无凭据继承、显式 trust；文档不把 trust 当 sandbox |
 | skill 约束误伤 | `allowed_tools` 只限制当前回合；未知工具启动 warning；可配置 `strict_skills` |
 | JSONL 并发损坏 | flock + 单写者；append 失败回滚；定期校验/备份 |
