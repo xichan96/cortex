@@ -130,6 +130,19 @@ const (
 	// compactionMinTailTokens is the smallest non-head budget worth running
 	// the LLM path for; below it the deterministic/head+tail fallback is used.
 	compactionMinTailTokens = 2
+
+	// maxKeptImages is how many of the most recent image parts survive an
+	// over-budget trim verbatim. Images older than that are replaced with
+	// omittedImagePlaceholder: a screenshot from ten turns ago rarely informs
+	// the current turn, yet each one still costs types.ImageEstimateTokens
+	// (~1600) in every request. Keeping four matches Dojo's per-message image
+	// cap, so the most recent history message keeps all of its images.
+	maxKeptImages = 4
+	// omittedImagePlaceholder replaces an image part dropped by the trim. It
+	// mirrors chatstore's omittedToolResult: the model still sees that an
+	// image existed there, and the message keeps its part count/order and
+	// tool pairing.
+	omittedImagePlaceholder = "[older image omitted to save context]"
 )
 
 // buildTailSummary renders the middle of the history into a single summary
@@ -214,7 +227,9 @@ func trimHistoryToTokenBudgetCompactionCtx(ctx context.Context, history []types.
 	fixed += types.RoughTokensForMessage(input.ToMessage("user"))
 	rem := maxBudgetTokens - fixed
 	if rem <= 0 {
-		return history[len(history)-1:], false
+		// Degenerate over-budget case: keep the last message, but still drop
+		// its older images (CompactionPrefix path only).
+		return trimOlderImageParts(history[len(history)-1:], maxKeptImages), false
 	}
 	anchorTokens := 0
 	if config != nil {
@@ -264,6 +279,91 @@ func safeTailBoundary(history []types.Message, start int) int {
 	return start
 }
 
+// isImagePart reports whether a part carries image content.
+func isImagePart(p types.MessagePart) bool {
+	switch p.(type) {
+	case types.ImageDataPart, types.ImageURLPart:
+		return true
+	}
+	return false
+}
+
+// trimOlderImageParts returns messages in which all but the most recent keep
+// image parts are replaced by a types.TextPart with omittedImagePlaceholder.
+//
+// Semantics:
+//   - message role, order, ToolCallID/ToolCalls and non-image parts are
+//     untouched; the placeholder sits at the image's original index, so part
+//     count and tool pairing stay valid;
+//   - the input is never mutated: when something changes a shallow copy of the
+//     message slice and of the affected Parts slices is returned. Repeated
+//     prepareMessages calls therefore always see the same history and produce
+//     byte-identical output;
+//   - idempotent: after a call at most keep image parts remain, so a second
+//     call over the result is a no-op;
+//   - ≤ keep images: messages is returned unchanged (same slice).
+func trimOlderImageParts(messages []types.Message, keep int) []types.Message {
+	if keep < 0 {
+		keep = 0
+	}
+	total := 0
+	for _, m := range messages {
+		for _, p := range m.Parts {
+			if isImagePart(p) {
+				total++
+			}
+		}
+	}
+	drop := total - keep
+	if drop <= 0 {
+		return messages
+	}
+
+	out := make([]types.Message, len(messages))
+	copy(out, messages)
+	seen := 0
+	for i := range out {
+		original := out[i].Parts
+		if len(original) == 0 {
+			continue
+		}
+		var parts []types.MessagePart
+		for j, p := range original {
+			if isImagePart(p) {
+				seen++
+				if seen <= drop {
+					if parts == nil {
+						parts = make([]types.MessagePart, 0, len(original))
+						parts = append(parts, original[:j]...)
+					}
+					parts = append(parts, types.TextPart{Text: omittedImagePlaceholder})
+					continue
+				}
+			}
+			if parts != nil {
+				parts = append(parts, p)
+			}
+		}
+		if parts != nil {
+			out[i].Parts = parts
+		}
+	}
+	return out
+}
+
+// trimHistoryTailOnlyForCompaction is the CompactionPrefix fallback: the
+// legacy tail-only trim plus the over-budget image drop. The plain
+// trimHistoryTailOnly stays untouched so CompactionPrefix=false keeps its
+// byte-for-byte behavior. Images are only dropped when the history genuinely
+// exceeds the budget; a trim that keeps everything is a no-op.
+func trimHistoryTailOnlyForCompaction(history []types.Message, rem int) []types.Message {
+	out := trimHistoryTailOnly(history, rem)
+	if msgSumTokens(history) <= rem {
+		return out
+	}
+	return trimOlderImageParts(out, maxKeptImages)
+}
+
 // trimHistoryThreePhase keeps headMsgs (a verbatim prefix within the anchor
 // budget), replaces midMsgs with one summary assistant message, and keeps
 // tailMsgs (a verbatim suffix).
@@ -282,6 +382,12 @@ func safeTailBoundary(history []types.Message, start int) int {
 // in a single generation (the deterministic path's second generation would
 // double LLM cost), and a validated summary is reused across calls from the
 // per-engine cache while the uncovered tail still fits.
+//
+// Over-budget image handling: once a middle is actually dropped, image parts
+// in the kept tail beyond maxKeptImages become TextPart placeholders (the
+// middle's images disappear with the middle). Head images are never rewritten:
+// doing so would invalidate the prompt-cache prefix every turn. See
+// trimOlderImageParts.
 //
 // The returned bool reports whether a summary message was inserted (the
 // existingSummary content was folded into it).
@@ -318,12 +424,21 @@ func trimHistoryThreePhase(ctx context.Context, history []types.Message, rem int
 	// legacy trim instead of growing past rem.
 	base := headPlusTail(head, tail)
 	if msgSumTokens(base) > rem {
-		return trimHistoryTailOnly(history, rem), false
+		return trimHistoryTailOnlyForCompaction(history, rem), false
 	}
 	if tailStart <= anchorIdx {
 		// Head and tail together cover the history: nothing to compress.
 		return base, false
 	}
+
+	// A middle is being dropped, i.e. this really is an over-budget trim, so
+	// old images in the kept tail are dropped as well. The head stays verbatim
+	// (rewriting it would invalidate the prompt-cache prefix), and the mid's
+	// images disappear with the mid itself. The replacement only shrinks the
+	// tail, so the budget checks below still hold; recompute base for the
+	// head+tail fallbacks.
+	tail = trimOlderImageParts(tail, maxKeptImages)
+	base = headPlusTail(head, tail)
 
 	// LLM summary path: one model call replaces the deterministic two-pass
 	// generation; on failure/empty output the deterministic path below still
@@ -354,13 +469,14 @@ func trimHistoryThreePhase(ctx context.Context, history []types.Message, rem int
 	}
 	// Re-generate the summary for the (smaller) final middle and verify.
 	summaryText2, ok2 := buildTailSummary(compaction, existingSummary, history[anchorIdx:tailStart2])
+	finalTail := trimOlderImageParts(history[tailStart2:], maxKeptImages)
 	if !ok2 {
-		return headPlusTail(head, history[tailStart2:]), false
+		return headPlusTail(head, finalTail), false
 	}
-	final := headPlusTail(head, append([]types.Message{summaryMessage(summaryText2)}, history[tailStart2:]...))
+	final := headPlusTail(head, append([]types.Message{summaryMessage(summaryText2)}, finalTail...))
 	if msgSumTokens(final) > rem {
 		// Verification failed: drop the summary, keep head + tail.
-		return headPlusTail(head, history[tailStart2:]), false
+		return headPlusTail(head, finalTail), false
 	}
 	return final, true
 }
@@ -453,7 +569,10 @@ func llmPhaseOutput(head, history []types.Message, coveredEnd, rem, headTokens i
 	if tailStart > coveredEnd || tailStart >= len(history) {
 		return nil, false
 	}
-	final := headPlusTail(head, append([]types.Message{summaryMessage(summary)}, history[tailStart:]...))
+	// Over-budget trim: drop old images from the kept tail (head stays
+	// verbatim for the prompt-cache anchor).
+	tail := trimOlderImageParts(history[tailStart:], maxKeptImages)
+	final := headPlusTail(head, append([]types.Message{summaryMessage(summary)}, tail...))
 	if msgSumTokens(final) > rem {
 		return nil, false
 	}
